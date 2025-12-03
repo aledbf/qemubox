@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
@@ -29,14 +30,14 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sys/unix"
 
 	bundleAPI "github.com/aledbf/beacon/containerd/api/services/bundle/v1"
 	"github.com/aledbf/beacon/containerd/api/services/vmevents/v1"
-	"github.com/aledbf/beacon/containerd/store"
-	"github.com/aledbf/beacon/containerd/shim/kvm"
 	"github.com/aledbf/beacon/containerd/network"
 	"github.com/aledbf/beacon/containerd/network/ipallocator"
 	"github.com/aledbf/beacon/containerd/shim/bundle"
+	"github.com/aledbf/beacon/containerd/store"
 	"github.com/aledbf/beacon/containerd/vm"
 	"github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
 )
@@ -104,6 +105,34 @@ type service struct {
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
 	taskAPI.RegisterTTRPCTaskService(server, s)
+	return nil
+}
+
+const (
+	// KVM ioctl obtained by running: printf("KVM_GET_API_VERSION: 0x%llX\n", KVM_GET_API_VERSION);
+	ioctlKVMGetAPIVersion = 0xAE00
+	expectedKVMAPIVersion = 12
+)
+
+// checkKVM verifies that KVM is available on the system
+func checkKVM() error {
+	fd, err := unix.Open("/dev/kvm", syscall.O_RDWR|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("failed to open /dev/kvm: %w. Your system may lack KVM support or you may have insufficient permissions", err)
+	}
+	defer syscall.Close(fd)
+
+	// Kernel docs says:
+	//     Applications should refuse to run if KVM_GET_API_VERSION returns a value other than 12.
+	// See https://docs.kernel.org/virt/kvm/api.html#kvm-get-api-version
+	apiVersion, _, errno := unix.RawSyscall(unix.SYS_IOCTL, uintptr(fd), ioctlKVMGetAPIVersion, 0)
+	if errno != 0 {
+		return fmt.Errorf("failed to get KVM API version: %w. You may have insufficient permissions", errno)
+	}
+	if apiVersion != expectedKVMAPIVersion {
+		return fmt.Errorf("KVM API version mismatch; expected %d, got %d", expectedKVMAPIVersion, apiVersion)
+	}
+
 	return nil
 }
 
@@ -257,8 +286,8 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 
 	presetup := time.Now()
 
-	// Cloud Hypervisor requires KVM
-	if err := kvm.CheckKVM(); err != nil {
+	// Cloud Hypervisor requires KVM - check if available
+	if err := checkKVM(); err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
 
