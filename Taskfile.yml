@@ -56,27 +56,24 @@ tasks:
         echo "✓ Build complete"
 
   build:shim:
-    desc: Build containerd shim binary
+    desc: Build containerd shim binary (static, Linux x86_64)
     cmds:
       - |
         set -eou pipefail
         echo "🐳 Building containerd-shim-beaconbox-v1..."
         mkdir -p _output
-        {{.GO}} build {{.GO_TAGS}} {{.GO_LDFLAGS}} -o _output/containerd-shim-beaconbox-v1 ./cmd/containerd-shim-beaconbox-v1
-        {{if eq .OS "Darwin"}}
-        codesign --entitlements cmd/containerd-shim-beaconbox-v1/containerd-shim-beaconbox-v1.entitlements --force -s - _output/containerd-shim-beaconbox-v1
-        {{end}}
-        echo "✓ Shim built: _output/containerd-shim-beaconbox-v1"
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 {{.GO}} build {{.GO_STATIC_TAGS}} {{.GO_STATIC_LDFLAGS}} -o _output/containerd-shim-beaconbox-v1 ./cmd/containerd-shim-beaconbox-v1
+        echo "✓ Shim built: _output/containerd-shim-beaconbox-v1 (static)"
 
   build:vminitd:
-    desc: Build vminitd binary (statically linked)
+    desc: Build vminitd binary (static, Linux x86_64)
     cmds:
       - |
         set -eou pipefail
         echo "🐳 Building vminitd..."
         mkdir -p _output
-        {{.GO}} build {{.GO_STATIC_TAGS}} {{.GO_STATIC_LDFLAGS}} -o _output/vminitd ./cmd/vminitd
-        echo "✓ vminitd built: _output/vminitd"
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 {{.GO}} build {{.GO_STATIC_TAGS}} {{.GO_STATIC_LDFLAGS}} -o _output/vminitd ./cmd/vminitd
+        echo "✓ vminitd built: _output/vminitd (static)"
 
   build:initrd:
     desc: Build initrd image
@@ -248,3 +245,64 @@ tasks:
     desc: Default task (build everything)
     cmds:
       - task: build
+
+  # ==========================================================================
+  # Release Tasks
+  # ==========================================================================
+
+  release:
+    desc: Create release tarball with proper directory structure
+    cmds:
+      - task: build
+      - |
+        set -eou pipefail
+        echo "📦 Creating release tarball..."
+
+        # Determine version from git tag or use "dev"
+        VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+        RELEASE_NAME="beacon-${VERSION}-linux-x86_64"
+        RELEASE_DIR="_output/release/${RELEASE_NAME}"
+
+        # Clean and create release directory structure
+        rm -rf _output/release
+        mkdir -p "${RELEASE_DIR}/usr/share/beacon"
+        mkdir -p "${RELEASE_DIR}/var/lib/beacon/bin"
+
+        echo "📂 Copying artifacts to release structure..."
+
+        # Copy kernel and initrd to /usr/share/beacon
+        if [ -f "_output/beacon-kernel-x86_64" ]; then
+          cp _output/beacon-kernel-x86_64 "${RELEASE_DIR}/usr/share/beacon/"
+          echo "  ✓ beacon-kernel-x86_64"
+        fi
+
+        if [ -f "_output/beacon-initrd" ]; then
+          cp _output/beacon-initrd "${RELEASE_DIR}/usr/share/beacon/"
+          echo "  ✓ beacon-initrd"
+        fi
+
+        # Copy shim binary to /usr/share/beacon
+        if [ -f "_output/containerd-shim-beaconbox-v1" ]; then
+          cp _output/containerd-shim-beaconbox-v1 "${RELEASE_DIR}/usr/share/beacon/"
+          echo "  ✓ containerd-shim-beaconbox-v1"
+        fi
+
+        # Copy cloud-hypervisor if available
+        if [ -f "_output/cloud-hypervisor" ]; then
+          cp _output/cloud-hypervisor "${RELEASE_DIR}/var/lib/beacon/bin/"
+          echo "  ✓ cloud-hypervisor"
+        fi
+
+        # Create tarball
+        echo "🗜️  Creating tarball..."
+        cd _output/release
+        tar czf "${RELEASE_NAME}.tar.gz" "${RELEASE_NAME}"
+        cd ../..
+
+        echo "✓ Release created: _output/release/${RELEASE_NAME}.tar.gz"
+        echo ""
+        echo "Installation:"
+        echo "  tar xzf ${RELEASE_NAME}.tar.gz"
+        echo "  cd ${RELEASE_NAME}"
+        echo "  sudo cp -r usr /usr"
+        echo "  sudo cp -r var /var"

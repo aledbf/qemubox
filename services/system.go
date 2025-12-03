@@ -1,4 +1,4 @@
-package version
+package services
 
 import (
 	"context"
@@ -7,10 +7,7 @@ import (
 	"github.com/containerd/errdefs/pkg/errgrpc"
 	"github.com/containerd/plugin"
 	"github.com/containerd/plugin/registry"
-	"github.com/containerd/ttrpc"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
-
-	cplugins "github.com/containerd/containerd/v2/plugins"
 
 	api "github.com/aledbf/beacon/containerd/api/services/system/v1"
 )
@@ -32,14 +29,6 @@ func init() {
 
 func initFunc(ic *plugin.InitContext) (interface{}, error) {
 	return &service{}, nil
-}
-
-type service struct {
-}
-
-func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
-	api.RegisterTTRPCSystemService(server, s)
-	return nil
 }
 
 func (s *service) Info(ctx context.Context, _ *emptypb.Empty) (*api.InfoResponse, error) {
