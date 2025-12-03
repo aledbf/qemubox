@@ -1,0 +1,244 @@
+# Beacon Containerd Runtime - Task Runner
+#
+# Quick Start:
+#   task build           # Build everything (shim, kernel, initrd)
+#   task clean           # Clean build artifacts
+#   task lint            # Lint code
+#
+# Development:
+#   task shell           # Enter development shell
+#   task menuconfig      # Configure kernel (requires KERNEL_VERSION and KERNEL_ARCH)
+#
+# Requirements:
+#   - Go 1.23+
+#   - Docker with buildx
+
+version: '3'
+
+silent: true
+
+output: "prefixed"
+
+vars:
+  GO: go
+  DOCKER: docker
+  BUILDX: "{{.DOCKER}} buildx"
+  MODULE_NAME:
+    sh: go list -m
+  ARCH:
+    sh: uname -m
+  OS:
+    sh: uname -s
+
+  # Build flags
+  LDFLAGS: "-s -w"
+  GO_BUILDTAGS: "no_grpc"
+  GO_TAGS: '-tags "{{.GO_BUILDTAGS}}"'
+  GO_LDFLAGS: "-ldflags '{{.LDFLAGS}}'"
+
+  # Static build flags
+  GO_STATIC_BUILDTAGS: "osusergo netgo static_build no_grpc"
+  GO_STATIC_TAGS: '-tags "{{.GO_STATIC_BUILDTAGS}}"'
+  GO_STATIC_LDFLAGS: "-ldflags '-extldflags \"-static\" {{.LDFLAGS}}'"
+
+tasks:
+  # ==========================================================================
+  # Build Tasks
+  # ==========================================================================
+
+  build:
+    desc: Build all components (shim, kernel, initrd)
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Building all components..."
+        {{.BUILDX}} bake
+        echo "✓ Build complete"
+
+  build:shim:
+    desc: Build containerd shim binary
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Building containerd-shim-beaconbox-v1..."
+        mkdir -p _output
+        {{.GO}} build {{.GO_TAGS}} {{.GO_LDFLAGS}} -o _output/containerd-shim-beaconbox-v1 ./cmd/containerd-shim-beaconbox-v1
+        {{if eq .OS "Darwin"}}
+        codesign --entitlements cmd/containerd-shim-beaconbox-v1/containerd-shim-beaconbox-v1.entitlements --force -s - _output/containerd-shim-beaconbox-v1
+        {{end}}
+        echo "✓ Shim built: _output/containerd-shim-beaconbox-v1"
+
+  build:vminitd:
+    desc: Build vminitd binary (statically linked)
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Building vminitd..."
+        mkdir -p _output
+        {{.GO}} build {{.GO_STATIC_TAGS}} {{.GO_STATIC_LDFLAGS}} -o _output/vminitd ./cmd/vminitd
+        echo "✓ vminitd built: _output/vminitd"
+
+  build:initrd:
+    desc: Build initrd image
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Building initrd..."
+        {{.BUILDX}} bake initrd
+        echo "✓ Initrd built: _output/beacon-initrd"
+
+  build:kernel:
+    desc: Build kernel
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Building kernel..."
+        {{.BUILDX}} bake kernel
+        echo "✓ Kernel built"
+
+  # ==========================================================================
+  # Development Tasks
+  # ==========================================================================
+
+  shell:
+    desc: Enter development shell
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Building dev environment..."
+        {{.BUILDX}} bake dev
+        echo "🐳 Starting development shell..."
+        {{.DOCKER}} run --rm -it --privileged \
+          --name beacon-dev \
+          -v ./:/go/src/{{.MODULE_NAME}} \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -w /go/src/{{.MODULE_NAME}} \
+          -e KERNEL_ARCH={{.ARCH}} \
+          -e KERNEL_NPROC \
+          beacon-dev
+
+  menuconfig:
+    desc: Configure kernel (requires KERNEL_VERSION and KERNEL_ARCH env vars)
+    preconditions:
+      - sh: "[ -n \"${KERNEL_VERSION:-}\" ]"
+        msg: "KERNEL_VERSION environment variable must be set"
+      - sh: "[ -n \"${KERNEL_ARCH:-}\" ]"
+        msg: "KERNEL_ARCH environment variable must be set"
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Building menuconfig environment..."
+        {{.BUILDX}} bake menuconfig
+        echo "🐳 Starting kernel menuconfig..."
+        {{.DOCKER}} run --rm -it \
+          -v ./kernel:/config \
+          -w /usr/src/linux \
+          -e KCONFIG_CONFIG=/config/config-${KERNEL_VERSION}-${KERNEL_ARCH} \
+          beacon-menuconfig \
+          make menuconfig
+
+  # ==========================================================================
+  # Validation Tasks
+  # ==========================================================================
+
+  validate:
+    desc: Run all validation checks
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Running validation..."
+        {{.BUILDX}} bake validate
+        echo "✓ Validation passed"
+
+  lint:
+    desc: Lint code
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Running linters..."
+        {{.BUILDX}} bake lint
+        echo "✓ Linting passed"
+
+  # ==========================================================================
+  # Protobuf Tasks (optional)
+  # ==========================================================================
+
+  protos:
+    desc: Generate protobuf files
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Generating protobufs..."
+        cd api && PATH="$(pwd)/../bin:${PATH}" protobuild --quiet $(go list -m)/api/...
+        go-fix-acronym -w -a '^Os' $(find api/ -name '*.pb.go')
+        go-fix-acronym -w -a '(Id|Io|Uuid|Os)$$' $(find api/ -name '*.pb.go')
+        echo "✓ Protobufs generated"
+
+  check:protos:
+    desc: Check if protobufs need regeneration
+    cmds:
+      - task: protos
+      - |
+        set -eou pipefail
+        echo "🐳 Checking protobuf changes..."
+        if [ -n "$(git status --short | grep '.pb.go')" ]; then
+          echo "👹 Error: Protobuf files are out of date"
+          echo "   Run 'task protos' to regenerate"
+          exit 1
+        fi
+        echo "✓ Protobufs are up to date"
+
+  # ==========================================================================
+  # Cleanup Tasks
+  # ==========================================================================
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🧹 Cleaning build artifacts..."
+        rm -rf _output
+        echo "✓ Clean complete"
+
+  # ==========================================================================
+  # Utility Tasks
+  # ==========================================================================
+
+  verify:vendor:
+    desc: Verify go.mod/go.sum are up to date
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Verifying vendor files..."
+        TMPDIR=$(mktemp -d)
+        trap "rm -rf $TMPDIR" EXIT
+
+        cp -R . $TMPDIR/beacon
+        cd $TMPDIR/beacon
+        {{.GO}} mod tidy
+        {{.GO}} mod verify
+
+        if ! diff -r go.mod go.sum {{.ROOT_DIR}}/; then
+          echo "👹 Error: go.mod or go.sum are out of date"
+          echo "   Run 'go mod tidy' to update"
+          exit 1
+        fi
+
+        echo "✓ Vendor files are up to date"
+
+  # ==========================================================================
+  # All-in-one Tasks
+  # ==========================================================================
+
+  all:
+    desc: Build and validate everything
+    cmds:
+      - task: build
+      - task: validate
+      - echo "✓ All tasks complete"
+
+  default:
+    desc: Default task (build everything)
+    cmds:
+      - task: build
