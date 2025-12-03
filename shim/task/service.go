@@ -317,11 +317,10 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	// Network setup: Use CNI networking with TAP devices for Cloud Hypervisor
-	// Construct network namespace path for the container
-	// Format: /var/run/netns/<id>
+	// Network setup: Allocate IP and create TAP device via NetworkManager
+	// Note: netnsPath is provided for future CNI integration but currently unused
 	netnsPath := filepath.Join("/var/run/netns", r.ID)
-	netCfg, err := setupCNINetworking(ctx, s.networkManager, vmi, r.ID, netnsPath)
+	netCfg, err := setupNetworking(ctx, s.networkManager, vmi, r.ID, netnsPath)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
