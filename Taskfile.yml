@@ -265,25 +265,26 @@ tasks:
 
         # Clean and create release directory structure
         rm -rf _output/release
-        mkdir -p "${RELEASE_DIR}/usr/share/beacon"
+        mkdir -p "${RELEASE_DIR}/usr/share/beacon/bin"
+        mkdir -p "${RELEASE_DIR}/usr/share/beacon/config"
         mkdir -p "${RELEASE_DIR}/var/lib/beacon/bin"
 
         echo "📂 Copying artifacts to release structure..."
 
-        # Copy kernel and initrd to /usr/share/beacon
+        # Copy kernel and initrd to /usr/share/beacon/bin
         if [ -f "_output/beacon-kernel-x86_64" ]; then
-          cp _output/beacon-kernel-x86_64 "${RELEASE_DIR}/usr/share/beacon/"
+          cp _output/beacon-kernel-x86_64 "${RELEASE_DIR}/usr/share/beacon/bin/"
           echo "  ✓ beacon-kernel-x86_64"
         fi
 
         if [ -f "_output/beacon-initrd" ]; then
-          cp _output/beacon-initrd "${RELEASE_DIR}/usr/share/beacon/"
+          cp _output/beacon-initrd "${RELEASE_DIR}/usr/share/beacon/bin/"
           echo "  ✓ beacon-initrd"
         fi
 
-        # Copy shim binary to /usr/share/beacon
+        # Copy shim binary to /usr/share/beacon/bin
         if [ -f "_output/containerd-shim-beaconbox-v1" ]; then
-          cp _output/containerd-shim-beaconbox-v1 "${RELEASE_DIR}/usr/share/beacon/"
+          cp _output/containerd-shim-beaconbox-v1 "${RELEASE_DIR}/usr/share/beacon/bin/"
           echo "  ✓ containerd-shim-beaconbox-v1"
         fi
 
@@ -292,6 +293,57 @@ tasks:
           cp _output/cloud-hypervisor "${RELEASE_DIR}/var/lib/beacon/bin/"
           echo "  ✓ cloud-hypervisor"
         fi
+
+        # Copy configuration files
+        echo "📂 Copying configuration files..."
+        cp -r release/config/* "${RELEASE_DIR}/usr/share/beacon/config/"
+        echo "  ✓ config files (buildkit, containerd)"
+
+        # Copy systemd service files
+        echo "📂 Copying systemd services..."
+        mkdir -p "${RELEASE_DIR}/systemd"
+        cp release/systemd/*.service "${RELEASE_DIR}/systemd/"
+        echo "  ✓ systemd services"
+
+        # Copy install/uninstall scripts
+        echo "📂 Copying install scripts..."
+        cp release/install.sh "${RELEASE_DIR}/"
+        cp release/uninstall.sh "${RELEASE_DIR}/"
+        chmod +x "${RELEASE_DIR}/install.sh"
+        chmod +x "${RELEASE_DIR}/uninstall.sh"
+        echo "  ✓ install/uninstall scripts"
+
+        # Download and extract nerdctl
+        echo "📥 Downloading nerdctl..."
+        NERDCTL_VERSION="2.2.0"
+        NERDCTL_URL="https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
+        NERDCTL_TARBALL="_output/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
+
+        if [ ! -f "${NERDCTL_TARBALL}" ]; then
+          curl -L -o "${NERDCTL_TARBALL}" "${NERDCTL_URL}"
+        fi
+
+        echo "📂 Extracting nerdctl and CNI plugins..."
+        # Extract nerdctl binary to /usr/share/beacon/bin
+        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/beacon/" bin/nerdctl
+        echo "  ✓ nerdctl"
+
+        # Extract CNI plugins to /usr/share/beacon/bin
+        tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/beacon/bin" --strip-components=2 \
+          libexec/cni/bandwidth \
+          libexec/cni/bridge \
+          libexec/cni/dhcp \
+          libexec/cni/firewall \
+          libexec/cni/host-device \
+          libexec/cni/host-local \
+          libexec/cni/ipvlan \
+          libexec/cni/loopback \
+          libexec/cni/macvlan \
+          libexec/cni/portmap \
+          libexec/cni/ptp \
+          libexec/cni/tuning \
+          libexec/cni/vlan
+        echo "  ✓ CNI plugins"
 
         # Create tarball
         echo "🗜️  Creating tarball..."
@@ -304,5 +356,7 @@ tasks:
         echo "Installation:"
         echo "  tar xzf ${RELEASE_NAME}.tar.gz"
         echo "  cd ${RELEASE_NAME}"
-        echo "  sudo cp -r usr /usr"
-        echo "  sudo cp -r var /var"
+        echo "  sudo ./install.sh"
+        echo ""
+        echo "Uninstallation:"
+        echo "  sudo ./uninstall.sh"

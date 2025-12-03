@@ -1,0 +1,85 @@
+
+version = 3
+root = '/var/lib/beacon/containerd'
+state = '/run/beacon/containerd'
+imports = ['/usr/share/beacon/config/containerd/conf.d/*.toml']
+
+[grpc]
+  address = '/var/run/beacon/containerd.sock'
+  uid = 0
+  gid = 0
+
+
+#[debug]
+#  level = 'debug'
+
+
+[plugins]
+  [plugins.'io.containerd.cri.v1.images']
+    snapshotter = 'erofs'
+    disable_snapshot_annotations = true
+    discard_unpacked_layers = false
+    max_concurrent_downloads = 10
+    concurrent_layer_fetch_buffer = 0
+
+    [plugins.'io.containerd.cri.v1.images'.pinned_images]
+      sandbox = 'registry.k8s.io/pause:3.10.1'
+
+    [plugins.'io.containerd.cri.v1.images'.registry]
+      config_path = '/usr/share/beacon/config/containerd/certs.d:/usr/share/beacon/config/docker/certs.d'
+
+  [plugins.'io.containerd.cri.v1.runtime']
+    cdi_spec_dirs = ['/usr/share/beacon/config/cdi', '/var/run/cdi']
+
+    [plugins.'io.containerd.cri.v1.runtime'.containerd]
+      default_runtime_name = 'runc'
+
+      [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes]
+          [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]
+            SystemdCgroup = true
+
+    [plugins.'io.containerd.cri.v1.runtime'.cni]
+      bin_dirs = ['/usr/share/beacon/bin']
+      conf_dir = '/usr/share/beacon/config/cni/net.d'
+      max_conf_num = 1
+
+  [plugins.'io.containerd.differ.v1.erofs']
+    mkfs_options = []
+    enable_tar_index = false
+
+  [plugins.'io.containerd.image-verifier.v1.bindir']
+    bin_dir = '/opt/containerd/image-verifier/bin'
+    max_verifiers = 10
+    per_verifier_timeout = '10s'
+
+  [plugins.'io.containerd.internal.v1.opt']
+    path = '/opt/containerd'
+
+  [plugins.'io.containerd.nri.v1.nri']
+    disable = false
+    socket_path = '/var/run/nri/nri.sock'
+    plugin_path = '/opt/nri/plugins'
+    plugin_config_path = '/usr/share/beacon/config/nri/conf.d'
+
+  [plugins.'io.containerd.runtime.v2.task']
+    platforms = ['linux/amd64']
+
+  [plugins.'io.containerd.service.v1.diff-service']
+    default = ['erofs', 'walking']
+    sync_fs = false
+
+  [plugins.'io.containerd.snapshotter.v1.erofs']
+    enable_fsverity = false
+    set_immutable = false
+
+  [plugins.'io.containerd.transfer.v1.local']
+    max_concurrent_downloads = 10
+    concurrent_layer_fetch_buffer = 0
+    max_concurrent_uploaded_layers = 10
+    check_platform_supported = false
+    max_concurrent_unpacks = 2
+
+    [[plugins.'io.containerd.transfer.v1.local'.unpack_config]]
+      platform = 'linux/amd64'
+      snapshotter = 'erofs'
+      differ = 'erofs'

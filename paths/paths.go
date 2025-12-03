@@ -47,12 +47,12 @@ func NetworkDBPath() string {
 
 // KernelPath returns the full path to the kernel binary
 func KernelPath() string {
-	return filepath.Join(GetShareDir(), "beacon-kernel-x86_64")
+	return filepath.Join(GetShareDir(), "bin", "beacon-kernel-x86_64")
 }
 
 // InitrdPath returns the full path to the initrd binary
 func InitrdPath() string {
-	return filepath.Join(GetShareDir(), "beacon-initrd")
+	return filepath.Join(GetShareDir(), "bin", "beacon-initrd")
 }
 
 // CloudHypervisorPath returns the full path to the cloud-hypervisor binary
