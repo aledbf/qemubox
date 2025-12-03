@@ -377,7 +377,7 @@ ip link show beacon0
 ip link show | grep beacon-
 
 # Check IP allocations
-ls -la /var/lib/beaconbox/network/
+ls -la /var/lib/beacon/
 
 # View nftables rules
 nft list ruleset | grep beacon_runner
@@ -415,7 +415,7 @@ ss -x | grep vsock
    - Check logs for initialization errors
 
 4. **"IP allocation failed"**
-   - Check available IPs: `ls /var/lib/beaconbox/network/`
+   - Check available IPs: `ls /var/lib/beacon/`
    - Reconciliation runs every minute to clean stale leases
 
 ## Getting Started
@@ -430,8 +430,28 @@ make
 
 The results will be in the `_output` directory:
 - `containerd-shim-beaconbox-v1` - The runtime shim
-- `beaconbox-kernel-x86_64` - Linux kernel for the VM
-- `beaconbox-initrd` - Initial ramdisk containing vminitd
+- `beacon-kernel-x86_64` - Linux kernel for the VM
+- `beacon-initrd` - Initial ramdisk containing vminitd
+
+### Installation Paths
+
+beacon uses the following standardized paths:
+
+- **Binaries and config**: `/usr/share/beacon/`
+  - `beacon-kernel-x86_64` - VM kernel
+  - `beacon-initrd` - Initial ramdisk
+
+- **State files**: `/var/lib/beacon/`
+  - `network.db` - Network allocation database
+  - Per-container state directories
+
+- **Logs**: `/var/log/beacon/`
+  - VM and container logs
+
+These paths can be overridden using environment variables:
+- `BEACON_SHARE_DIR` - Override `/usr/share/beacon`
+- `BEACON_STATE_DIR` - Override `/var/lib/beacon`
+- `BEACON_LOG_DIR` - Override `/var/log/beacon`
 
 ### Prerequisites
 

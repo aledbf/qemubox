@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/aledbf/beacon/containerd/internal/paths"
 )
 
 // NewInstance creates a new Cloud Hypervisor VM instance.
@@ -59,22 +61,10 @@ func findCloudHypervisor() (string, error) {
 
 // findKernel locates the kernel binary for Cloud Hypervisor
 func findKernel() (string, error) {
-	// Try beaconbox kernel first (same as libkrun)
-	kernelName := "beaconbox-kernel-x86_64"
+	kernelName := paths.KernelName()
 
-	// Build search paths matching libkrun's logic
-	searchPaths := []string{}
-
-	// 1. Add PATH environment variable
-	if pathEnv := os.Getenv("PATH"); pathEnv != "" {
-		searchPaths = append(searchPaths, filepath.SplitList(pathEnv)...)
-	}
-
-	// 3. Add common beaconbox locations
-	searchPaths = append(searchPaths, "/usr/share/beaconbox", "/usr/local/share/beaconbox")
-
-	// Search through all paths
-	for _, dir := range searchPaths {
+	// Search through all configured paths
+	for _, dir := range paths.KernelSearchPaths() {
 		if dir == "" {
 			dir = "."
 		}
@@ -84,26 +74,15 @@ func findKernel() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("kernel %q not found in PATH, LIBKRUN_PATH, or common locations", kernelName)
+	return "", fmt.Errorf("kernel %q not found in search paths (use BEACON_SHARE_DIR or install to %s)", kernelName, paths.ShareDir)
 }
 
 // findInitrd locates the initrd for Cloud Hypervisor
 func findInitrd() (string, error) {
-	initrdName := "beaconbox-initrd"
+	initrdName := paths.InitrdName()
 
-	// Build search paths matching libkrun's logic
-	searchPaths := []string{}
-
-	// 1. Add PATH environment variable
-	if pathEnv := os.Getenv("PATH"); pathEnv != "" {
-		searchPaths = append(searchPaths, filepath.SplitList(pathEnv)...)
-	}
-
-	// 3. Add common beaconbox locations
-	searchPaths = append(searchPaths, "/usr/share/beaconbox", "/usr/local/share/beaconbox")
-
-	// Search through all paths
-	for _, dir := range searchPaths {
+	// Search through all configured paths
+	for _, dir := range paths.KernelSearchPaths() {
 		if dir == "" {
 			dir = "."
 		}
@@ -113,5 +92,5 @@ func findInitrd() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("initrd %q not found in PATH, LIBKRUN_PATH, or common locations", initrdName)
+	return "", fmt.Errorf("initrd %q not found in search paths (use BEACON_SHARE_DIR or install to %s)", initrdName, paths.ShareDir)
 }

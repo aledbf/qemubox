@@ -182,17 +182,17 @@ RUN <<EOT
     fi
 
     mkdir /build
-    (find . -print0 | cpio --null -H newc -o ) | gzip -9 > /build/beaconbox-initrd
+    (find . -print0 | cpio --null -H newc -o ) | gzip -9 > /build/beacon-initrd
 EOT
 
 FROM scratch AS kernel
 ARG KERNEL_ARCH="x86_64"
-COPY --from=kernel-build /build/kernel /beaconbox-kernel-${KERNEL_ARCH}
-COPY --from=kernel-build /build/kernel /beaconbox-kernel-${KERNEL_ARCH}
+COPY --from=kernel-build /build/kernel /beacon-kernel-${KERNEL_ARCH}
+COPY --from=kernel-build /build/kernel /beacon-kernel-${KERNEL_ARCH}
 COPY --from=kernel-build /build/kernel-config /kernel-config
 
 FROM scratch AS initrd
-COPY --from=initrd-build /build/beaconbox-initrd /beaconbox-initrd
+COPY --from=initrd-build /build/beacon-initrd /beacon-initrd
 
 FROM scratch AS shim
 COPY --from=shim-build /build/containerd-shim-beaconbox-v1 /containerd-shim-beaconbox-v1

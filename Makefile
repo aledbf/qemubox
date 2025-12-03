@@ -68,7 +68,7 @@ _output/vminitd: cmd/vminitd FORCE
 	@echo "$(WHALE) $@"
 	$(GO) build ${DEBUG_GO_GCFLAGS} ${GO_GCFLAGS} ${GO_BUILD_FLAGS} -o $@ ${GO_STATIC_LDFLAGS} ${GO_STATIC_TAGS}  ./$<
 
-_output/beaconbox-initrd: cmd/vminitd FORCE
+_output/beacon-initrd: cmd/vminitd FORCE
 	@echo "$(WHALE) $@"
 	$(BUILDX) bake initrd
 
@@ -125,7 +125,7 @@ endif
 		-v ./kernel:/config \
 		-w /usr/src/linux \
 		-e KCONFIG_CONFIG=/config/config-$(KERNEL_VERSION)-$(KERNEL_ARCH) \
-		beaconbox-menuconfig \
+		beacon-menuconfig \
 		make menuconfig
 
 FORCE:
@@ -143,14 +143,14 @@ shell:
 	@echo "$(WHALE) $@"
 	@$(BUILDX) bake dev
 	@docker run --rm -it --privileged \
-		--name beaconbox-dev \
+		--name beacon-dev \
 		-v ./:/go/src/$(MODULE_NAME) \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-w /go/src/$(MODULE_NAME) \
 		-e KERNEL_ARCH=$(ARCH) \
 		-e KERNEL_NPROC \
 		$(DOCKER_EXTRA_ARGS) \
-		beaconbox-dev
+		beacon-dev
 
 verify-vendor: ## verify if all the go.mod/go.sum files are up-to-date
 	@echo "$(WHALE) $@"

@@ -21,6 +21,8 @@ import (
 	ptypes "github.com/containerd/containerd/v2/pkg/protobuf/types"
 	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/containerd/v2/pkg/shutdown"
+
+	"github.com/aledbf/beacon/containerd/internal/paths"
 	"github.com/containerd/containerd/v2/pkg/stdio"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/errdefs/pkg/errgrpc"
@@ -109,7 +111,7 @@ func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
 func initNetworkManager(ctx context.Context) (network.NetworkManagerInterface, error) {
 	// Create stores using the new boltstore package
 	// Multiple stores can share the same database file
-	dbPath := "/var/lib/beaconbox/network.db"
+	dbPath := paths.NetworkDBPath()
 
 	networkConfigStore, err := boltstore.NewBoltStore[network.NetworkConfig](
 		dbPath, "network_configs",

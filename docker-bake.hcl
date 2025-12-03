@@ -49,7 +49,7 @@ variable "DESTDIR" {
 target "menuconfig" {
   inherits = ["_common"]
   target = "kernel-build-base"
-  output = ["type=image,name=beaconbox-menuconfig"]
+  output = ["type=image,name=beacon-menuconfig"]
 }
 
 target "kernel" {
@@ -77,7 +77,7 @@ group "default" {
 target "dev" {
   inherits = ["_common"]
   target = "dev"
-  output = ["type=image,name=beaconbox-dev"]
+  output = ["type=image,name=beacon-dev"]
 }
 
 group "validate" {
