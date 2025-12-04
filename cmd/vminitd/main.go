@@ -32,6 +32,7 @@ import (
 	_ "github.com/aledbf/beacon/containerd/api/services/bundle/v1"
 	_ "github.com/aledbf/beacon/containerd/api/services/system/v1"
 
+	_ "github.com/aledbf/beacon/containerd/services"
 	_ "github.com/aledbf/beacon/containerd/vminit/events"
 	_ "github.com/aledbf/beacon/containerd/vminit/streaming"
 )
