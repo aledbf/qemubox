@@ -315,7 +315,7 @@ beaconbox uses [Cloud Hypervisor](https://github.com/cloud-hypervisor/cloud-hype
 
 **Two-Level Resource Enforcement:**
 
-1. **VM Level (Cloud Hypervisor)** - Hardcoded limits at `/internal/vm/cloudhypervisor/instance.go:335-340`:
+1. **VM Level (Cloud Hypervisor)** - Hardcoded limits at `vm/cloudhypervisor/instance.go`:
    ```
    - 2 vCPUs (BootVcpus: 2, MaxVcpus: 2)
    - 4GB memory (Size: 4 * 1024 * 1024 * 1024)
@@ -335,9 +335,9 @@ beaconbox uses [Cloud Hypervisor](https://github.com/cloud-hypervisor/cloud-hype
 - **Overcommit not possible**: Cannot pack multiple small containers in one VM currently
 
 **Code References:**
-- VM resources: `/internal/vm/cloudhypervisor/instance.go:335-340`
-- Network namespace removal: `/internal/shim/task/service.go:238-250`
-- Cgroups requirement: `/internal/vminit/task/service.go:67-68` (unified cgroups v2 only)
+- VM resources: `vm/cloudhypervisor/instance.go`
+- Network namespace removal: `shim/task/service.go`
+- Cgroups requirement: `vminit/task/service.go`
 
 ### Performance Characteristics
 

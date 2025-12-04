@@ -9,6 +9,7 @@ const (
 	NetworkModeUnixstream
 )
 
+// NetworkConfig holds the network settings to be applied to the VM.
 type NetworkConfig struct {
 	InterfaceName string   // Interface name in VM (e.g., "eth0")
 	IP            string   // IPv4 address (e.g., "10.88.0.5")
@@ -17,6 +18,7 @@ type NetworkConfig struct {
 	DNS           []string // DNS servers
 }
 
+// StartOpts defines configuration options for starting a VM.
 type StartOpts struct {
 	InitArgs         []string
 	NetworkConfig    *NetworkConfig

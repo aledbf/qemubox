@@ -269,7 +269,14 @@ func disableNetworkNamespace(ctx context.Context, b *bundle.Bundle) error {
 	return nil
 }
 
-// Create a new initial process and container with the underlying OCI runtime
+// Create a new initial process and container with the underlying OCI runtime.
+// This involves:
+// 1. Verifying KVM availability.
+// 2. Loading and transforming the OCI bundle (e.g., removing network namespace).
+// 3. Configuring VM resources (CPU, memory) based on the OCI spec.
+// 4. Creating and booting the Cloud Hypervisor VM.
+// 5. Setting up networking (IP allocation, TAP device).
+// 6. Connecting to the VM via vsock and creating the container task inside.
 func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, err error) {
 	log.G(ctx).WithFields(log.Fields{
 		"id":     r.ID,
@@ -480,7 +487,8 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	}, nil
 }
 
-// Start a process
+// Start a process.
+// This forwards the Start request to the vminitd process running inside the VM via TTRPC.
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("starting container task")
 	vmc, err := s.client()
@@ -491,7 +499,12 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	return tc.Start(ctx, r)
 }
 
-// Delete the initial process and container
+// Delete the initial process and container.
+// This cleans up resources in the following order:
+// 1. Deletes the task inside the VM.
+// 2. Shuts down IO forwarding.
+// 3. Releases network resources (IPs, TAP devices).
+// 4. Removes the container from the shim's state.
 func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAPI.DeleteResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("deleting task")
 	vmc, err := s.client()
