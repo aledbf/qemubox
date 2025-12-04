@@ -6,31 +6,24 @@ disabled_plugins = [
   "io.containerd.snapshotter.v1.overlayfs",
   "io.containerd.snapshotter.v1.devmapper"
 ]
+
 imports = [
   "/etc/containerd/conf.d/*.toml",
   "/usr/share/beacon/config/containerd/conf.d/*.toml"
 ]
+
 oom_score = 0
-required_plugins = [ ]
 root = "/var/lib/beacon/containerd"
 state = "/run/beacon/containerd"
-temp = ""
 version = 3
-
-[cgroup]
-path = ""
-
-[debug]
-address = ""
-format = ""
-gid = 0
-level = ""
-uid = 0
 
 [grpc]
 address = "/var/run/beacon/containerd.sock"
 gid = 0
 uid = 0
+
+[debug]
+  level = "debug"
 
 [metrics]
 address = ""
@@ -128,6 +121,7 @@ sandboxer = "podsandbox"
   [plugins."io.containerd.snapshotter.v1.erofs"]
   default_size = "1G"
   enable_fsverity = false
+  max_unmerged_layers = 1
 
   [plugins."io.containerd.transfer.v1.local"]
   check_platform_supported = false

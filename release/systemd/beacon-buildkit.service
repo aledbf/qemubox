@@ -1,9 +1,11 @@
 [Unit]
-After=network.target dbus.service
+After=network.target dbus.service beacon-containerd.service
 
 [Service]
+Environment="PATH=/usr/share/beacon/bin/:${PATH}"
 ExecStartPre=-/sbin/modprobe overlay
-ExecStart=/usr/share/beacon/bin/buildkitd --config /usr/share/beacon/config/buildkitd.toml
+ExecStartPre=-/sbin/modprobe erofs
+ExecStart=/usr/share/beacon/bin/buildkitd --config /usr/share/beacon/config/buildkit/config.toml
 
 Type=notify
 Delegate=yes
