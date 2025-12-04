@@ -150,6 +150,7 @@ func (ch *Instance) AddDisk(ctx context.Context, blockID, mountPath string, opts
 		"blockID":  blockID,
 		"path":     mountPath,
 		"readonly": mc.Readonly,
+		"vmdk":     mc.Vmdk,
 	}).Debug("cloud-hypervisor: scheduled disk")
 
 	return nil

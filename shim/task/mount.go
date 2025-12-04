@@ -3,12 +3,15 @@ package task
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/containerd/containerd/api/types"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 
+	"github.com/aledbf/beacon/containerd/erofs"
 	"github.com/aledbf/beacon/containerd/vm"
 	"github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
 )
@@ -17,6 +20,7 @@ type diskOptions struct {
 	name     string
 	source   string
 	readOnly bool
+	vmdk     bool
 }
 
 // transformMounts does not perform any local mounts but transforms
@@ -37,16 +41,52 @@ func transformMounts(ctx context.Context, vmi *cloudhypervisor.Instance, id stri
 			if len(disk) > 36 {
 				disk = disk[:36]
 			}
-			addDisks = append(addDisks, diskOptions{
-				name:     disk,
-				source:   m.Source,
-				readOnly: true,
-			})
+
+			var options []string
+			devices := []string{m.Source}
+
+			// Extract device= options which specify additional EROFS layers
+			for _, o := range m.Options {
+				if d, found := strings.CutPrefix(o, "device="); found {
+					devices = append(devices, d)
+					continue
+				}
+				options = append(options, o)
+			}
+
+			// If multiple layers, generate VMDK descriptor to merge them
+			if len(devices) > 1 {
+				mergedfsPath := filepath.Dir(m.Source) + "/merged_fs.vmdk"
+				if _, err := os.Stat(mergedfsPath); err != nil {
+					if !os.IsNotExist(err) {
+						log.G(ctx).WithError(err).Warnf("failed to stat %v", mergedfsPath)
+						return nil, errdefs.ErrNotImplemented
+					}
+					if err := erofs.DumpVMDKDescriptorToFile(mergedfsPath, 0xfffffffe, devices); err != nil {
+						log.G(ctx).WithError(err).Warnf("failed to generate %v", mergedfsPath)
+						return nil, errdefs.ErrNotImplemented
+					}
+				}
+				addDisks = append(addDisks, diskOptions{
+					name:     disk,
+					source:   mergedfsPath,
+					readOnly: true,
+					vmdk:     true,
+				})
+			} else {
+				addDisks = append(addDisks, diskOptions{
+					name:     disk,
+					source:   m.Source,
+					readOnly: true,
+					vmdk:     false,
+				})
+			}
+
 			am = append(am, &types.Mount{
 				Type:    "erofs",
 				Source:  fmt.Sprintf("/dev/vd%c", disks),
 				Target:  m.Target,
-				Options: filterOptions(m.Options),
+				Options: filterOptions(options),
 			})
 			disks++
 		case "ext4":
@@ -60,6 +100,7 @@ func transformMounts(ctx context.Context, vmi *cloudhypervisor.Instance, id stri
 				name:     disk,
 				source:   m.Source,
 				readOnly: false,
+				vmdk:     false,
 			})
 			am = append(am, &types.Mount{
 				Type:    "ext4",
@@ -111,6 +152,9 @@ func transformMounts(ctx context.Context, vmi *cloudhypervisor.Instance, id stri
 		var opts []vm.MountOpt
 		if do.readOnly {
 			opts = append(opts, vm.WithReadOnly())
+		}
+		if do.vmdk {
+			opts = append(opts, vm.WithVmdk())
 		}
 		if err := vmi.AddDisk(ctx, do.name, do.source, opts...); err != nil {
 			return nil, err

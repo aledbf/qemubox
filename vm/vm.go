@@ -47,6 +47,7 @@ func WithNetworkNamespace(path string) StartOpt {
 
 type MountConfig struct {
 	Readonly bool
+	Vmdk     bool
 }
 
 type MountOpt func(*MountConfig)
@@ -54,6 +55,12 @@ type MountOpt func(*MountConfig)
 func WithReadOnly() MountOpt {
 	return func(o *MountConfig) {
 		o.Readonly = true
+	}
+}
+
+func WithVmdk() MountOpt {
+	return func(o *MountConfig) {
+		o.Vmdk = true
 	}
 }
 
