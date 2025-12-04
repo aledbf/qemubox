@@ -77,13 +77,21 @@ func newInstance(ctx context.Context, binaryPath, stateDir string, resourceCfg *
 	// - The same socket is used for all vsock port connections (multiplexed)
 	vsockSocketPath := filepath.Join(stateDir, "vsock")
 
-	// Use state directory for console log to avoid collision between instances
+	// Use dedicated log directory for persistent logs
 	containerID := filepath.Base(stateDir)
-	consolePath := filepath.Join(stateDir, "console.log")
+	logDir := filepath.Join("/var/log/beacon", containerID)
+
+	// Create log directory
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create log directory: %w", err)
+	}
+
+	consolePath := filepath.Join(logDir, "console.log")
 
 	inst := &Instance{
 		binaryPath:    binaryPath,
 		stateDir:      stateDir,
+		logDir:        logDir,
 		kernelPath:    kernelPath,
 		initrdPath:    initrdPath,
 		apiSocketPath: filepath.Join(stateDir, "api.sock"),
@@ -289,7 +297,7 @@ func (ch *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	}).Debug("cloud-hypervisor: kernel command line prepared")
 
 	// Build command-line arguments for Cloud Hypervisor
-	chLogPath := filepath.Join(ch.stateDir, "cloud-hypervisor.log")
+	chLogPath := filepath.Join(ch.logDir, "cloud-hypervisor.log")
 
 	args := []string{
 		"--api-socket", ch.apiSocketPath,
@@ -605,7 +613,7 @@ func (ch *Instance) logDebugInfo(ctx context.Context) {
 	}
 
 	// Try to read Cloud Hypervisor log
-	chLogPath := filepath.Join(ch.stateDir, "cloud-hypervisor.log")
+	chLogPath := filepath.Join(ch.logDir, "cloud-hypervisor.log")
 	if chLogData, err := os.ReadFile(chLogPath); err == nil && len(chLogData) > 0 {
 		if len(chLogData) > maxLogBytes {
 			chLogData = chLogData[len(chLogData)-maxLogBytes:]

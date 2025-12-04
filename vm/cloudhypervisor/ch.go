@@ -28,7 +28,8 @@ type Instance struct {
 	mu            sync.Mutex
 	vmState       atomic.Uint32 // Current VM state (vmState)
 	binaryPath    string
-	stateDir      string // State directory path for sockets, logs, and other runtime files
+	stateDir      string // State directory path for sockets and other runtime files
+	logDir        string // Log directory path for persistent logs
 	kernelPath    string
 	initrdPath    string
 	apiSocketPath string

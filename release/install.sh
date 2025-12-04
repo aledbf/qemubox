@@ -64,6 +64,7 @@ echo "  → Creating state directories..."
 mkdir -p /var/lib/beacon/containerd
 mkdir -p /run/beacon/containerd
 mkdir -p /var/run/beacon
+mkdir -p /var/log/beacon
 echo -e "    ${GREEN}✓${NC} State directories created"
 
 # Install systemd services
