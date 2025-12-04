@@ -23,12 +23,12 @@ func (s *service) client() (*ttrpc.Client, error) {
 	return client, nil
 }
 
-func (s *service) vmInstance(ctx context.Context, state string, resourceCfg *cloudhypervisor.VMResourceConfig) (*cloudhypervisor.Instance, error) {
+func (s *service) vmInstance(ctx context.Context, containerID, state string, resourceCfg *cloudhypervisor.VMResourceConfig) (*cloudhypervisor.Instance, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.vm == nil {
 		var err error
-		s.vm, err = cloudhypervisor.NewInstance(ctx, state, resourceCfg)
+		s.vm, err = cloudhypervisor.NewInstance(ctx, containerID, state, resourceCfg)
 		if err != nil {
 			return nil, err
 		}

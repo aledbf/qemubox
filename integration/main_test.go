@@ -30,7 +30,7 @@ func TestMain(m *testing.M) {
 func runWithVM(t *testing.T, runTest func(*testing.T, *cloudhypervisor.Instance)) {
 	t.Helper()
 
-	vm, err := cloudhypervisor.NewInstance(t.Context(), t.TempDir(), nil)
+	vm, err := cloudhypervisor.NewInstance(t.Context(), t.Name(), t.TempDir(), nil)
 	if err != nil {
 		t.Fatal("Failed to create VM instance:", err)
 	}

@@ -343,7 +343,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	if err := os.Mkdir(vmState, 0700); err != nil {
 		return nil, errgrpc.ToGRPCf(err, "failed to create vm state directory %q", vmState)
 	}
-	vmi, err := s.vmInstance(ctx, vmState, resourceCfg)
+	vmi, err := s.vmInstance(ctx, r.ID, vmState, resourceCfg)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}

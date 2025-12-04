@@ -36,7 +36,7 @@ const (
 	maxLogBytes         = 4096 // Maximum log output to include in errors
 )
 
-func newInstance(ctx context.Context, binaryPath, stateDir string, resourceCfg *VMResourceConfig) (*Instance, error) {
+func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, resourceCfg *VMResourceConfig) (*Instance, error) {
 	kernelPath, err := findKernel()
 	if err != nil {
 		return nil, err
@@ -77,8 +77,7 @@ func newInstance(ctx context.Context, binaryPath, stateDir string, resourceCfg *
 	// - The same socket is used for all vsock port connections (multiplexed)
 	vsockSocketPath := filepath.Join(stateDir, "vsock")
 
-	// Use dedicated log directory for persistent logs
-	containerID := filepath.Base(stateDir)
+	// Use dedicated log directory per container for persistent logs
 	logDir := filepath.Join("/var/log/beacon", containerID)
 
 	// Create log directory
