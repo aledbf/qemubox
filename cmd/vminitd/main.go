@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -34,8 +35,70 @@ import (
 	_ "github.com/aledbf/beacon/containerd/vminit/streaming"
 )
 
+// loadConfig loads configuration from a JSON file and merges it with the provided config.
+// Command-line flags take precedence over file configuration.
+func loadConfig(path string, config *ServiceConfig) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Store flag values before unmarshaling
+	flagDebug := config.Debug
+	flagRPCPort := config.RPCPort
+	flagStreamPort := config.StreamPort
+	flagVSockContextID := config.VSockContextID
+
+	if err := json.Unmarshal(data, config); err != nil {
+		return fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	// Restore flag values if they were set (non-zero/non-default)
+	// This ensures flags override config file
+	if flagDebug {
+		config.Debug = flagDebug
+	}
+	if flagRPCPort != 0 && flagRPCPort != 1025 {
+		config.RPCPort = flagRPCPort
+	}
+	if flagStreamPort != 0 && flagStreamPort != 1026 {
+		config.StreamPort = flagStreamPort
+	}
+	if flagVSockContextID != 0 && flagVSockContextID != 3 {
+		config.VSockContextID = flagVSockContextID
+	}
+
+	return nil
+}
+
+// applyPluginConfig applies configuration map to a plugin config struct.
+// This is a simple implementation that marshals the map to JSON and then
+// unmarshals it into the config struct, which handles type conversions.
+func applyPluginConfig(pluginConfig any, configMap map[string]any) error {
+	if pluginConfig == nil {
+		return fmt.Errorf("plugin config is nil")
+	}
+
+	// Marshal the config map to JSON
+	data, err := json.Marshal(configMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config map: %w", err)
+	}
+
+	// Unmarshal into the plugin config struct
+	if err := json.Unmarshal(data, pluginConfig); err != nil {
+		return fmt.Errorf("failed to unmarshal into plugin config: %w", err)
+	}
+
+	return nil
+}
+
 func main() {
-	var config ServiceConfig
+	var (
+		config     ServiceConfig
+		configFile string
+	)
+	flag.StringVar(&configFile, "config", "", "Path to configuration file")
 	flag.BoolVar(&config.Debug, "debug", false, "Debug log level")
 	flag.IntVar(&config.RPCPort, "vsock-rpc-port", 1025, "vsock port to listen for rpc on")
 	flag.IntVar(&config.StreamPort, "vsock-stream-port", 1026, "vsock port to listen for streams on")
@@ -43,6 +106,13 @@ func main() {
 	args := os.Args[1:]
 
 	flag.CommandLine.Parse(args)
+
+	// Load configuration file if provided
+	if configFile != "" {
+		if err := loadConfig(configFile, &config); err != nil {
+			log.L.WithError(err).Fatalf("failed to load config from %s", configFile)
+		}
+	}
 
 	if config.Debug {
 		log.SetLevel("debug")
@@ -274,12 +344,13 @@ type Runnable interface {
 }
 
 type ServiceConfig struct {
-	VSockContextID  int
-	RPCPort         int
-	StreamPort      int
-	Shutdown        shutdown.Service
-	Debug           bool
-	DisabledPlugins []string
+	VSockContextID  int                       `json:"vsock_context_id,omitempty"`
+	RPCPort         int                       `json:"rpc_port,omitempty"`
+	StreamPort      int                       `json:"stream_port,omitempty"`
+	Shutdown        shutdown.Service          `json:"-"`
+	Debug           bool                      `json:"debug,omitempty"`
+	DisabledPlugins []string                  `json:"disabled_plugins,omitempty"`
+	PluginConfigs   map[string]map[string]any `json:"plugin_configs,omitempty"`
 }
 
 func New(ctx context.Context, config ServiceConfig) (Runnable, error) {
@@ -331,7 +402,18 @@ func New(ctx context.Context, config ServiceConfig) (Runnable, error) {
 		ic := plugin.NewContext(ctx, initializedPlugins, nil)
 
 		if reg.Config != nil {
-			// TODO: Allow plugin config?
+			// Apply plugin-specific configuration from config file if available
+			if pluginCfg, ok := config.PluginConfigs[id]; ok {
+				// Attempt to merge plugin config
+				// This uses reflection to set fields, assuming Config is a pointer to struct
+				if err := applyPluginConfig(reg.Config, pluginCfg); err != nil {
+					log.G(ctx).WithFields(log.Fields{
+						"plugin_id": id,
+						"error":     err,
+					}).Warn("failed to apply plugin configuration")
+				}
+			}
+
 			if vc, ok := reg.Config.(interface{ SetVsock(uint32, uint32) }); ok {
 				if reg.Type == vminit.StreamingPlugin {
 					vc.SetVsock(uint32(config.VSockContextID), uint32(config.StreamPort))

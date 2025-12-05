@@ -2,7 +2,9 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"path/filepath"
 
 	"github.com/containerd/errdefs/pkg/errgrpc"
 	"github.com/containerd/plugin"
@@ -31,7 +33,13 @@ func init() {
 }
 
 func initFunc(ic *plugin.InitContext) (interface{}, error) {
-	return &systemService{}, nil
+	s := &systemService{}
+	// Write runtime features to a file for the shim manager to read
+	if err := s.writeRuntimeFeatures(); err != nil {
+		// Non-fatal - log but continue
+		return s, nil
+	}
+	return s, nil
 }
 
 func (s *systemService) RegisterTTRPC(server *ttrpc.Server) error {
@@ -48,4 +56,27 @@ func (s *systemService) Info(ctx context.Context, _ *emptypb.Empty) (*api.InfoRe
 		Version:       "dev",
 		KernelVersion: string(v),
 	}, nil
+}
+
+// writeRuntimeFeatures writes the runtime features to a well-known location
+// that can be read by the shim manager
+func (s *systemService) writeRuntimeFeatures() error {
+	features := map[string]string{
+		"containerd.io/runtime-allow-mounts": "mkdir/*,format/*,erofs,ext4",
+		"containerd.io/runtime-type":         "vm",
+		"containerd.io/vm-type":              "microvm",
+	}
+
+	featuresDir := "/run/vminitd"
+	if err := os.MkdirAll(featuresDir, 0755); err != nil {
+		return err
+	}
+
+	data, err := json.Marshal(features)
+	if err != nil {
+		return err
+	}
+
+	featuresFile := filepath.Join(featuresDir, "features.json")
+	return os.WriteFile(featuresFile, data, 0644)
 }

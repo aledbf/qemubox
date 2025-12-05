@@ -3,14 +3,82 @@ package task
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/containerd/containerd/api/types"
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/errdefs"
+	"github.com/containerd/log"
 
 	"github.com/aledbf/beacon/containerd/mountutil"
 	"github.com/aledbf/beacon/containerd/vm"
 )
+
+// translateMountOptions translates standard mount options to virtiofs-compatible options.
+// virtiofs supports a subset of mount options. This function filters and translates
+// options from bind/overlay mounts to virtiofs equivalents.
+func translateMountOptions(ctx context.Context, options []string) []string {
+	var translated []string
+
+	// Map of mount options that are compatible with virtiofs
+	// or need translation
+	compatibleOptions := map[string]string{
+		"ro":       "ro",
+		"rw":       "rw",
+		"nodev":    "nodev",
+		"nosuid":   "nosuid",
+		"noexec":   "noexec",
+		"relatime": "relatime",
+		"noatime":  "noatime",
+	}
+
+	// Options that should be dropped (not supported by virtiofs)
+	droppedOptions := map[string]bool{
+		"rbind":      true,
+		"bind":       true,
+		"rprivate":   true,
+		"private":    true,
+		"rshared":    true,
+		"shared":     true,
+		"rslave":     true,
+		"slave":      true,
+		"remount":    true,
+		"strictatime": true,
+	}
+
+	for _, opt := range options {
+		// Check if it's a compatible option
+		if mappedOpt, ok := compatibleOptions[opt]; ok {
+			translated = append(translated, mappedOpt)
+			continue
+		}
+
+		// Check if it should be dropped
+		if droppedOptions[opt] {
+			log.G(ctx).WithField("option", opt).Debug("dropping incompatible virtiofs mount option")
+			continue
+		}
+
+		// For options with values (e.g., "uid=1000"), check the prefix
+		if strings.Contains(opt, "=") {
+			parts := strings.SplitN(opt, "=", 2)
+			switch parts[0] {
+			case "uid", "gid", "fmode", "dmode":
+				// These options might be supported, include them
+				translated = append(translated, opt)
+			default:
+				// Unknown option with value, log and skip
+				log.G(ctx).WithField("option", opt).Debug("skipping unknown virtiofs mount option")
+			}
+			continue
+		}
+
+		// Unknown option without value, log and skip
+		log.G(ctx).WithField("option", opt).Debug("skipping unknown virtiofs mount option")
+	}
+
+	return translated
+}
 
 func setupMounts(ctx context.Context, vmi vm.Instance, id string, m []*types.Mount, rootfs, lmounts string) ([]*types.Mount, error) {
 	// Handle mounts
@@ -47,10 +115,9 @@ func setupMounts(ctx context.Context, vmi vm.Instance, id string, m []*types.Mou
 			return nil, err
 		}
 		return []*types.Mount{{
-			Type:   "virtiofs",
-			Source: tag,
-			// TODO: Translate the options
-			//Options: m[0].Options,
+			Type:    "virtiofs",
+			Source:  tag,
+			Options: translateMountOptions(ctx, m[0].Options),
 		}}, nil
 	} else if len(m) == 0 {
 		tag := fmt.Sprintf("rootfs-%s", id)

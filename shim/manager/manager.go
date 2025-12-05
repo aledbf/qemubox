@@ -253,6 +253,34 @@ func (m manager) Info(ctx context.Context, optionsR io.Reader) (*types.RuntimeIn
 			"containerd.io/runtime-allow-mounts": "mkdir/*,format/*,erofs",
 		},
 	}
-	// TODO: Get features list from run_vminitd
+
+	// Try to read runtime features from vminitd
+	if features, err := readVMRuntimeFeatures(); err == nil {
+		// Merge features into annotations
+		for k, v := range features {
+			info.Annotations[k] = v
+		}
+	}
+
 	return info, nil
+}
+
+// readVMRuntimeFeatures reads runtime features from the VM init daemon
+// This file is written by vminitd on startup
+func readVMRuntimeFeatures() (map[string]string, error) {
+	// This path is accessible from within the VM when run by vminitd
+	// When running on the host, this file won't exist - which is fine
+	const featuresFile = "/run/vminitd/features.json"
+
+	data, err := os.ReadFile(featuresFile)
+	if err != nil {
+		return nil, err
+	}
+
+	var features map[string]string
+	if err := json.Unmarshal(data, &features); err != nil {
+		return nil, err
+	}
+
+	return features, nil
 }
