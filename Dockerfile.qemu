@@ -1,0 +1,220 @@
+# Dockerfile for building a static qemu-system-x86_64 binary (libc-compatible)
+# QEMU Version: 10.1.2
+# Target: microvm development environments
+
+FROM ubuntu:25.10 AS builder
+
+# Build arguments
+ARG QEMU_VERSION=10.1.2
+ARG JOBS=8
+ARG DEBIAN_FRONTEND=noninteractive
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Install build dependencies
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get --no-install-recommends install -y \
+        # Core build tools
+        build-essential \
+        meson \
+        ninja-build \
+        pkg-config \
+        python3 \
+        python3-venv \
+        python3-tomli \
+        bash \
+        coreutils \
+        curl \
+        ca-certificates \
+        xz-utils \
+        # Required libraries (dev packages for static linking)
+        libglib2.0-dev \
+        libglib2.0-0 \
+        zlib1g-dev \
+        libpixman-1-dev \
+        # For virtio and networking
+        linux-libc-dev \
+        libcap-ng-dev \
+        libseccomp-dev \
+        libseccomp2 \
+        # Additional useful dependencies
+        libaio-dev \
+        liburing-dev \
+        git \
+        flex \
+        bison \
+        autoconf \
+        automake \
+        libtool \
+        libffi-dev \
+        libelf-dev \
+        patch && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Download QEMU source
+RUN curl -fsSL "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" -o qemu.tar.xz && \
+    tar -xf qemu.tar.xz && \
+    rm qemu.tar.xz && \
+    mv qemu-${QEMU_VERSION} qemu-src
+
+WORKDIR /build/qemu-src
+
+# Configure QEMU for minimal build with libc compatibility
+# Focused on microvm use case with virtio devices
+# Note: Using dynamic linking with glibc (not fully static like Alpine/musl)
+# Building both system emulator (qemu-system-x86_64) and disk utilities (qemu-img)
+RUN ./configure \
+    --prefix=/opt/qemu \
+    --target-list=x86_64-softmmu \
+    --enable-tools \
+    # Disable unnecessary features for minimal build
+    --disable-docs \
+    --disable-debug-info \
+    --disable-werror \
+    # Disable graphical output (headless microvm)
+    --disable-sdl \
+    --disable-gtk \
+    --disable-opengl \
+    --disable-virglrenderer \
+    --disable-spice \
+    --disable-vnc \
+    # Disable audio
+    --disable-alsa \
+    --disable-coreaudio \
+    --disable-oss \
+    --disable-pa \
+    --disable-jack \
+    --disable-sndio \
+    # Disable unnecessary features
+    --disable-guest-agent \
+    --disable-guest-agent-msi \
+    --disable-vte \
+    --disable-curses \
+    --disable-iconv \
+    --disable-brlapi \
+    --disable-usb-redir \
+    --disable-libusb \
+    --disable-smartcard \
+    --disable-rdma \
+    --disable-xkbcommon \
+    --disable-cocoa \
+    --disable-glusterfs \
+    --disable-libnfs \
+    --disable-libssh \
+    --disable-vde \
+    --disable-netmap \
+    --disable-xen \
+    --disable-xen-pci-passthrough \
+    --disable-bzip2 \
+    --disable-lzo \
+    --disable-snappy \
+    --disable-zstd \
+    --disable-libiscsi \
+    --disable-lzfse \
+    --disable-libpmem \
+    --disable-libdaxctl \
+    --disable-l2tpv3 \
+    --disable-crypto-afalg \
+    --disable-gcrypt \
+    --disable-nettle \
+    --disable-gnutls \
+    --disable-auth-pam \
+    --disable-tpm \
+    --disable-numa \
+    --disable-dmg \
+    --disable-qcow1 \
+    --disable-vdi \
+    --disable-vvfat \
+    --disable-qed \
+    --disable-parallels \
+    --disable-capstone \
+    --disable-libdw \
+    # Enable features needed for microvm
+    --enable-kvm \
+    --enable-virtfs \
+    --enable-linux-aio \
+    --enable-linux-io-uring \
+    --enable-cap-ng \
+    --enable-seccomp \
+    --disable-slirp \
+    --disable-gio
+
+# Build QEMU
+RUN make -j${JOBS}
+
+# Install to prefix
+RUN make install
+
+# Strip the binary to reduce size
+RUN strip /opt/qemu/bin/qemu-system-x86_64
+
+# Verify binary type and show dynamic library dependencies
+RUN file /opt/qemu/bin/qemu-system-x86_64 && \
+    echo "Dynamic library dependencies:" && \
+    ldd /opt/qemu/bin/qemu-system-x86_64
+
+# ============================================
+# Final minimal image with binary and dependencies
+# ============================================
+FROM ubuntu:25.10 AS runtime
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install only runtime libraries required by QEMU
+RUN apt-get update && \
+    apt-get --no-install-recommends install -y \
+        libglib2.0-0 \
+        libpixman-1-0 \
+        libcap-ng0 \
+        libseccomp2 \
+        libaio1 \
+        liburing2 \
+        zlib1g && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Copy QEMU binaries
+COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64
+COPY --from=builder /opt/qemu/bin/qemu-img /usr/local/bin/qemu-img
+
+# Copy BIOS/firmware files needed for boot
+COPY --from=builder /opt/qemu/share/qemu/bios-256k.bin /usr/local/share/qemu/bios-256k.bin
+COPY --from=builder /opt/qemu/share/qemu/bios.bin /usr/local/share/qemu/bios.bin
+COPY --from=builder /opt/qemu/share/qemu/kvmvapic.bin /usr/local/share/qemu/kvmvapic.bin
+COPY --from=builder /opt/qemu/share/qemu/linuxboot.bin /usr/local/share/qemu/linuxboot.bin
+COPY --from=builder /opt/qemu/share/qemu/linuxboot_dma.bin /usr/local/share/qemu/linuxboot_dma.bin
+COPY --from=builder /opt/qemu/share/qemu/vgabios-stdvga.bin /usr/local/share/qemu/vgabios-stdvga.bin
+COPY --from=builder /opt/qemu/share/qemu/efi-virtio.rom /usr/local/share/qemu/efi-virtio.rom
+
+ENTRYPOINT ["/usr/local/bin/qemu-system-x86_64"]
+
+# ============================================
+# Alternative: Extract binaries to host
+# ============================================
+FROM scratch AS extract
+
+# Copy QEMU binaries
+COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
+COPY --from=builder /opt/qemu/bin/qemu-img /bin/qemu-img
+
+# Copy BIOS/firmware files needed for boot
+COPY --from=builder /opt/qemu/share/qemu/bios-256k.bin /share/qemu/bios-256k.bin
+COPY --from=builder /opt/qemu/share/qemu/bios.bin /share/qemu/bios.bin
+COPY --from=builder /opt/qemu/share/qemu/kvmvapic.bin /share/qemu/kvmvapic.bin
+COPY --from=builder /opt/qemu/share/qemu/linuxboot.bin /share/qemu/linuxboot.bin
+COPY --from=builder /opt/qemu/share/qemu/linuxboot_dma.bin /share/qemu/linuxboot_dma.bin
+COPY --from=builder /opt/qemu/share/qemu/vgabios-stdvga.bin /share/qemu/vgabios-stdvga.bin
+COPY --from=builder /opt/qemu/share/qemu/efi-virtio.rom /share/qemu/efi-virtio.rom
+
+# ============================================
+# Alternative: Full QEMU installation tarball
+# ============================================
+FROM ubuntu:25.10 AS tarball
+
+COPY --from=builder /opt/qemu /opt/qemu
+
+# Create a tarball for easy extraction
+RUN tar -czvf /qemu.tar.gz -C /opt/qemu .
+
+CMD ["cat", "/qemu.tar.gz"]

@@ -15,6 +15,15 @@ variable "KERNEL_NPROC" {
   default = "8"
 }
 
+# QEMU configuration
+variable "QEMU_VERSION" {
+  default = "10.1.2"
+}
+
+variable "QEMU_JOBS" {
+  default = "8"
+}
+
 # Go build configuration
 variable "GO_BUILD_FLAGS" {
   default = ""
@@ -42,6 +51,8 @@ target "_common" {
     KERNEL_VERSION = KERNEL_VERSION
     KERNEL_ARCH = KERNEL_ARCH
     KERNEL_NPROC = KERNEL_NPROC
+    QEMU_VERSION = QEMU_VERSION
+    QEMU_JOBS = QEMU_JOBS
     GO_BUILD_FLAGS = GO_BUILD_FLAGS
     GO_GCFLAGS = GO_GCFLAGS
     GO_DEBUG_GCFLAGS = GO_DEBUG_GCFLAGS
@@ -89,9 +100,18 @@ target "shim" {
   output = ["${DESTDIR}"]
 }
 
+# Build QEMU binaries (qemu-system-x86_64 and qemu-img)
+target "qemu" {
+  inherits = ["_common"]
+  dockerfile = "Dockerfile.qemu"
+  target = "extract"
+  platforms = ["linux/amd64"]
+  output = ["${DESTDIR}"]
+}
+
 # Build all artifacts (default target)
 group "default" {
-  targets = ["kernel", "initrd", "shim"]
+  targets = ["kernel", "initrd", "shim", "qemu"]
 }
 
 # Development environment with containerd, docker CLI, and delve

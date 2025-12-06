@@ -35,6 +35,11 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 		return nil, err
 	}
 
+	qemuSharePath, err := findQemuShare()
+	if err != nil {
+		return nil, err
+	}
+
 	// Provide default resource configuration if none specified
 	if resourceCfg == nil {
 		resourceCfg = &vm.VMResourceConfig{
@@ -71,6 +76,7 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 		logDir:        logDir,
 		kernelPath:    kernelPath,
 		initrdPath:    initrdPath,
+		qemuSharePath: qemuSharePath,
 		qmpSocketPath: filepath.Join(stateDir, "qmp.sock"),
 		vsockPath:     filepath.Join(stateDir, "vsock.sock"),
 		consolePath:   filepath.Join(logDir, "console.log"),
@@ -323,6 +329,9 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 	memoryMaxMB := q.resourceCfg.MemoryHotplugSize / (1024 * 1024)
 
 	args := []string{
+		// BIOS/firmware path - must come first
+		"-L", q.qemuSharePath,
+
 		"-machine", "q35",
 		"-enable-kvm",
 

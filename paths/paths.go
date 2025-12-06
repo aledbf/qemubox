@@ -76,3 +76,20 @@ func QemuPath() string {
 	// Fall back to system QEMU
 	return "/usr/bin/qemu-system-x86_64"
 }
+
+// QemuSharePath returns the path to QEMU's share directory containing BIOS files
+func QemuSharePath() string {
+	// Check custom path first
+	if path := os.Getenv("BEACON_QEMU_SHARE_PATH"); path != "" {
+		return path
+	}
+
+	// Check beacon share directory
+	customPath := filepath.Join(GetShareDir(), "share", "qemu")
+	if _, err := os.Stat(customPath); err == nil {
+		return customPath
+	}
+
+	// Fall back to system QEMU share path
+	return "/usr/share/qemu"
+}

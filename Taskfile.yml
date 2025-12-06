@@ -93,6 +93,16 @@ tasks:
         {{.BUILDX}} bake kernel
         echo "✓ Kernel built"
 
+  build:qemu:
+    desc: Build QEMU binaries and firmware (qemu-system-x86_64, qemu-img, BIOS files)
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Building QEMU..."
+        {{.BUILDX}} bake qemu
+        echo "✓ QEMU built: _output/bin/qemu-system-x86_64, _output/bin/qemu-img"
+        echo "✓ QEMU firmware: _output/share/qemu/"
+
   # ==========================================================================
   # Development Tasks
   # ==========================================================================
@@ -422,6 +432,33 @@ tasks:
         cp _output/cloud-hypervisor-static "${RELEASE_DIR}/usr/share/beacon/bin/cloud-hypervisor"
         cp _output/ch-remote-static "${RELEASE_DIR}/usr/share/beacon/bin/ch-remote"
         echo "  ✓ cloud-hypervisor v${CH_VERSION}"
+
+        # Copy QEMU binaries and firmware files (built during build phase)
+        echo "📦 Adding QEMU binaries and firmware..."
+        if [ -f "_output/bin/qemu-system-x86_64" ]; then
+          cp _output/bin/qemu-system-x86_64 "${RELEASE_DIR}/usr/share/beacon/bin/"
+          chmod +x "${RELEASE_DIR}/usr/share/beacon/bin/qemu-system-x86_64"
+          echo "  ✓ qemu-system-x86_64"
+        else
+          echo "  ⚠ qemu-system-x86_64 not found - skipping"
+        fi
+
+        if [ -f "_output/bin/qemu-img" ]; then
+          cp _output/bin/qemu-img "${RELEASE_DIR}/usr/share/beacon/bin/"
+          chmod +x "${RELEASE_DIR}/usr/share/beacon/bin/qemu-img"
+          echo "  ✓ qemu-img"
+        else
+          echo "  ⚠ qemu-img not found - skipping"
+        fi
+
+        # Copy QEMU BIOS/firmware files
+        if [ -d "_output/share/qemu" ]; then
+          mkdir -p "${RELEASE_DIR}/usr/share/beacon/share/qemu"
+          cp -r _output/share/qemu/* "${RELEASE_DIR}/usr/share/beacon/share/qemu/"
+          echo "  ✓ QEMU firmware files"
+        else
+          echo "  ⚠ QEMU firmware files not found - skipping"
+        fi
 
         # Copy configuration files
         echo "📂 Copying configuration files..."
