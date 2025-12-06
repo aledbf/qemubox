@@ -73,6 +73,7 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 		qmpSocketPath: filepath.Join(stateDir, "qmp.sock"),
 		vsockPath:     filepath.Join(stateDir, "vsock.sock"),
 		consolePath:   filepath.Join(logDir, "console.log"),
+		qemuLogPath:   filepath.Join(logDir, "qemu.log"),
 		disks:         []*DiskConfig{},
 		nets:          []*NetConfig{},
 		resourceCfg:   resourceCfg,
@@ -205,15 +206,20 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// Build QEMU command line
 	qemuArgs := q.buildQemuCommandLine(cmdlineArgs)
 
+	// Print full command for manual testing
+	fullCmd := fmt.Sprintf("%s %s", q.binaryPath, strings.Join(qemuArgs, " "))
 	log.G(ctx).WithFields(log.Fields{
 		"binary":  q.binaryPath,
 		"cmdline": strings.Join(qemuArgs, " "),
 	}).Info("qemu: starting microvm")
 
+	// DEBUG: Print command for reference
+	fmt.Printf("\n\n=== QEMU COMMAND ===\n%s\n=== END COMMAND ===\n\n", fullCmd)
+
 	// Start QEMU
+	// Note: With -serial stdio, we let the serial console output go to our stdout/stderr
+	// instead of redirecting to a log file
 	q.cmd = exec.CommandContext(ctx, q.binaryPath, qemuArgs...)
-	q.cmd.Stdout = nil
-	q.cmd.Stderr = os.Stderr
 	q.cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
 	}
@@ -224,10 +230,20 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 
 	log.G(ctx).Info("qemu: process started, waiting for QMP socket...")
 
+	// Monitor QEMU process in background
+	go func() {
+		if err := q.cmd.Wait(); err != nil {
+			log.G(ctx).WithError(err).Error("qemu: process exited unexpectedly")
+		}
+	}()
+
 	// Connect to QMP for control
 	qmpClient, err := NewQMPClient(ctx, q.qmpSocketPath)
 	if err != nil {
-		q.cmd.Process.Kill()
+		// Check if QEMU process is still running
+		if q.cmd.Process != nil {
+			q.cmd.Process.Kill()
+		}
 		return fmt.Errorf("failed to connect to QMP: %w", err)
 	}
 	q.qmpClient = qmpClient
@@ -282,14 +298,7 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 
 	// Build kernel command line
 	cmdlineParts := []string{
-		"console=hvc0",
-		"quiet",
-		"loglevel=0",
-		"systemd.show_status=0",
-		"rd.systemd.show_status=0",
-		"no_timer_check",
-		"noreplace-smp",
-		"rw",
+		"console=ttyS0",
 		"net.ifnames=0", "biosdevname=0",
 		"systemd.unified_cgroup_hierarchy=1", // Force cgroup v2
 		"cgroup_no_v1=all",                   // Disable cgroup v1
@@ -308,38 +317,35 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 	// Convert memory from bytes to MB
 	memoryMB := q.resourceCfg.MemorySize / (1024 * 1024)
-	memoryMaxMB := q.resourceCfg.MemoryHotplugSize / (1024 * 1024)
 
 	args := []string{
-		"-machine", "microvm,pic=off,pit=off,rtc=off,isa-serial=off",
-		"-cpu", "host",
-		"-smp", fmt.Sprintf("%d,maxcpus=%d", q.resourceCfg.BootCPUs, q.resourceCfg.MaxCPUs),
-		"-m", fmt.Sprintf("%d,slots=16,maxmem=%dM", memoryMB, memoryMaxMB),
+		"-M", "q35",
 		"-enable-kvm",
+		"-cpu", "host",
+		"-m", fmt.Sprintf("%dg", memoryMB/1024),
+		"-smp", fmt.Sprintf("%d", q.resourceCfg.BootCPUs),
 
 		// Kernel boot
 		"-kernel", q.kernelPath,
 		"-initrd", q.initrdPath,
 		"-append", cmdlineArgs,
 
-		// Console via virtio-serial
-		"-device", "virtio-serial-device",
-		"-chardev", fmt.Sprintf("file,id=console,path=%s", q.consolePath),
-		"-device", "virtconsole,chardev=console",
+		// Defaults
+		"-nodefaults",
+		"-no-user-config",
+		"-nographic",
 
-		// Vsock for guest communication
-		"-chardev", fmt.Sprintf("socket,id=vsock,path=%s,server=on,wait=off", q.vsockPath),
-		"-device", fmt.Sprintf("vhost-vsock-pci,guest-cid=%d,chardev=vsock", vsockCID),
+		// Serial console
+		"-serial", "stdio",
+
+		// Vsock for guest communication (using vhost-vsock kernel module)
+		"-device", fmt.Sprintf("vhost-vsock-pci,guest-cid=%d", vsockCID),
 
 		// QMP for VM control
 		"-qmp", fmt.Sprintf("unix:%s,server=on,wait=off", q.qmpSocketPath),
 
 		// RNG device
 		"-device", "virtio-rng-pci",
-
-		// Defaults
-		"-nodefaults",
-		"-nographic",
 	}
 
 	// Add disks
@@ -540,6 +546,19 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 // logDebugInfo logs console and QEMU logs for debugging when VM startup fails
 func (q *Instance) logDebugInfo(ctx context.Context) {
 	log.G(ctx).Error("qemu: timeout waiting for VM to start")
+
+	// Try to read QEMU logs
+	if qemuLogData, err := os.ReadFile(q.qemuLogPath); err == nil && len(qemuLogData) > 0 {
+		if len(qemuLogData) > maxLogBytes {
+			qemuLogData = qemuLogData[len(qemuLogData)-maxLogBytes:]
+		}
+		log.G(ctx).WithField("qemu_log", string(qemuLogData)).Error("qemu: QEMU stderr output (last 4KB)")
+	} else {
+		log.G(ctx).WithFields(log.Fields{
+			"qemu_log_path": q.qemuLogPath,
+			"error":         err,
+		}).Error("qemu: no QEMU log output")
+	}
 
 	// Try to read VM console output
 	if consoleData, err := os.ReadFile(q.consolePath); err == nil && len(consoleData) > 0 {

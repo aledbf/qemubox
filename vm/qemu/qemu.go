@@ -55,6 +55,7 @@ type Instance struct {
 	qmpSocketPath string // QMP control socket
 	vsockPath     string // Vsock socket
 	consolePath   string // Console log
+	qemuLogPath   string // QEMU stderr log
 
 	// Runtime state
 	cmd       *exec.Cmd
