@@ -1,0 +1,333 @@
+package cpuhotplug
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/containerd/log"
+
+	"github.com/aledbf/beacon/containerd/vm/qemu"
+)
+
+// Controller manages dynamic vCPU allocation for a VM based on CPU usage
+type Controller struct {
+	containerID string
+	qmpClient   *qemu.QMPClient
+
+	// Resource limits
+	bootCPUs int // Minimum vCPUs (never go below this)
+	maxCPUs  int // Maximum vCPUs (ceiling)
+
+	// Current state
+	currentCPUs int // Current online vCPUs
+
+	// Configuration
+	config Config
+
+	// Hysteresis tracking
+	lastScaleUp   time.Time
+	lastScaleDown time.Time
+	consecutiveHighUsage int  // Track sustained high usage
+	consecutiveLowUsage  int  // Track sustained low usage
+
+	// State management
+	mu        sync.Mutex
+	stopCh    chan struct{}
+	stoppedCh chan struct{}
+}
+
+// Config holds configuration for the CPU hotplug controller
+type Config struct {
+	// Monitoring interval
+	MonitorInterval time.Duration
+
+	// Cooldown periods
+	ScaleUpCooldown   time.Duration
+	ScaleDownCooldown time.Duration
+
+	// Thresholds (0-100 percentage)
+	ScaleUpThreshold   float64
+	ScaleDownThreshold float64
+
+	// Stability requirements (number of consecutive readings)
+	ScaleUpStability   int // Need N consecutive high readings before scaling up
+	ScaleDownStability int // Need N consecutive low readings before scaling down
+
+	// Enable/disable features
+	EnableScaleDown bool // Allow removing CPUs (may fail on some kernels)
+}
+
+// DefaultConfig returns sensible defaults for CPU hotplug
+func DefaultConfig() Config {
+	return Config{
+		MonitorInterval:    5 * time.Second,
+		ScaleUpCooldown:    10 * time.Second,
+		ScaleDownCooldown:  30 * time.Second,
+		ScaleUpThreshold:   80.0,
+		ScaleDownThreshold: 30.0,
+		ScaleUpStability:   2,  // Need 2 consecutive high readings (10s total)
+		ScaleDownStability: 6,  // Need 6 consecutive low readings (30s total)
+		EnableScaleDown:    false, // Disabled by default (many kernels don't support CPU unplug)
+	}
+}
+
+// NewController creates a new CPU hotplug controller
+func NewController(containerID string, qmpClient *qemu.QMPClient, bootCPUs, maxCPUs int, config Config) *Controller {
+	return &Controller{
+		containerID: containerID,
+		qmpClient:   qmpClient,
+		bootCPUs:    bootCPUs,
+		maxCPUs:     maxCPUs,
+		currentCPUs: bootCPUs, // Start with boot CPUs
+		config:      config,
+	}
+}
+
+// Start begins the monitoring loop
+func (c *Controller) Start(ctx context.Context) {
+	c.mu.Lock()
+	if c.stopCh != nil {
+		c.mu.Unlock()
+		return // Already started
+	}
+	c.stopCh = make(chan struct{})
+	c.stoppedCh = make(chan struct{})
+	c.mu.Unlock()
+
+	log.G(ctx).WithFields(log.Fields{
+		"container_id":      c.containerID,
+		"boot_cpus":         c.bootCPUs,
+		"max_cpus":          c.maxCPUs,
+		"monitor_interval":  c.config.MonitorInterval,
+		"scale_up_threshold": c.config.ScaleUpThreshold,
+	}).Info("cpu-hotplug: controller started")
+
+	go c.monitorLoop(ctx)
+}
+
+// Stop gracefully stops the controller
+func (c *Controller) Stop() {
+	c.mu.Lock()
+	if c.stopCh == nil {
+		c.mu.Unlock()
+		return // Not started
+	}
+	close(c.stopCh)
+	c.mu.Unlock()
+
+	// Wait for monitor loop to finish
+	<-c.stoppedCh
+}
+
+// monitorLoop runs the periodic CPU usage check
+func (c *Controller) monitorLoop(ctx context.Context) {
+	defer close(c.stoppedCh)
+
+	ticker := time.NewTicker(c.config.MonitorInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.stopCh:
+			log.G(ctx).WithField("container_id", c.containerID).Info("cpu-hotplug: controller stopped")
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := c.checkAndAdjust(ctx); err != nil {
+				log.G(ctx).WithError(err).WithField("container_id", c.containerID).
+					Warn("cpu-hotplug: failed to check/adjust vCPUs")
+			}
+		}
+	}
+}
+
+// checkAndAdjust queries CPU count and decides if adjustment is needed
+func (c *Controller) checkAndAdjust(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Query current vCPU count from QEMU
+	cpus, err := c.qmpClient.QueryCPUs(ctx)
+	if err != nil {
+		return fmt.Errorf("query vCPUs: %w", err)
+	}
+
+	actualCPUs := len(cpus)
+	if actualCPUs != c.currentCPUs {
+		log.G(ctx).WithFields(log.Fields{
+			"container_id": c.containerID,
+			"expected":     c.currentCPUs,
+			"actual":       actualCPUs,
+		}).Info("cpu-hotplug: CPU count mismatch, updating")
+		c.currentCPUs = actualCPUs
+	}
+
+	// For now, use a simple heuristic based on CPU count vs max
+	// In the full implementation, this would read cgroup stats via TTRPC
+	// and calculate actual CPU usage percentage
+
+	targetCPUs := c.calculateTargetCPUs(ctx)
+
+	// Check if we should adjust
+	if targetCPUs > c.currentCPUs {
+		// Scale up
+		if !c.canScaleUp() {
+			log.G(ctx).WithFields(log.Fields{
+				"container_id": c.containerID,
+				"cooldown":     time.Since(c.lastScaleUp),
+				"required":     c.config.ScaleUpCooldown,
+			}).Debug("cpu-hotplug: scale-up cooldown active")
+			return nil
+		}
+
+		c.consecutiveHighUsage++
+		c.consecutiveLowUsage = 0
+
+		if c.consecutiveHighUsage < c.config.ScaleUpStability {
+			log.G(ctx).WithFields(log.Fields{
+				"container_id":   c.containerID,
+				"consecutive":    c.consecutiveHighUsage,
+				"required":       c.config.ScaleUpStability,
+			}).Debug("cpu-hotplug: waiting for stable high usage")
+			return nil
+		}
+
+		return c.scaleUp(ctx, targetCPUs)
+	} else if targetCPUs < c.currentCPUs && c.config.EnableScaleDown {
+		// Scale down
+		if !c.canScaleDown() {
+			log.G(ctx).WithFields(log.Fields{
+				"container_id": c.containerID,
+				"cooldown":     time.Since(c.lastScaleDown),
+				"required":     c.config.ScaleDownCooldown,
+			}).Debug("cpu-hotplug: scale-down cooldown active")
+			return nil
+		}
+
+		c.consecutiveLowUsage++
+		c.consecutiveHighUsage = 0
+
+		if c.consecutiveLowUsage < c.config.ScaleDownStability {
+			log.G(ctx).WithFields(log.Fields{
+				"container_id": c.containerID,
+				"consecutive":  c.consecutiveLowUsage,
+				"required":     c.config.ScaleDownStability,
+			}).Debug("cpu-hotplug: waiting for stable low usage")
+			return nil
+		}
+
+		return c.scaleDown(ctx, targetCPUs)
+	}
+
+	// No change needed, reset counters
+	c.consecutiveHighUsage = 0
+	c.consecutiveLowUsage = 0
+
+	return nil
+}
+
+// calculateTargetCPUs determines ideal vCPU count
+// Strategy: Scale towards maxCPUs gradually to enable workload
+// Future enhancement: Read actual CPU usage from cgroup stats via TTRPC
+func (c *Controller) calculateTargetCPUs(ctx context.Context) int {
+	// Current strategy (Phase 1): Gradual scale-up to maxCPUs
+	// This ensures containers can utilize all available CPUs
+	//
+	// Phase 2 enhancement would:
+	// 1. Call vminitd's Stats() RPC to get cgroup CPU stats
+	// 2. Calculate CPU usage percentage (usage_usec / quota)
+	// 3. Scale based on thresholds:
+	//    - If usage > 80%: add CPUs
+	//    - If usage < 30%: remove CPUs (if scale-down enabled)
+	//
+	// For now, conservatively scale up one CPU at a time
+
+	if c.currentCPUs < c.maxCPUs {
+		return c.currentCPUs + 1
+	}
+
+	return c.currentCPUs
+}
+
+// canScaleUp checks if scale-up cooldown has elapsed
+func (c *Controller) canScaleUp() bool {
+	if c.lastScaleUp.IsZero() {
+		return true
+	}
+	return time.Since(c.lastScaleUp) >= c.config.ScaleUpCooldown
+}
+
+// canScaleDown checks if scale-down cooldown has elapsed
+func (c *Controller) canScaleDown() bool {
+	if c.lastScaleDown.IsZero() {
+		return true
+	}
+	return time.Since(c.lastScaleDown) >= c.config.ScaleDownCooldown
+}
+
+// scaleUp adds vCPUs to reach target
+func (c *Controller) scaleUp(ctx context.Context, targetCPUs int) error {
+	log.G(ctx).WithFields(log.Fields{
+		"container_id": c.containerID,
+		"current":      c.currentCPUs,
+		"target":       targetCPUs,
+	}).Info("cpu-hotplug: scaling up vCPUs")
+
+	// Add CPUs one at a time to target
+	for i := c.currentCPUs; i < targetCPUs; i++ {
+		if err := c.qmpClient.HotplugCPU(ctx, i); err != nil {
+			log.G(ctx).WithError(err).WithFields(log.Fields{
+				"container_id": c.containerID,
+				"cpu_id":       i,
+			}).Error("cpu-hotplug: failed to add vCPU")
+			return fmt.Errorf("hotplug CPU %d: %w", i, err)
+		}
+
+		log.G(ctx).WithFields(log.Fields{
+			"container_id": c.containerID,
+			"cpu_id":       i,
+		}).Info("cpu-hotplug: added vCPU")
+	}
+
+	c.currentCPUs = targetCPUs
+	c.lastScaleUp = time.Now()
+	c.consecutiveHighUsage = 0
+
+	return nil
+}
+
+// scaleDown removes vCPUs to reach target
+func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) error {
+	log.G(ctx).WithFields(log.Fields{
+		"container_id": c.containerID,
+		"current":      c.currentCPUs,
+		"target":       targetCPUs,
+	}).Info("cpu-hotplug: scaling down vCPUs")
+
+	// Remove CPUs in reverse order (highest ID first)
+	// Never remove CPU0 (boot processor - not supported by most kernels)
+	for i := c.currentCPUs - 1; i >= targetCPUs && i > 0; i-- {
+		if err := c.qmpClient.UnplugCPU(ctx, i); err != nil {
+			log.G(ctx).WithError(err).WithFields(log.Fields{
+				"container_id": c.containerID,
+				"cpu_id":       i,
+			}).Warn("cpu-hotplug: failed to remove vCPU (may not be supported by guest kernel)")
+			// Don't fail the entire operation - CPU hot-unplug is best-effort
+			break
+		}
+
+		log.G(ctx).WithFields(log.Fields{
+			"container_id": c.containerID,
+			"cpu_id":       i,
+		}).Info("cpu-hotplug: removed vCPU")
+	}
+
+	c.currentCPUs = targetCPUs
+	c.lastScaleDown = time.Now()
+	c.consecutiveLowUsage = 0
+
+	return nil
+}

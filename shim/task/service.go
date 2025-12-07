@@ -40,9 +40,11 @@ import (
 	"github.com/aledbf/beacon/containerd/store"
 	"github.com/aledbf/beacon/containerd/vm"
 
+	"github.com/aledbf/beacon/containerd/shim/cpuhotplug"
+	"github.com/aledbf/beacon/containerd/vm/qemu"
+
 	// Import VMM implementations to register factories
 	_ "github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
-	_ "github.com/aledbf/beacon/containerd/vm/qemu"
 )
 
 const (
@@ -97,6 +99,9 @@ type service struct {
 
 	// networkManager handles network resource allocation and cleanup
 	networkManager network.NetworkManagerInterface
+
+	// cpuHotplugController manages dynamic vCPU allocation (QEMU only)
+	cpuHotplugController *cpuhotplug.Controller
 
 	context context.Context
 	events  chan any
@@ -521,6 +526,9 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	s.containers[r.ID] = c
 	s.mu.Unlock()
 
+	// Start CPU hotplug controller if conditions are met
+	s.startCPUHotplugController(ctx, r.ID, vmi, resourceCfg)
+
 	return &taskAPI.CreateTaskResponse{
 		Pid: resp.Pid,
 	}, nil
@@ -579,6 +587,9 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 				if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
 					log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
 				}
+
+				// Stop CPU hotplug controller if running
+				s.stopCPUHotplugController(ctx)
 
 				delete(s.containers, r.ID)
 			}
@@ -931,4 +942,96 @@ func getHostMemoryTotal() (int64, error) {
 	}
 
 	return 0, fmt.Errorf("MemTotal not found in /proc/meminfo")
+}
+
+// startCPUHotplugController starts the CPU hotplug controller for QEMU VMs
+// It only starts if:
+// - VM is a QEMU instance
+// - MaxCPUs > BootCPUs (hotplug is possible)
+// - CPU hotplug is enabled (via environment variable)
+func (s *service) startCPUHotplugController(ctx context.Context, containerID string, vmi vm.Instance, resourceCfg *vm.VMResourceConfig) {
+	// Check if CPU hotplug is enabled via environment variable
+	if os.Getenv("BEACON_CPU_HOTPLUG_ENABLED") != "true" {
+		log.G(ctx).Debug("cpu-hotplug: disabled (set BEACON_CPU_HOTPLUG_ENABLED=true to enable)")
+		return
+	}
+
+	// Only enable for VMs that support hotplug (MaxCPUs > BootCPUs)
+	if resourceCfg.MaxCPUs <= resourceCfg.BootCPUs {
+		log.G(ctx).WithFields(log.Fields{
+			"boot_cpus": resourceCfg.BootCPUs,
+			"max_cpus":  resourceCfg.MaxCPUs,
+		}).Debug("cpu-hotplug: not enabled (MaxCPUs == BootCPUs, no room for scaling)")
+		return
+	}
+
+	// Type assert to check if this is a QEMU instance (only QEMU supports CPU hotplug currently)
+	type qemuInstance interface {
+		QMPClient() interface{}
+	}
+
+	qemuVM, ok := vmi.(qemuInstance)
+	if !ok {
+		log.G(ctx).Debug("cpu-hotplug: not supported (VM type does not support QMP)")
+		return
+	}
+
+	// Get QMP client - type assert to *qemu.QMPClient directly
+	qmpClientInterface := qemuVM.QMPClient()
+	if qmpClientInterface == nil {
+		log.G(ctx).Warn("cpu-hotplug: QMP client not available")
+		return
+	}
+
+	qmpClient, ok := qmpClientInterface.(*qemu.QMPClient)
+	if !ok {
+		log.G(ctx).Warn("cpu-hotplug: QMP client type assertion failed")
+		return
+	}
+
+	// Create controller configuration from environment variables
+	config := cpuhotplug.DefaultConfig()
+
+	// Allow environment variable overrides
+	if interval := os.Getenv("BEACON_CPU_HOTPLUG_INTERVAL"); interval != "" {
+		if d, err := time.ParseDuration(interval); err == nil {
+			config.MonitorInterval = d
+		}
+	}
+
+	// Create and start the controller
+	controller := cpuhotplug.NewController(
+		containerID,
+		qmpClient,
+		resourceCfg.BootCPUs,
+		resourceCfg.MaxCPUs,
+		config,
+	)
+
+	// Store controller in service
+	s.mu.Lock()
+	s.cpuHotplugController = controller
+	s.mu.Unlock()
+
+	// Start monitoring loop
+	controller.Start(ctx)
+
+	log.G(ctx).WithFields(log.Fields{
+		"container_id": containerID,
+		"boot_cpus":    resourceCfg.BootCPUs,
+		"max_cpus":     resourceCfg.MaxCPUs,
+	}).Info("cpu-hotplug: controller started")
+}
+
+// stopCPUHotplugController stops the CPU hotplug controller if running
+func (s *service) stopCPUHotplugController(ctx context.Context) {
+	s.mu.Lock()
+	controller := s.cpuHotplugController
+	s.cpuHotplugController = nil
+	s.mu.Unlock()
+
+	if controller != nil {
+		controller.Stop()
+		log.G(ctx).Info("cpu-hotplug: controller stopped")
+	}
 }
