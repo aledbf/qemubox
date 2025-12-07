@@ -327,19 +327,55 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	memoryRequest = alignMemory(memoryRequest, virtioMemAlignment)
 	hostMemory = alignMemory(hostMemory, virtioMemAlignment)
 
+	// Calculate smart resource limits for better overcommit:
+	// - If container has explicit CPU limit, use that for MaxCPUs (capped at host)
+	// - If no limit, allow access to all host CPUs for maximum flexibility
+	// - If container has explicit memory limit, use 2x for hotplug headroom (capped at host)
+	// - If no limit, allow access to all host memory for maximum flexibility
+	maxCPUs := hostCPUs
+	memoryHotplugSize := hostMemory
+
+	// Check if explicit limits were set (vs defaults)
+	hasExplicitCPULimit := b.Spec.Linux != nil &&
+		b.Spec.Linux.Resources != nil &&
+		b.Spec.Linux.Resources.CPU != nil &&
+		(b.Spec.Linux.Resources.CPU.Quota != nil || b.Spec.Linux.Resources.CPU.Cpus != "")
+
+	hasExplicitMemoryLimit := b.Spec.Linux != nil &&
+		b.Spec.Linux.Resources != nil &&
+		b.Spec.Linux.Resources.Memory != nil &&
+		b.Spec.Linux.Resources.Memory.Limit != nil
+
+	if hasExplicitCPULimit {
+		// Container has explicit CPU limit - cap MaxCPUs to the request
+		// This prevents wasting CPU scheduling slots on containers that don't need them
+		maxCPUs = min(cpuRequest, hostCPUs)
+	}
+
+	if hasExplicitMemoryLimit {
+		// Container has explicit memory limit - set hotplug to 2x for headroom
+		// This allows some burst capacity while preventing unlimited growth
+		memoryHotplugSize = min(memoryRequest*2, hostMemory)
+		memoryHotplugSize = alignMemory(memoryHotplugSize, virtioMemAlignment)
+	}
+
 	// Build VM resource configuration
 	resourceCfg := &vm.VMResourceConfig{
 		BootCPUs:          cpuRequest,
-		MaxCPUs:           hostCPUs,
+		MaxCPUs:           maxCPUs,
 		MemorySize:        memoryRequest,
-		MemoryHotplugSize: hostMemory,
+		MemoryHotplugSize: memoryHotplugSize,
 	}
 
 	log.G(ctx).WithFields(log.Fields{
-		"boot_cpus":           resourceCfg.BootCPUs,
-		"max_cpus":            resourceCfg.MaxCPUs,
-		"memory_size":         resourceCfg.MemorySize,
-		"memory_hotplug_size": resourceCfg.MemoryHotplugSize,
+		"boot_cpus":              resourceCfg.BootCPUs,
+		"max_cpus":               resourceCfg.MaxCPUs,
+		"memory_size":            resourceCfg.MemorySize,
+		"memory_hotplug_size":    resourceCfg.MemoryHotplugSize,
+		"has_explicit_cpu_limit": hasExplicitCPULimit,
+		"has_explicit_mem_limit": hasExplicitMemoryLimit,
+		"host_cpus":              hostCPUs,
+		"host_memory":            hostMemory,
 	}).Info("VM resource configuration")
 
 	vmState := filepath.Join(r.Bundle, "vm")
@@ -803,7 +839,7 @@ func (s *service) forward(ctx context.Context, publisher shim.Publisher) {
 // Returns the number of vCPUs requested, defaulting to 1 if not specified
 func extractCPURequest(spec *specs.Spec) int {
 	if spec == nil || spec.Linux == nil || spec.Linux.Resources == nil || spec.Linux.Resources.CPU == nil {
-		return 2 // Default to 2 vCPUs
+		return 1 // Default to 1 vCPU (improved from 2 for better overcommit)
 	}
 
 	cpu := spec.Linux.Resources.CPU
@@ -815,6 +851,9 @@ func extractCPURequest(spec *specs.Spec) int {
 		if cpus > 0 {
 			return cpus
 		}
+		// If quota is set but results in <1 CPU, give it 1 vCPU
+		// (fractional CPU will be enforced by cgroups within the VM)
+		return 1
 	}
 
 	// Fallback: check CPU.Cpus (cpuset format like "0-3" or "0,1,2,3")
@@ -831,7 +870,7 @@ func extractCPURequest(spec *specs.Spec) int {
 // extractMemoryRequest extracts the memory request from the OCI spec
 // Returns the memory limit in bytes, defaulting to 512MB if not specified
 func extractMemoryRequest(spec *specs.Spec) int64 {
-	const defaultMemory = 2 * 1024 * 1024 * 1024 // 512MB default
+	const defaultMemory = 512 * 1024 * 1024 // 512MB default (was incorrectly commented as 512MB but set to 2GB)
 
 	if spec == nil || spec.Linux == nil || spec.Linux.Resources == nil || spec.Linux.Resources.Memory == nil {
 		return defaultMemory
