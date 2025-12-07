@@ -215,6 +215,111 @@ func (q *QMPClient) DeviceAdd(ctx context.Context, driver string, args map[strin
 	return q.execute(ctx, "device_add", args)
 }
 
+// DeviceDelete removes a device
+func (q *QMPClient) DeviceDelete(ctx context.Context, deviceID string) error {
+	return q.execute(ctx, "device_del", map[string]interface{}{
+		"id": deviceID,
+	})
+}
+
+// CPUInfo represents information about a single vCPU
+type CPUInfo struct {
+	CPUIndex int    `json:"cpu-index"`
+	QOMPath  string `json:"qom-path"`
+	Thread   int    `json:"thread-id"`
+	Target   string `json:"target"`
+}
+
+// QueryCPUs returns information about all vCPUs in the VM
+// Uses query-cpus-fast which is more efficient than query-cpus
+func (q *QMPClient) QueryCPUs(ctx context.Context) ([]CPUInfo, error) {
+	if q.closed.Load() {
+		return nil, fmt.Errorf("QMP client closed")
+	}
+
+	id := q.nextID.Add(1)
+	respChan := make(chan *qmpResponse, 1)
+
+	q.mu.Lock()
+	q.pending[id] = respChan
+	q.mu.Unlock()
+
+	cmd := qmpCommand{
+		Execute: "query-cpus-fast",
+		ID:      id,
+	}
+
+	if err := q.encoder.Encode(cmd); err != nil {
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, fmt.Errorf("failed to send query-cpus-fast: %w", err)
+	}
+
+	// Wait for response with timeout
+	select {
+	case resp := <-respChan:
+		if resp.Error != nil {
+			return nil, fmt.Errorf("QMP error for query-cpus-fast: %s: %s", resp.Error.Class, resp.Error.Desc)
+		}
+
+		// Parse the return value as array of CPUInfo
+		var cpus []CPUInfo
+		returnBytes, err := json.Marshal(resp.Return)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal CPU info: %w", err)
+		}
+
+		if err := json.Unmarshal(returnBytes, &cpus); err != nil {
+			return nil, fmt.Errorf("failed to parse CPU info: %w", err)
+		}
+
+		return cpus, nil
+
+	case <-ctx.Done():
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, ctx.Err()
+
+	case <-time.After(5 * time.Second):
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, fmt.Errorf("timeout waiting for query-cpus-fast response")
+	}
+}
+
+// HotplugCPU adds a new vCPU to the running VM
+// cpuID should be the next available CPU index (e.g., if you have CPUs 0-1, use cpuID=2)
+func (q *QMPClient) HotplugCPU(ctx context.Context, cpuID int) error {
+	args := map[string]interface{}{
+		"driver": "host-x86_64-cpu",
+		"id":     fmt.Sprintf("cpu%d", cpuID),
+	}
+
+	log.G(ctx).WithFields(log.Fields{
+		"cpu_id": cpuID,
+		"driver": "host-x86_64-cpu",
+	}).Debug("qemu: hotplugging vCPU")
+
+	return q.DeviceAdd(ctx, "host-x86_64-cpu", args)
+}
+
+// UnplugCPU removes a vCPU from the running VM
+// Note: CPU hot-unplug requires guest kernel support (CONFIG_HOTPLUG_CPU=y)
+// and the CPU must be offline in the guest before removal
+func (q *QMPClient) UnplugCPU(ctx context.Context, cpuID int) error {
+	deviceID := fmt.Sprintf("cpu%d", cpuID)
+
+	log.G(ctx).WithFields(log.Fields{
+		"cpu_id":    cpuID,
+		"device_id": deviceID,
+	}).Debug("qemu: unplugging vCPU")
+
+	return q.DeviceDelete(ctx, deviceID)
+}
+
 // Close closes the QMP connection
 func (q *QMPClient) Close() error {
 	if !q.closed.CompareAndSwap(false, true) {

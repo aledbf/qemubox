@@ -401,6 +401,18 @@ func (q *Instance) Client() *ttrpc.Client {
 	return q.client
 }
 
+// QMPClient returns the QMP client for controlling the VM
+func (q *Instance) QMPClient() *QMPClient {
+	// Return nil if VM is shutdown
+	if vmState(q.vmState.Load()) == vmStateShutdown {
+		return nil
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.qmpClient
+}
+
 // Shutdown gracefully shuts down the VM
 func (q *Instance) Shutdown(ctx context.Context) error {
 	// Update state
