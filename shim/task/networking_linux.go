@@ -62,7 +62,7 @@ func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vm
 		"guest_mac": guestMAC.String(),
 	}).Debug("generated unique guest MAC address")
 
-	// Attach TAP to VM (Cloud Hypervisor opens by name)
+	// Attach TAP to VM (QEMU opens by name)
 	if err := vmi.AddTAPNIC(ctx, env.NetworkInfo.TapName, guestMAC); err != nil {
 		nm.ReleaseNetworkResources(env)
 		return nil, fmt.Errorf("add TAP NIC to VM: %w", err)

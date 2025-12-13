@@ -4,12 +4,12 @@ This package defines the interfaces and implementations for Virtual Machine Moni
 
 ## Overview
 
-The `vm` package provides a generic interface for managing VMs, allowing the shim to support different VMM backends (though currently focused on Cloud Hypervisor).
+The `vm` package provides a generic interface for managing VMs using QEMU as the VMM backend.
 
 ## Structure
 
 - **`vm.go`**: Defines the `Instance` interface and common types like `StartOpts` and `NetworkConfig`.
-- **`cloudhypervisor/`**: Implementation of the `Instance` interface for Cloud Hypervisor.
+- **`qemu/`**: Implementation of the `Instance` interface for QEMU.
 
 ## Usage
 

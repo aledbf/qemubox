@@ -44,7 +44,7 @@ import (
 	"github.com/aledbf/beacon/containerd/vm/qemu"
 
 	// Import VMM implementations to register factories
-	_ "github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
+	_ "github.com/aledbf/beacon/containerd/vm/qemu"
 )
 
 const (
@@ -282,7 +282,7 @@ func disableNetworkNamespace(ctx context.Context, b *bundle.Bundle) error {
 // 1. Verifying KVM availability.
 // 2. Loading and transforming the OCI bundle (e.g., removing network namespace).
 // 3. Configuring VM resources (CPU, memory) based on the OCI spec.
-// 4. Creating and booting the Cloud Hypervisor VM.
+// 4. Creating and booting the QEMU VM.
 // 5. Setting up networking (IP allocation, TAP device).
 // 6. Connecting to the VM via vsock and creating the container task inside.
 func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, err error) {
@@ -301,7 +301,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 
 	presetup := time.Now()
 
-	// Cloud Hypervisor requires KVM - check if available
+	// QEMU requires KVM - check if available
 	if err := checkKVM(); err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}

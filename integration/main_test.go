@@ -8,7 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
+	"github.com/aledbf/beacon/containerd/vm"
+	"github.com/aledbf/beacon/containerd/vm/qemu"
 )
 
 func TestMain(m *testing.M) {
@@ -27,21 +28,21 @@ func TestMain(m *testing.M) {
 	os.Exit(r)
 }
 
-func runWithVM(t *testing.T, runTest func(*testing.T, *cloudhypervisor.Instance)) {
+func runWithVM(t *testing.T, runTest func(*testing.T, vm.Instance)) {
 	t.Helper()
 
-	vm, err := cloudhypervisor.NewInstance(t.Context(), t.Name(), t.TempDir(), nil)
+	instance, err := qemu.NewInstance(t.Context(), t.Name(), t.TempDir(), nil)
 	if err != nil {
 		t.Fatal("Failed to create VM instance:", err)
 	}
 
-	if err := vm.Start(t.Context()); err != nil {
+	if err := instance.Start(t.Context()); err != nil {
 		t.Fatal("Failed to start VM instance:", err)
 	}
 
 	t.Cleanup(func() {
-		vm.Shutdown(t.Context())
+		instance.Shutdown(t.Context())
 	})
 
-	runTest(t, vm)
+	runTest(t, instance)
 }

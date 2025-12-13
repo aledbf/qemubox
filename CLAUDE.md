@@ -1,6 +1,6 @@
 # Containerd Runtime - beaconbox Shim
 
-**Technology**: Go 1.25+, containerd shim API, Cloud Hypervisor/QEMU, KVM
+**Technology**: Go 1.25+, containerd shim API, QEMU, KVM
 **Entry Points**:
 - `containerd/cmd/containerd-shim-beaconbox-v1/main.go` (shim)
 - `containerd/cmd/vminitd/main.go` (VM init daemon)
@@ -15,7 +15,7 @@
 ```
 Host (containerd)
 └─> containerd-shim-beaconbox-v1
-    ├─> Cloud Hypervisor / QEMU (VMM)
+    ├─> QEMU (VMM)
     │   └─> Linux VM
     │       └─> vminitd (PID 1)
     │           └─> crun (OCI runtime)
@@ -28,7 +28,7 @@ Host (containerd)
 
 ### Fixed Installation Paths
 ```
-/usr/share/beacon/bin/cloud-hypervisor    # VMM binary
+/usr/share/beacon/bin/qemu-system-x86_64  # VMM binary
 /usr/share/beacon/kernel/beacon-kernel-x86_64  # VM kernel
 /usr/share/beacon/kernel/beacon-initrd    # Initial ramdisk
 /var/lib/beacon/network.db                # IP allocation state
@@ -46,7 +46,7 @@ Override with environment variables:
 
 ### `shim/` - Runtime Shim
 - Implements containerd Shim API
-- Manages VM lifecycle via Cloud Hypervisor/QEMU
+- Manages VM lifecycle via QEMU
 - Proxies I/O between containerd and VM (vsock)
 - **Key file**: `shim/task/service.go:CreateTask()` - Container creation entry point
 
@@ -57,13 +57,8 @@ Override with environment variables:
 - **Key file**: `vminit/task/service.go:Create()` - OCI bundle creation
 
 ### `vm/` - VMM Integration
-- **`vm/cloudhypervisor/instance.go`** - Cloud Hypervisor VM management
-- **`vm/qemu/instance.go`** - QEMU VM management (alternative)
-- **HARDCODED RESOURCES** at `vm/cloudhypervisor/instance.go`:
-  ```go
-  BootVcpus: 2, MaxVcpus: 2  // Fixed 2 vCPUs
-  Size: 4 * 1024 * 1024 * 1024  // Fixed 4GB memory
-  ```
+- **`vm/qemu/instance.go`** - QEMU VM management
+- **VM RESOURCES**: Configurable CPU and memory via `vm.VMResourceConfig`
 
 ### `network/` - Network Management
 - Creates `beacon0` bridge (10.88.0.0/16)
@@ -110,7 +105,7 @@ task build:initrd
 # Build VM kernel (requires Docker)
 task build:kernel
 
-# Build for QEMU instead of Cloud Hypervisor
+# Build QEMU binaries and firmware
 task build:qemu
 ```
 
@@ -155,8 +150,8 @@ tail -f /var/log/beacon/vm-*.log
 # Check vsock connections
 ss -x | grep vsock
 
-# Check Cloud Hypervisor process
-ps aux | grep cloud-hypervisor
+# Check QEMU process
+ps aux | grep qemu-system-x86_64
 ```
 
 ---
@@ -173,7 +168,7 @@ ps aux | grep cloud-hypervisor
 ✅ **ALWAYS**:
 - Test with real VMs (not just unit tests)
 - Verify KVM access before running integration tests
-- Check Cloud Hypervisor/QEMU compatibility
+- Check QEMU compatibility
 - Validate network allocation/deallocation
 - Use transactions for network state changes
 
@@ -183,10 +178,9 @@ ps aux | grep cloud-hypervisor
 
 1. `shim/task/service.go` - Shim service implementation
 2. `vminit/task/service.go` - VM init service
-3. `vm/cloudhypervisor/instance.go` - Cloud Hypervisor integration
-4. `vm/qemu/instance.go` - QEMU integration
-5. `network/network.go` - Network management
-6. `integration/vm_test.go` - Integration test examples
+3. `vm/qemu/instance.go` - QEMU integration
+4. `network/network.go` - Network management
+5. `integration/vm_test.go` - Integration test examples
 
 Read `containerd/README.md` for comprehensive architecture documentation.
 
@@ -214,13 +208,18 @@ If you don't have KVM access (e.g., macOS development):
 
 ## Common Issues
 
-### "cloud-hypervisor binary not found"
+### "qemu-system-x86_64 binary not found"
 ```bash
-# Download Cloud Hypervisor
-wget https://github.com/cloud-hypervisor/cloud-hypervisor/releases/latest/download/cloud-hypervisor
-chmod +x cloud-hypervisor
+# Build QEMU from source or use package manager
+# Option 1: Build via task
+task build:qemu
+
+# Option 2: Use system package manager
+sudo apt-get install qemu-system-x86
+
+# Option 3: Install to beacon directory
 sudo mkdir -p /usr/share/beacon/bin
-sudo mv cloud-hypervisor /usr/share/beacon/bin/
+sudo cp /usr/bin/qemu-system-x86_64 /usr/share/beacon/bin/
 ```
 
 ### "Permission denied on /dev/kvm"
@@ -252,7 +251,7 @@ ls -la /var/lib/beacon/network.db
 
 1. **containerd calls shim**: `shim/task/service.go:CreateTask()`
 2. **Shim allocates network**: `network/network.go:AllocateIP()`
-3. **Shim creates VM**: `vm/cloudhypervisor/instance.go:Start()`
+3. **Shim creates VM**: `vm/qemu/instance.go:Start()`
 4. **VM boots Linux kernel**: Kernel loads with network config
 5. **vminitd starts**: `vminit/task/service.go:main()` (PID 1)
 6. **vminitd connects to shim**: TTRPC over vsock
@@ -268,7 +267,7 @@ ls -la /var/lib/beacon/network.db
 4. **Create TAP device**: `beacon-<hash>`
 5. **Attach TAP to bridge**: Link TAP to beacon0
 6. **Configure nftables**: NAT and forwarding rules
-7. **Pass to Cloud Hypervisor**: TAP device and IP as kernel params
+7. **Pass to QEMU**: TAP device and IP as kernel params
 
 ### VM Lifecycle
 
@@ -283,25 +282,22 @@ Create → Start → (Running) → Stop → Delete
 
 ## Resource Management
 
-### VM Resources (Hardcoded)
+### VM Resources (Configurable)
 
-From `vm/cloudhypervisor/instance.go`:
+VM resources are now configurable via `vm.VMResourceConfig`:
 ```go
-// FIXED resources per VM
-cpus := &CpusConfig{
-    BootVcpus: 2,
-    MaxVcpus:  2,
-}
-
-memory := &MemoryConfig{
-    Size: 4 * 1024 * 1024 * 1024, // 4GB
+type VMResourceConfig struct {
+    BootCPUs          int   // Initial vCPUs (default: 1)
+    MaxCPUs           int   // Max vCPUs for hotplug (default: 2)
+    MemorySize        int64 // Initial memory in bytes (default: 512 MiB)
+    MemoryHotplugSize int64 // Max memory for hotplug in bytes (default: 2 GiB)
 }
 ```
 
-**Implications**:
-- Every container gets a full 4GB VM (regardless of container limits)
-- CPU is shared but each VM gets 2 vCPUs
-- crun enforces container-specific limits within the VM
+**Features**:
+- Dynamic CPU hotplug support via QEMU QMP
+- Configurable memory limits
+- Container-specific resource allocation
 
 ### Container Resource Limits (cgroups v2)
 
@@ -309,7 +305,7 @@ From `vminit/task/service.go`:
 ```go
 // crun applies OCI spec resource limits via cgroups v2
 // Example: Container requests 512MB memory
-//   → crun creates cgroup with 512MB limit within 4GB VM
+//   → crun creates cgroup with 512MB limit within VM
 ```
 
 ---
@@ -343,7 +339,7 @@ nft list ruleset | grep beacon_runner
 ### Connection Setup
 
 1. **Shim listens on vsock**: CID=2 (host), port assigned by kernel
-2. **VM boots with vsock device**: Cloud Hypervisor configures virtio-vsock
+2. **VM boots with vsock device**: QEMU configures virtio-vsock
 3. **vminitd connects**: CID=3 (guest) → CID=2 (host)
 4. **TTRPC handshake**: Task service registration
 5. **Bi-directional communication**: RPC calls + stdio streaming
@@ -354,8 +350,8 @@ nft list ruleset | grep beacon_runner
 # Check vsock connections (requires root)
 ss -x | grep vsock
 
-# Check Cloud Hypervisor vsock config
-ps aux | grep cloud-hypervisor | grep vsock
+# Check QEMU vsock config
+ps aux | grep qemu-system-x86_64 | grep vsock
 ```
 
 ---
@@ -412,8 +408,8 @@ If YES to any: **Get security review before merging**
 
 ## Additional Resources
 
-- **Architecture**: `containerd/README.md` (635 lines, comprehensive)
-- **Cloud Hypervisor docs**: https://github.com/cloud-hypervisor/cloud-hypervisor
+- **Architecture**: `containerd/README.md` (comprehensive)
+- **QEMU docs**: https://www.qemu.org/documentation/
 - **containerd shim API**: https://github.com/containerd/containerd/tree/main/runtime/v2
 - **cgroups v2**: https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html
 - **vsock**: https://wiki.qemu.org/Features/VirtioVsock

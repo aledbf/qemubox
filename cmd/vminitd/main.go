@@ -128,7 +128,7 @@ func main() {
 		}
 
 		// Trigger VM shutdown via reboot syscall
-		// This will cause Cloud Hypervisor to exit cleanly
+		// This will cause QEMU to exit cleanly
 		log.G(ctx).Info("powering off VM")
 		if err := unix.Reboot(unix.LINUX_REBOOT_CMD_POWER_OFF); err != nil {
 			log.G(ctx).WithError(err).Error("failed to power off VM")
@@ -161,7 +161,7 @@ func run(ctx context.Context, config ServiceConfig) error {
 	log.G(ctx).WithField("t", time.Since(t1)).Debug("initialized vminitd")
 
 	// Limit GOMAXPROCS to 2 for VM environment
-	// Cloud Hypervisor VMs typically have 2 vCPUs allocated
+	// QEMU VMs typically have configurable vCPUs allocated
 	// This prevents scheduler overhead and improves cache locality
 	runtime.GOMAXPROCS(2)
 

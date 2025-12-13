@@ -12,8 +12,7 @@ import (
 type VMType string
 
 const (
-	VMTypeCloudHypervisor VMType = "cloudhypervisor"
-	VMTypeQEMU            VMType = "qemu"
+	VMTypeQEMU VMType = "qemu"
 )
 
 // Factory creates VM instances for a specific VMM backend
@@ -22,19 +21,12 @@ type Factory interface {
 }
 
 // GetVMType determines which VMM to use.
-// Priority: BEACON_VMM env var > default (cloudhypervisor for backward compatibility)
+// Always returns QEMU as it is the only supported VMM backend.
 func GetVMType() VMType {
-	if vmm := os.Getenv("BEACON_VMM"); vmm != "" {
-		switch vmm {
-		case "qemu":
-			return VMTypeQEMU
-		case "cloudhypervisor", "cloud-hypervisor":
-			return VMTypeCloudHypervisor
-		default:
-			log.L.WithField("vmm", vmm).Warn("unknown BEACON_VMM value, defaulting to cloudhypervisor")
-		}
+	if vmm := os.Getenv("BEACON_VMM"); vmm != "" && vmm != "qemu" {
+		log.L.WithField("vmm", vmm).Warn("only QEMU is supported, ignoring BEACON_VMM value")
 	}
-	return VMTypeCloudHypervisor // Default for backward compatibility
+	return VMTypeQEMU
 }
 
 // NewFactory creates a factory for the specified VMM type.

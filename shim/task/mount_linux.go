@@ -81,21 +81,7 @@ func translateMountOptions(ctx context.Context, options []string) []string {
 }
 
 func setupMounts(ctx context.Context, vmi vm.Instance, id string, m []*types.Mount, rootfs, lmounts string) ([]*types.Mount, error) {
-	// Handle mounts
-
-	// Cloud Hypervisor doesn't support AddFS (virtiofs requires shared memory + virtiofsd)
-	// Skip filesystem mounts for Cloud Hypervisor - rely on EROFS snapshotter instead
-	vmInfo := vmi.VMInfo()
-	if vmInfo.Type == "cloudhypervisor" {
-		// For Cloud Hypervisor, only process mounts through transformMounts
-		// which handles EROFS and other disk-based mounts
-		if len(m) == 0 {
-			// No mounts specified, return empty - EROFS snapshotter provides rootfs
-			return nil, nil
-		}
-		// Let transformMounts handle all mounts for Cloud Hypervisor
-		return transformMounts(ctx, vmi, id, m)
-	}
+	// Handle mounts using virtiofs (supported by QEMU)
 
 	if len(m) == 1 && (m[0].Type == "overlay" || m[0].Type == "bind") {
 		tag := fmt.Sprintf("rootfs-%s", id)

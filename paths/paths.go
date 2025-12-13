@@ -55,11 +55,6 @@ func InitrdPath() string {
 	return filepath.Join(GetShareDir(), "kernel", "beacon-initrd")
 }
 
-// CloudHypervisorPath returns the full path to the cloud-hypervisor binary
-func CloudHypervisorPath() string {
-	return filepath.Join(GetShareDir(), "bin", "cloud-hypervisor")
-}
-
 // QemuPath returns the full path to the qemu-system-x86_64 binary
 func QemuPath() string {
 	// Check custom path first

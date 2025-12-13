@@ -1,5 +1,5 @@
 // Package vm defines shared types for VM implementations.
-// Concrete VM implementations are in subpackages (e.g., cloudhypervisor, qemu).
+// Concrete VM implementations are in subpackages (e.g., qemu).
 package vm
 
 import (
@@ -81,7 +81,7 @@ func WithVmdk() MountOpt {
 
 // VMInfo contains metadata about the VMM backend
 type VMInfo struct {
-	// Type identifies the VMM backend (e.g., "cloudhypervisor", "qemu")
+	// Type identifies the VMM backend (e.g., "qemu")
 	Type string
 
 	// SupportsTAP indicates whether the VMM supports TAP device networking
@@ -92,7 +92,7 @@ type VMInfo struct {
 }
 
 // Instance represents a VM instance that can run containers.
-// This interface abstracts the VMM backend (Cloud Hypervisor, QEMU, etc.)
+// This interface abstracts the VMM backend (QEMU)
 type Instance interface {
 	// Device configuration (called before Start)
 	AddDisk(ctx context.Context, blockID, mountPath string, opts ...MountOpt) error

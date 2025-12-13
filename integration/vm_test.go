@@ -9,11 +9,11 @@ import (
 	"github.com/containerd/errdefs"
 
 	systemapi "github.com/aledbf/beacon/containerd/api/services/system/v1"
-	"github.com/aledbf/beacon/containerd/vm/cloudhypervisor"
+	"github.com/aledbf/beacon/containerd/vm"
 )
 
 func TestSystemInfo(t *testing.T) {
-	runWithVM(t, func(t *testing.T, i *cloudhypervisor.Instance) {
+	runWithVM(t, func(t *testing.T, i vm.Instance) {
 		client := i.Client()
 
 		ss := systemapi.NewTTRPCSystemClient(client)
@@ -30,7 +30,7 @@ func TestSystemInfo(t *testing.T) {
 }
 
 func TestStreamInitialization(t *testing.T) {
-	runWithVM(t, func(t *testing.T, i *cloudhypervisor.Instance) {
+	runWithVM(t, func(t *testing.T, i vm.Instance) {
 		sid1, conn, err := i.StartStream(t.Context())
 		if err != nil {
 			if errors.Is(err, errdefs.ErrNotImplemented) {
