@@ -219,6 +219,11 @@ func systemInit(ctx context.Context, _ ServiceConfig) error {
 		return fmt.Errorf("failed to create /etc: %w", err)
 	}
 
+	// Configure DNS from kernel command line
+	if err := configureDNS(ctx); err != nil {
+		log.G(ctx).WithError(err).Warn("failed to configure DNS, continuing anyway")
+	}
+
 	return nil
 }
 
@@ -327,6 +332,60 @@ func systemMounts() error {
 
 func setupCgroupControl() error {
 	return os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+cpu +cpuset +io +memory +pids"), 0644)
+}
+
+// configureDNS parses DNS servers from kernel ip= parameter and writes /etc/resolv.conf
+// The kernel ip= parameter format is:
+// ip=<client-ip>:<server-ip>:<gw-ip>:<netmask>:<hostname>:<device>:<autoconf>:<dns0-ip>:<dns1-ip>
+func configureDNS(ctx context.Context) error {
+	// Read kernel command line
+	cmdlineBytes, err := os.ReadFile("/proc/cmdline")
+	if err != nil {
+		return fmt.Errorf("failed to read /proc/cmdline: %w", err)
+	}
+
+	cmdline := string(cmdlineBytes)
+	log.G(ctx).WithField("cmdline", cmdline).Debug("parsing kernel command line for DNS config")
+
+	// Parse ip= parameter
+	var nameservers []string
+	for _, param := range strings.Fields(cmdline) {
+		if strings.HasPrefix(param, "ip=") {
+			ipParam := strings.TrimPrefix(param, "ip=")
+			// Split by colons: client-ip:server-ip:gw-ip:netmask:hostname:device:autoconf:dns0-ip:dns1-ip
+			parts := strings.Split(ipParam, ":")
+
+			// DNS servers are at index 7 and 8 (0-indexed)
+			// Format: ip=<client-ip>:<server-ip>:<gw-ip>:<netmask>:<hostname>:<device>:<autoconf>:<dns0-ip>:<dns1-ip>
+			//         0           1           2      3         4          5        6           7         8
+			if len(parts) > 7 && parts[7] != "" {
+				nameservers = append(nameservers, parts[7])
+			}
+			if len(parts) > 8 && parts[8] != "" {
+				nameservers = append(nameservers, parts[8])
+			}
+			break
+		}
+	}
+
+	if len(nameservers) == 0 {
+		log.G(ctx).Debug("no DNS servers found in kernel ip= parameter")
+		return nil
+	}
+
+	// Build resolv.conf content
+	var resolvConf strings.Builder
+	for _, ns := range nameservers {
+		fmt.Fprintf(&resolvConf, "nameserver %s\n", ns)
+	}
+
+	// Write /etc/resolv.conf
+	if err := os.WriteFile("/etc/resolv.conf", []byte(resolvConf.String()), 0644); err != nil {
+		return fmt.Errorf("failed to write /etc/resolv.conf: %w", err)
+	}
+
+	log.G(ctx).WithField("nameservers", nameservers).Info("configured DNS resolvers from kernel ip= parameter")
+	return nil
 }
 
 // ttrpcService allows TTRPC services to be registered with the underlying server

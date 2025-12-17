@@ -44,3 +44,46 @@ func readSpec(p string) (*specs.Spec, error) {
 	}
 	return &s, nil
 }
+
+func writeSpec(p string, spec *specs.Spec) error {
+	const configFileName = "config.json"
+	f, err := os.Create(filepath.Join(p, configFileName))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	return enc.Encode(spec)
+}
+
+// InjectResolvConf adds a bind mount for /etc/resolv.conf from the VM root into the container
+// This allows containers to inherit DNS configuration from the VM's /etc/resolv.conf
+func InjectResolvConf(ctx context.Context, bundlePath string) error {
+	spec, err := readSpec(bundlePath)
+	if err != nil {
+		return err
+	}
+
+	// Check if /etc/resolv.conf already exists as a mount
+	for _, m := range spec.Mounts {
+		if m.Destination == "/etc/resolv.conf" {
+			log.G(ctx).Debug("resolv.conf mount already exists in spec, skipping injection")
+			return nil
+		}
+	}
+
+	// Add bind mount for /etc/resolv.conf
+	resolvConfMount := specs.Mount{
+		Destination: "/etc/resolv.conf",
+		Type:        "bind",
+		Source:      "/etc/resolv.conf",
+		Options:     []string{"rbind", "ro"},
+	}
+
+	spec.Mounts = append(spec.Mounts, resolvConfMount)
+
+	log.G(ctx).Info("injected /etc/resolv.conf bind mount into container spec")
+
+	return writeSpec(bundlePath, spec)
+}

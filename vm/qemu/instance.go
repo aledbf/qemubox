@@ -287,16 +287,21 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 	var netConfigs []string
 	if startOpts.NetworkConfig != nil && startOpts.NetworkConfig.IP != "" {
 		cfg := startOpts.NetworkConfig
-		// IPv4 configuration
-		netConfigs = append(netConfigs, fmt.Sprintf("ip=%s::%s:%s::eth0:none",
+		// IPv4 configuration using kernel ip= parameter format:
+		// ip=<client-ip>:<server-ip>:<gw-ip>:<netmask>:<hostname>:<device>:<autoconf>:<dns0-ip>:<dns1-ip>
+		ipParam := fmt.Sprintf("ip=%s::%s:%s::eth0:none",
 			cfg.IP,
 			cfg.Gateway,
-			cfg.Netmask))
+			cfg.Netmask)
 
-		// Add DNS servers
-		for _, dns := range cfg.DNS {
-			netConfigs = append(netConfigs, fmt.Sprintf("nameserver=%s", dns))
+		// Append DNS servers to ip= parameter (kernel supports up to 2 DNS servers)
+		for i, dns := range cfg.DNS {
+			if i < 2 {
+				ipParam += ":" + dns
+			}
 		}
+
+		netConfigs = append(netConfigs, ipParam)
 	}
 
 	// Build kernel command line
@@ -358,6 +363,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 		"-nodefaults",
 		"-no-user-config",
 		"-nographic",
+		"-no-reboot", // Exit QEMU when guest reboots (instead of restarting VM)
 
 		// Serial console - redirect to log file
 		"-serial", fmt.Sprintf("file:%s", q.consolePath),
@@ -579,37 +585,6 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 		// Connection is ready
 		log.G(ctx).WithField("retry_time", time.Since(retryStart)).Info("qemu: TTRPC connection established")
 		return conn, nil
-	}
-}
-
-// logDebugInfo logs console and QEMU logs for debugging when VM startup fails
-func (q *Instance) logDebugInfo(ctx context.Context) {
-	log.G(ctx).Error("qemu: timeout waiting for VM to start")
-
-	// Try to read QEMU logs
-	if qemuLogData, err := os.ReadFile(q.qemuLogPath); err == nil && len(qemuLogData) > 0 {
-		if len(qemuLogData) > maxLogBytes {
-			qemuLogData = qemuLogData[len(qemuLogData)-maxLogBytes:]
-		}
-		log.G(ctx).WithField("qemu_log", string(qemuLogData)).Error("qemu: QEMU stderr output (last 4KB)")
-	} else {
-		log.G(ctx).WithFields(log.Fields{
-			"qemu_log_path": q.qemuLogPath,
-			"error":         err,
-		}).Error("qemu: no QEMU log output")
-	}
-
-	// Try to read VM console output
-	if consoleData, err := os.ReadFile(q.consolePath); err == nil && len(consoleData) > 0 {
-		if len(consoleData) > maxLogBytes {
-			consoleData = consoleData[len(consoleData)-maxLogBytes:]
-		}
-		log.G(ctx).WithField("console", string(consoleData)).Error("qemu: VM console output (last 4KB)")
-	} else {
-		log.G(ctx).WithFields(log.Fields{
-			"console_path": q.consolePath,
-			"error":        err,
-		}).Error("qemu: no console output (vminitd may not be starting)")
 	}
 }
 

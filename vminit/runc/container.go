@@ -85,6 +85,12 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 		}
 	}
 
+	// Inject /etc/resolv.conf bind mount from VM into container
+	// This allows containers to use DNS configuration from kernel ip= parameter
+	if err := InjectResolvConf(ctx, r.Bundle); err != nil {
+		log.G(ctx).WithError(err).Warn("failed to inject resolv.conf, container may not have DNS")
+	}
+
 	p, err := newInit(
 		ctx,
 		r.Bundle,
