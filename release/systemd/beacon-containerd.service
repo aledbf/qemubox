@@ -4,7 +4,13 @@ Documentation=https://containerd.io
 After=network.target dbus.service
 
 [Service]
-Environment="PATH=/usr/share/beacon/bin/:${PATH}"
+ExecSearchPath=/usr/share/beacon/bin
+ExecSearchPath=/usr/local/sbin
+ExecSearchPath=/usr/local/bin
+ExecSearchPath=/usr/sbin
+ExecSearchPath=/usr/bin
+ExecSearchPath=/sbin
+ExecSearchPath=/bin
 ExecStartPre=-/sbin/modprobe overlay
 ExecStartPre=-/sbin/modprobe erofs
 ExecStart=/usr/share/beacon/bin/containerd --config /usr/share/beacon/config/containerd/config.toml

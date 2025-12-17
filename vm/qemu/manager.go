@@ -33,12 +33,3 @@ func findInitrd() (string, error) {
 	}
 	return "", fmt.Errorf("initrd not found at %s (use BEACON_SHARE_DIR to override)", path)
 }
-
-// findQemuShare returns the path to QEMU's share directory containing BIOS files
-func findQemuShare() (string, error) {
-	path := paths.QemuSharePath()
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
-	}
-	return "", fmt.Errorf("QEMU share directory not found at %s (use BEACON_QEMU_SHARE_PATH to override)", path)
-}

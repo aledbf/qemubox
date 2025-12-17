@@ -35,11 +35,6 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 		return nil, err
 	}
 
-	qemuSharePath, err := findQemuShare()
-	if err != nil {
-		return nil, err
-	}
-
 	// Provide default resource configuration if none specified
 	if resourceCfg == nil {
 		resourceCfg = &vm.VMResourceConfig{
@@ -76,7 +71,6 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 		logDir:        logDir,
 		kernelPath:    kernelPath,
 		initrdPath:    initrdPath,
-		qemuSharePath: qemuSharePath,
 		qmpSocketPath: filepath.Join(stateDir, "qmp.sock"),
 		vsockPath:     filepath.Join(stateDir, "vsock.sock"),
 		consolePath:   filepath.Join(logDir, "console.log"),
@@ -338,10 +332,10 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 	}
 
 	args := []string{
-		// BIOS/firmware path - must come first
-		"-L", q.qemuSharePath,
+		// BIOS/firmware path needed for PVH boot loader (pvh.bin)
+		"-L", "/usr/share/qemu",
 
-		"-machine", "q35,accel=kvm,kernel-irqchip=on", // Optimize: use kernel IRQ chip
+		"-machine", "q35,accel=kvm,kernel-irqchip=on,hpet=off", // Optimize: use kernel IRQ chip, disable HPET
 		"-cpu", "host,migratable=on",
 
 		"-smp", fmt.Sprintf("%d,maxcpus=%d", q.resourceCfg.BootCPUs, q.resourceCfg.MaxCPUs),
@@ -355,7 +349,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 	}
 
 	args = append(args,
-		// Kernel boot
+		// Kernel boot - direct kernel boot using PVH loader
 		"-kernel", q.kernelPath,
 		"-initrd", q.initrdPath,
 		"-append", cmdlineArgs,
@@ -364,7 +358,6 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 		"-nodefaults",
 		"-no-user-config",
 		"-nographic",
-		"-no-hpet", // Disable High Precision Event Timer (not needed for containers)
 
 		// Serial console - redirect to log file
 		"-serial", fmt.Sprintf("file:%s", q.consolePath),

@@ -44,13 +44,12 @@ type Instance struct {
 	streamC   uint32        // Stream ID counter
 
 	// Configuration
-	binaryPath    string
-	stateDir      string
-	logDir        string
-	kernelPath    string
-	initrdPath    string
-	qemuSharePath string // Path to QEMU share directory (BIOS files)
-	resourceCfg   *vm.VMResourceConfig
+	binaryPath  string
+	stateDir    string
+	logDir      string
+	kernelPath  string
+	initrdPath  string
+	resourceCfg *vm.VMResourceConfig
 
 	// Runtime paths
 	qmpSocketPath string // QMP control socket
