@@ -247,6 +247,40 @@ tasks:
         fi
 
         echo "    ✓ protoc compiler installed to bin/bin/protoc"
+
+        # Install tc-redirect-tap CNI plugin
+        echo "  → Installing tc-redirect-tap CNI plugin..."
+        TC_REDIRECT_TAP_DIR=$(mktemp -d)
+        git clone --depth=1 https://github.com/awslabs/tc-redirect-tap "${TC_REDIRECT_TAP_DIR}"
+
+        # Build tc-redirect-tap (disable workspace mode to avoid module conflicts)
+        (cd "${TC_REDIRECT_TAP_DIR}" && env GOWORK=off go build -o tc-redirect-tap ./cmd/tc-redirect-tap)
+
+        # Install to /opt/cni/bin (requires sudo on most systems)
+        if [ -d /opt/cni/bin ] && [ -w /opt/cni/bin ]; then
+          # We have write access
+          cp "${TC_REDIRECT_TAP_DIR}/tc-redirect-tap" /opt/cni/bin/
+          chmod +x /opt/cni/bin/tc-redirect-tap
+          echo "    ✓ tc-redirect-tap installed to /opt/cni/bin/tc-redirect-tap"
+        else
+          # Need sudo or directory doesn't exist
+          echo "    ⚠ Cannot write to /opt/cni/bin - manual installation required"
+          echo ""
+          echo "    Please run the following commands to complete setup:"
+          echo ""
+          echo "      sudo mkdir -p /opt/cni/bin"
+          echo "      sudo cp ${TC_REDIRECT_TAP_DIR}/tc-redirect-tap /opt/cni/bin/"
+          echo "      sudo chmod +x /opt/cni/bin/tc-redirect-tap"
+          echo ""
+          echo "    Binary is available at: ${TC_REDIRECT_TAP_DIR}/tc-redirect-tap"
+          echo ""
+        fi
+
+        # Keep the directory for manual installation if needed
+        if [ -w /opt/cni/bin ]; then
+          rm -rf "${TC_REDIRECT_TAP_DIR}"
+        fi
+
         echo ""
         echo "✓ Setup complete!"
 
@@ -500,6 +534,23 @@ tasks:
           libexec/cni/tuning \
           libexec/cni/vlan
         echo "  ✓ CNI plugins"
+
+        # Build and add tc-redirect-tap CNI plugin
+        echo "📦 Building tc-redirect-tap CNI plugin..."
+        TC_REDIRECT_TAP_DIR="_output/tc-redirect-tap"
+        if [ ! -d "${TC_REDIRECT_TAP_DIR}" ]; then
+          git clone --depth=1 https://github.com/awslabs/tc-redirect-tap "${TC_REDIRECT_TAP_DIR}"
+        fi
+
+        # Build tc-redirect-tap (disable workspace mode to avoid module conflicts)
+        (cd "${TC_REDIRECT_TAP_DIR}" && \
+          env GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o tc-redirect-tap ./cmd/tc-redirect-tap)
+
+        # Copy to release directory
+        cp "${TC_REDIRECT_TAP_DIR}/tc-redirect-tap" \
+          "${RELEASE_DIR}/usr/share/beacon/libexec/cni/"
+        chmod +x "${RELEASE_DIR}/usr/share/beacon/libexec/cni/tc-redirect-tap"
+        echo "  ✓ tc-redirect-tap CNI plugin"
 
         # Create tarball
         echo "🗜️  Creating tarball..."
