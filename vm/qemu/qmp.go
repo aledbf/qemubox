@@ -175,6 +175,22 @@ func (q *QMPClient) eventLoop(ctx context.Context) {
 				"event": resp.Event,
 				"data":  resp.Data,
 			}).Debug("qemu: QMP event")
+
+			// Handle guest-initiated shutdown/reboot
+			// With -no-reboot, QEMU pauses on RESET instead of rebooting
+			// We want to exit cleanly in both cases
+			switch resp.Event {
+			case "SHUTDOWN":
+				// Guest called poweroff - QEMU will exit naturally
+				log.G(ctx).Info("qemu: guest initiated shutdown")
+			case "RESET":
+				// Guest called reboot - with -no-reboot QEMU paused
+				// Send quit command to exit cleanly
+				log.G(ctx).Info("qemu: guest initiated reset, sending quit command")
+				if err := q.execute(context.Background(), "quit", nil); err != nil {
+					log.G(ctx).WithError(err).Warn("qemu: failed to send quit command")
+				}
+			}
 			continue
 		}
 

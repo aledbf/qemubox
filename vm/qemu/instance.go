@@ -234,9 +234,39 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	log.G(ctx).Info("qemu: process started, waiting for QMP socket...")
 
 	// Monitor QEMU process in background
+	// When QEMU exits (poweroff, reboot, crash), trigger cleanup
 	go func() {
-		if err := q.cmd.Wait(); err != nil {
-			log.G(ctx).WithError(err).Error("qemu: process exited unexpectedly")
+		exitErr := q.cmd.Wait()
+
+		// Update state to shutdown
+		q.vmState.Store(uint32(vmStateShutdown))
+
+		if exitErr != nil {
+			log.G(ctx).WithError(exitErr).Warn("qemu: process exited with error")
+		} else {
+			log.G(ctx).Info("qemu: process exited cleanly")
+		}
+
+		// Clean up resources
+		q.mu.Lock()
+		defer q.mu.Unlock()
+
+		// Close TTRPC client
+		if q.client != nil {
+			q.client.Close()
+			q.client = nil
+		}
+
+		// Close vsock connection
+		if q.vsockConn != nil {
+			q.vsockConn.Close()
+			q.vsockConn = nil
+		}
+
+		// Close QMP client
+		if q.qmpClient != nil {
+			q.qmpClient.Close()
+			q.qmpClient = nil
 		}
 	}()
 
@@ -309,10 +339,15 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 		"console=ttyS0",
 		"quiet",                          // Reduce boot messages for faster boot
 		"loglevel=3",                     // Minimal kernel logging (errors only)
+		"reboot=k",                       // Use keyboard controller for reboot (ACPI compatible)
+		"panic=1",                        // Reboot 1 second after kernel panic
 		"net.ifnames=0", "biosdevname=0", // Predictable network naming
 		"systemd.unified_cgroup_hierarchy=1", // Force cgroup v2
 		"cgroup_no_v1=all",                   // Disable cgroup v1
 		"nohz=off",                           // Disable tickless kernel (reduces overhead for short-lived VMs)
+		"rd.udev.event-timeout=10",           // Reduce udev timeout
+		"udev.children-max=2",                // Limit parallel udev workers
+		"udev.exec-delay=0",
 	}
 
 	if len(netConfigs) > 0 {
@@ -468,16 +503,27 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 		q.qmpClient = nil
 	}
 
-	// Kill QEMU process
+	// Wait for QEMU process to exit gracefully after ACPI powerdown
 	if q.cmd != nil && q.cmd.Process != nil {
-		// Wait a bit for graceful shutdown
-		time.Sleep(500 * time.Millisecond)
+		// Create a channel to signal when process exits
+		done := make(chan error, 1)
+		go func() {
+			done <- q.cmd.Wait()
+		}()
 
-		if err := q.cmd.Process.Kill(); err != nil {
-			errs = append(errs, fmt.Errorf("kill process: %w", err))
+		// Wait up to 3 seconds for graceful shutdown
+		select {
+		case <-done:
+			// Process exited cleanly
+			q.cmd = nil
+		case <-time.After(3 * time.Second):
+			// Timeout - force kill
+			if err := q.cmd.Process.Kill(); err != nil {
+				errs = append(errs, fmt.Errorf("kill process: %w", err))
+			}
+			<-done // Wait for Wait() to finish
+			q.cmd = nil
 		}
-		q.cmd.Wait()
-		q.cmd = nil
 	}
 
 	return errors.Join(errs...)

@@ -9,6 +9,7 @@ import (
 	"runtime"
 
 	"github.com/vishvananda/netns"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -33,6 +34,12 @@ func CreateNetNS(vmID string) (string, error) {
 	// Construct netns path
 	netnsPath := filepath.Join(netnsBasePath, vmID)
 
+	// Check if netns already exists (from previous run)
+	if NetNSExists(vmID) {
+		// Clean up existing netns first
+		_ = DeleteNetNS(vmID)
+	}
+
 	// Lock OS thread to ensure namespace operations work correctly
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -49,24 +56,68 @@ func CreateNetNS(vmID string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create new netns: %w", err)
 	}
-	defer newNS.Close()
 
 	// Bind mount the namespace to make it persistent
-	netnsFile := fmt.Sprintf("/proc/self/ns/net")
+	// This must be done while we're still in the new namespace
+	netnsFile := "/proc/self/ns/net"
 	if err := bindMountNetNS(netnsFile, netnsPath); err != nil {
-		// Clean up the namespace if bind mount fails
-		netns.DeleteNamed(vmID)
+		newNS.Close()
+		netns.Set(origNS)
 		return "", fmt.Errorf("failed to bind mount netns: %w", err)
 	}
 
 	// Return to original namespace
 	if err := netns.Set(origNS); err != nil {
 		// Clean up on failure
+		newNS.Close()
 		_ = DeleteNetNS(vmID)
 		return "", fmt.Errorf("failed to restore original netns: %w", err)
 	}
 
+	// Close the netns handle
+	// The namespace persists due to the bind mount
+	newNS.Close()
+
+	// Verify the netns was created correctly and is different from host
+	if err := verifyNetNS(netnsPath, origNS); err != nil {
+		_ = DeleteNetNS(vmID)
+		return "", fmt.Errorf("netns verification failed: %w", err)
+	}
+
 	return netnsPath, nil
+}
+
+// verifyNetNS verifies that the created netns is valid and different from the host netns.
+func verifyNetNS(netnsPath string, hostNS netns.NsHandle) error {
+	// Check if the file exists
+	if _, err := os.Stat(netnsPath); err != nil {
+		return fmt.Errorf("netns file does not exist: %w", err)
+	}
+
+	// Open the netns file
+	nsFile, err := os.Open(netnsPath)
+	if err != nil {
+		return fmt.Errorf("failed to open netns file: %w", err)
+	}
+	defer nsFile.Close()
+
+	// Get the inode of the netns file
+	var nsFileStat, hostNSStat unix.Stat_t
+	if err := unix.Fstat(int(nsFile.Fd()), &nsFileStat); err != nil {
+		return fmt.Errorf("failed to stat netns file: %w", err)
+	}
+
+	// Get the inode of the host netns
+	if err := unix.Fstat(int(hostNS), &hostNSStat); err != nil {
+		return fmt.Errorf("failed to stat host netns: %w", err)
+	}
+
+	// Compare inodes - they should be different
+	if nsFileStat.Ino == hostNSStat.Ino {
+		return fmt.Errorf("created netns is the same as host netns (inode: %d)", nsFileStat.Ino)
+	}
+
+	return nil
 }
 
 // DeleteNetNS deletes a network namespace.

@@ -445,10 +445,12 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 			ev, err := sc.Recv()
 			if err != nil {
 				if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
-					log.G(ctx).Info("vm event stream closed")
+					log.G(ctx).Info("vm event stream closed, initiating shim shutdown")
 				} else {
-					log.G(ctx).WithError(err).Error("vm event stream error")
+					log.G(ctx).WithError(err).Error("vm event stream error, initiating shim shutdown")
 				}
+				// VM died - trigger shim shutdown to clean up and notify containerd
+				s.initiateShutdown()
 				return
 			}
 			s.send(ev)
