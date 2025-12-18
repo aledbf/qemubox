@@ -56,12 +56,13 @@ func CreateNetNS(vmID string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create new netns: %w", err)
 	}
+	defer newNS.Close()
 
 	// Bind mount the namespace to make it persistent
-	// This must be done while we're still in the new namespace
-	netnsFile := "/proc/self/ns/net"
-	if err := bindMountNetNS(netnsFile, netnsPath); err != nil {
-		newNS.Close()
+	// Use the file descriptor directly instead of /proc/self/ns/net
+	// to ensure we're mounting the correct namespace
+	nsFdPath := fmt.Sprintf("/proc/self/fd/%d", newNS)
+	if err := bindMountNetNS(nsFdPath, netnsPath); err != nil {
 		netns.Set(origNS)
 		return "", fmt.Errorf("failed to bind mount netns: %w", err)
 	}
@@ -69,14 +70,9 @@ func CreateNetNS(vmID string) (string, error) {
 	// Return to original namespace
 	if err := netns.Set(origNS); err != nil {
 		// Clean up on failure
-		newNS.Close()
 		_ = DeleteNetNS(vmID)
 		return "", fmt.Errorf("failed to restore original netns: %w", err)
 	}
-
-	// Close the netns handle
-	// The namespace persists due to the bind mount
-	newNS.Close()
 
 	// Verify the netns was created correctly and is different from host
 	if err := verifyNetNS(netnsPath, origNS); err != nil {

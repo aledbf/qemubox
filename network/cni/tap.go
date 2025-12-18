@@ -4,6 +4,7 @@ package cni
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	current "github.com/containernetworking/cni/pkg/types/100"
@@ -24,17 +25,40 @@ func ExtractTAPDevice(result *current.Result) (string, error) {
 		return "", fmt.Errorf("CNI result is nil")
 	}
 
+	// Debug: Log all interfaces in the result
+	slog.Info("CNI result interfaces", "count", len(result.Interfaces))
+	for i, iface := range result.Interfaces {
+		slog.Info("CNI interface",
+			"index", i,
+			"name", iface.Name,
+			"sandbox", iface.Sandbox,
+			"mac", iface.Mac)
+	}
+
 	// Try tc-redirect-tap detection first (most common case)
 	tapDevice, err := detectTCRedirectTAP(result)
 	if err == nil {
+		slog.Info("Found TAP device via tc-redirect-tap detection", "tap", tapDevice)
 		return tapDevice, nil
 	}
+	slog.Warn("tc-redirect-tap detection failed", "error", err)
 
 	// Fall back to generic TAP detection
 	tapDevice, err = detectGenericTAP(result)
 	if err == nil {
+		slog.Info("Found TAP device via generic detection", "tap", tapDevice)
 		return tapDevice, nil
 	}
+	slog.Warn("generic TAP detection failed", "error", err)
+
+	// Last resort: check the host namespace for any TAP devices
+	// This handles the case where tc-redirect-tap creates the TAP but doesn't report it
+	tapDevice, err = findHostTAPDevice()
+	if err == nil {
+		slog.Info("Found TAP device in host namespace", "tap", tapDevice)
+		return tapDevice, nil
+	}
+	slog.Warn("findHostTAPDevice failed", "error", err)
 
 	return "", fmt.Errorf("no TAP device found in CNI result (checked %d interfaces)", len(result.Interfaces))
 }
@@ -42,18 +66,22 @@ func ExtractTAPDevice(result *current.Result) (string, error) {
 // detectTCRedirectTAP detects TAP devices created by the tc-redirect-tap CNI plugin.
 //
 // The tc-redirect-tap plugin creates TAP devices with predictable naming:
-// - Usually prefixed with "tap"
-// - Not inside a network namespace (Sandbox == "")
-// - Device exists in the host network namespace
+// - Usually named "tap0" or "tapXXX"
+// - The TAP device is created inside the container netns (sandbox)
+// - QEMU will access the TAP from within the same netns
 func detectTCRedirectTAP(result *current.Result) (string, error) {
+	// Look for TAP devices in the CNI result
 	for _, iface := range result.Interfaces {
-		// tc-redirect-tap creates TAP devices in the host namespace
-		// Sandbox is empty for host namespace devices
-		if iface.Sandbox == "" && strings.HasPrefix(iface.Name, "tap") {
-			// Verify it's actually a TAP device
-			if isTAPDevice(iface.Name) {
-				return iface.Name, nil
-			}
+		// Check if this looks like a TAP device by name
+		if strings.HasPrefix(iface.Name, "tap") {
+			slog.Info("Found potential TAP device",
+				"name", iface.Name,
+				"sandbox", iface.Sandbox,
+				"mac", iface.Mac)
+
+			// The TAP device is in the container netns
+			// Return the name - QEMU will access it from within the same netns
+			return iface.Name, nil
 		}
 	}
 
@@ -115,4 +143,50 @@ func ValidateTAPDevice(name string) error {
 	}
 
 	return nil
+}
+
+// findHostTAPDevice scans the host network namespace for TAP devices.
+//
+// This is a fallback method for when tc-redirect-tap creates a TAP device
+// but doesn't properly report it in the CNI result. It looks for recently
+// created TAP devices in the host namespace.
+func findHostTAPDevice() (string, error) {
+	links, err := netlink.LinkList()
+	if err != nil {
+		return "", fmt.Errorf("failed to list links: %w", err)
+	}
+
+	var tapDevices []string
+	for _, link := range links {
+		// Check if it's a TAP device
+		tuntap, ok := link.(*netlink.Tuntap)
+		if !ok {
+			continue
+		}
+
+		// Only TAP devices (not TUN)
+		if tuntap.Mode != netlink.TUNTAP_MODE_TAP {
+			continue
+		}
+
+		name := link.Attrs().Name
+		// Skip if it starts with "beacon-" (that's our legacy mode TAP devices)
+		if strings.HasPrefix(name, "beacon-") {
+			continue
+		}
+
+		// Check if it starts with "tap" (most common for tc-redirect-tap)
+		if strings.HasPrefix(name, "tap") {
+			tapDevices = append(tapDevices, name)
+		}
+	}
+
+	if len(tapDevices) == 0 {
+		return "", fmt.Errorf("no TAP devices found in host namespace")
+	}
+
+	// If we found multiple, prefer the most recently created one
+	// For now, just return the first one (this should be improved)
+	// TODO: Track TAP device creation timestamps or use a better heuristic
+	return tapDevices[0], nil
 }

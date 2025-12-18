@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 	"github.com/mdlayher/vsock"
+	"github.com/vishvananda/netns"
 
 	"github.com/aledbf/beacon/containerd/vm"
 )
@@ -227,8 +229,17 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 		Setpgid: true,
 	}
 
-	if err := q.cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start qemu: %w", err)
+	// If a network namespace is specified, start QEMU inside it
+	// This allows QEMU to access TAP devices created by CNI in that netns
+	if startOpts.NetworkNamespace != "" {
+		log.G(ctx).WithField("netns", startOpts.NetworkNamespace).Info("qemu: starting inside network namespace")
+		if err := q.startInNetNS(ctx, startOpts.NetworkNamespace); err != nil {
+			return fmt.Errorf("failed to start qemu in netns: %w", err)
+		}
+	} else {
+		if err := q.cmd.Start(); err != nil {
+			return fmt.Errorf("failed to start qemu: %w", err)
+		}
 	}
 
 	log.G(ctx).Info("qemu: process started, waiting for QMP socket...")
@@ -300,6 +311,48 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 
 	log.G(ctx).Info("qemu: VM fully initialized")
 
+	return nil
+}
+
+// startInNetNS starts the QEMU process inside a network namespace.
+// This allows QEMU to access TAP devices created by CNI in that netns.
+func (q *Instance) startInNetNS(ctx context.Context, netnsPath string) error {
+	// Get the target network namespace
+	targetNS, err := netns.GetFromPath(netnsPath)
+	if err != nil {
+		return fmt.Errorf("failed to get netns from path %s: %w", netnsPath, err)
+	}
+	defer targetNS.Close()
+
+	// Get the current network namespace (to restore later)
+	origNS, err := netns.Get()
+	if err != nil {
+		return fmt.Errorf("failed to get current netns: %w", err)
+	}
+	defer origNS.Close()
+
+	// Lock the OS thread to ensure namespace operations work correctly
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	// Switch to the target network namespace
+	if err := netns.Set(targetNS); err != nil {
+		return fmt.Errorf("failed to set netns: %w", err)
+	}
+
+	// Ensure we always return to the original namespace
+	defer func() {
+		if err := netns.Set(origNS); err != nil {
+			log.G(ctx).WithError(err).Error("failed to restore original netns")
+		}
+	}()
+
+	// Start QEMU process (it will inherit the current netns)
+	if err := q.cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start qemu process: %w", err)
+	}
+
+	log.G(ctx).WithField("netns", netnsPath).Info("qemu: process started in network namespace")
 	return nil
 }
 
