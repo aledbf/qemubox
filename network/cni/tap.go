@@ -26,20 +26,20 @@ func ExtractTAPDevice(result *current.Result) (string, error) {
 	}
 
 	// Debug: Log all interfaces in the result
-	log.L.WithField("count", len(result.Interfaces)).Info("CNI result interfaces")
+	log.L.WithField("count", len(result.Interfaces)).Debug("CNI result interfaces")
 	for i, iface := range result.Interfaces {
 		log.L.WithFields(log.Fields{
 			"index":   i,
 			"name":    iface.Name,
 			"sandbox": iface.Sandbox,
 			"mac":     iface.Mac,
-		}).Info("CNI interface")
+		}).Debug("CNI interface")
 	}
 
 	// Try tc-redirect-tap detection first (most common case)
 	tapDevice, err := detectTCRedirectTAP(result)
 	if err == nil {
-		log.L.WithField("tap", tapDevice).Info("Found TAP device via tc-redirect-tap detection")
+		log.L.WithField("tap", tapDevice).Debug("Found TAP device via tc-redirect-tap detection")
 		return tapDevice, nil
 	}
 	log.L.WithError(err).Warn("tc-redirect-tap detection failed")
@@ -47,7 +47,7 @@ func ExtractTAPDevice(result *current.Result) (string, error) {
 	// Fall back to generic TAP detection
 	tapDevice, err = detectGenericTAP(result)
 	if err == nil {
-		log.L.WithField("tap", tapDevice).Info("Found TAP device via generic detection")
+		log.L.WithField("tap", tapDevice).Debug("Found TAP device via generic detection")
 		return tapDevice, nil
 	}
 	log.L.WithError(err).Warn("generic TAP detection failed")
@@ -56,7 +56,7 @@ func ExtractTAPDevice(result *current.Result) (string, error) {
 	// This handles the case where tc-redirect-tap creates the TAP but doesn't report it
 	tapDevice, err = findHostTAPDevice()
 	if err == nil {
-		log.L.WithField("tap", tapDevice).Info("Found TAP device in host namespace")
+		log.L.WithField("tap", tapDevice).Debug("Found TAP device in host namespace")
 		return tapDevice, nil
 	}
 	log.L.WithError(err).Warn("findHostTAPDevice failed")
