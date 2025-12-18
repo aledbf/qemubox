@@ -116,6 +116,9 @@ func main() {
 
 	if config.Debug {
 		log.SetLevel("debug")
+	} else {
+		// Prefer verbose logging in the minimal VM to ease debugging boot/mount issues.
+		log.SetLevel("info")
 	}
 
 	ctx := context.Background()

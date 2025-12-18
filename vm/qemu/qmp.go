@@ -45,6 +45,13 @@ type qmpError struct {
 	Desc  string `json:"desc"`
 }
 
+// qmpStatus matches the response from the query-status command.
+type qmpStatus struct {
+	Status     string `json:"status"`
+	Singlestep bool   `json:"singlestep"`
+	Running    bool   `json:"running"`
+}
+
 // NewQMPClient creates a QMP client and performs initial handshake.
 // The QMP protocol requires:
 // 1. Read greeting message from server
@@ -181,8 +188,18 @@ func (q *QMPClient) eventLoop(ctx context.Context) {
 			// We want to exit cleanly in both cases
 			switch resp.Event {
 			case "SHUTDOWN":
-				// Guest called poweroff - QEMU will exit naturally
-				log.G(ctx).Info("qemu: guest initiated shutdown")
+				// Guest called poweroff - explicitly tell QEMU to exit so the host
+				// process and shim are cleaned up even if QEMU wouldn't exit itself.
+				log.G(ctx).Info("qemu: guest initiated shutdown, sending quit command")
+				if err := q.execute(context.Background(), "quit", nil); err != nil {
+					log.G(ctx).WithError(err).Warn("qemu: failed to send quit command")
+				}
+			case "POWERDOWN":
+				// Some QEMU builds emit POWERDOWN instead of SHUTDOWN for ACPI poweroff.
+				log.G(ctx).Info("qemu: guest powerdown event, sending quit command")
+				if err := q.execute(context.Background(), "quit", nil); err != nil {
+					log.G(ctx).WithError(err).Warn("qemu: failed to send quit command")
+				}
 			case "RESET":
 				// Guest called reboot - with -no-reboot QEMU paused
 				// Send quit command to exit cleanly
@@ -220,6 +237,58 @@ func (q *QMPClient) eventLoop(ctx context.Context) {
 // Shutdown gracefully shuts down the VM
 func (q *QMPClient) Shutdown(ctx context.Context) error {
 	return q.execute(ctx, "system_powerdown", nil)
+}
+
+// QueryStatus returns the current VM status (running, paused, shutdown, etc).
+func (q *QMPClient) QueryStatus(ctx context.Context) (*qmpStatus, error) {
+	if q.closed.Load() {
+		return nil, fmt.Errorf("QMP client closed")
+	}
+
+	id := q.nextID.Add(1)
+	respChan := make(chan *qmpResponse, 1)
+
+	q.mu.Lock()
+	q.pending[id] = respChan
+	q.mu.Unlock()
+
+	cmd := qmpCommand{
+		Execute: "query-status",
+		ID:      id,
+	}
+
+	if err := q.encoder.Encode(cmd); err != nil {
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, fmt.Errorf("failed to send query-status: %w", err)
+	}
+
+	select {
+	case resp := <-respChan:
+		if resp.Error != nil {
+			return nil, fmt.Errorf("QMP error for query-status: %s: %s", resp.Error.Class, resp.Error.Desc)
+		}
+		var status qmpStatus
+		returnBytes, err := json.Marshal(resp.Return)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal status: %w", err)
+		}
+		if err := json.Unmarshal(returnBytes, &status); err != nil {
+			return nil, fmt.Errorf("failed to parse status: %w", err)
+		}
+		return &status, nil
+	case <-ctx.Done():
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, ctx.Err()
+	case <-time.After(5 * time.Second):
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, fmt.Errorf("timeout waiting for query-status response")
+	}
 }
 
 // DeviceAdd hotplugs a device

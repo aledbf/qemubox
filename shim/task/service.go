@@ -583,8 +583,15 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 				delete(s.containers, r.ID)
 			}
 		}
-		s.mu.Unlock()
 
+		// If there are no remaining containers, shut down the VM so QEMU exits.
+		if len(s.containers) == 0 && s.vm != nil {
+			log.G(ctx).Info("no containers remaining, shutting down VM")
+			if err := s.vm.Shutdown(ctx); err != nil {
+				log.G(ctx).WithError(err).Warn("failed to shutdown VM after last container deleted")
+			}
+		}
+		s.mu.Unlock()
 	}
 	return resp, err
 }

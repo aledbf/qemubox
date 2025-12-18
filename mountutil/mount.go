@@ -21,7 +21,7 @@ import (
 )
 
 func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retErr error) {
-	log.G(ctx).WithField("mounts", mounts).Debugf("mounting rootfs components")
+	log.G(ctx).WithField("mounts", mounts).Info("mounting rootfs components")
 	active := []mount.ActiveMount{}
 
 	// TODO: Use mount manager interface, mount temps to directory
@@ -138,8 +138,20 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 			MountPoint: target,
 		}
 		if err := am.Mount.Mount(target); err != nil {
+			log.G(ctx).WithFields(log.Fields{
+				"type":    am.Type,
+				"source":  am.Source,
+				"target":  target,
+				"options": am.Options,
+			}).WithError(err).Error("mount failed")
 			return err
 		}
+		log.G(ctx).WithFields(log.Fields{
+			"type":    am.Type,
+			"source":  am.Source,
+			"target":  target,
+			"options": am.Options,
+		}).Info("mounted")
 		active = append(active, am)
 
 	}

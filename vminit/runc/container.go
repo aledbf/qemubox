@@ -78,11 +78,12 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 	}
 
 	if len(r.Rootfs) != 0 && (len(r.Rootfs) != 1 || r.Rootfs[0].Type != "bind" || r.Rootfs[0].Source != rootfs) {
-		log.G(ctx).WithField("mounts", r.Rootfs).Debugf("mounting rootfs components")
+		log.G(ctx).WithField("mounts", r.Rootfs).Info("mounting rootfs components")
 		mdir := filepath.Join(r.Bundle, "mounts")
 		if err := mountutil.All(ctx, rootfs, mdir, r.Rootfs); err != nil {
 			return nil, err
 		}
+		log.G(ctx).WithField("rootfs", rootfs).Info("rootfs components mounted")
 	}
 
 	// Inject /etc/resolv.conf bind mount from VM into container

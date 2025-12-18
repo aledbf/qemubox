@@ -249,6 +249,13 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	go func() {
 		exitErr := q.cmd.Wait()
 
+		// Cancel background monitors
+		q.mu.Lock()
+		if q.runCancel != nil {
+			q.runCancel()
+		}
+		q.mu.Unlock()
+
 		// Update state to shutdown
 		q.vmState.Store(uint32(vmStateShutdown))
 
@@ -294,6 +301,18 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 
 	log.G(ctx).Info("qemu: QMP connected, waiting for vsock...")
 
+	// Create long-lived context for background monitors; Start ctx may be cancelled by callers.
+	runCtx, runCancel := context.WithCancel(context.Background())
+	q.mu.Lock()
+	q.runCtx = runCtx
+	q.runCancel = runCancel
+	q.mu.Unlock()
+
+	// Monitor QMP status as a fallback to detect guest shutdown even if
+	// asynchronous events are missed. If QEMU transitions to a shutdown/paused
+	// state, we explicitly send quit to ensure the process exits.
+	go q.monitorVMStatus(runCtx)
+
 	// Connect to vsock RPC server
 	conn, err := q.connectVsockRPC(ctx)
 	if err != nil {
@@ -304,6 +323,10 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 
 	q.vsockConn = conn
 	q.client = ttrpc.NewClient(conn)
+
+	// Monitor liveness of the guest RPC server; if it goes away (guest reboot/poweroff)
+	// ensure QEMU exits so the shim can clean up.
+	go q.monitorGuestRPC(runCtx)
 
 	// Mark as successfully started
 	success = true
@@ -363,6 +386,7 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 		fmt.Sprintf("-vsock-rpc-port=%d", vsockRPCPort),
 		fmt.Sprintf("-vsock-stream-port=%d", vsockStreamPort),
 		fmt.Sprintf("-vsock-cid=%d", vsockCID),
+		"-debug",
 	}
 	initArgs = append(initArgs, startOpts.InitArgs...)
 
@@ -398,9 +422,7 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 		"systemd.unified_cgroup_hierarchy=1", // Force cgroup v2
 		"cgroup_no_v1=all",                   // Disable cgroup v1
 		"nohz=off",                           // Disable tickless kernel (reduces overhead for short-lived VMs)
-		"rd.udev.event-timeout=10",           // Reduce udev timeout
-		"udev.children-max=2",                // Limit parallel udev workers
-		"udev.exec-delay=0",
+		"nomodules", "systemd.journald.forward_to_console", "systemd.log_color=false",
 	}
 
 	if len(netConfigs) > 0 {
@@ -523,6 +545,12 @@ func (q *Instance) QMPClient() *QMPClient {
 func (q *Instance) Shutdown(ctx context.Context) error {
 	// Update state
 	q.vmState.Store(uint32(vmStateShutdown))
+
+	q.mu.Lock()
+	if q.runCancel != nil {
+		q.runCancel()
+	}
+	q.mu.Unlock()
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -684,6 +712,112 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 		// Connection is ready
 		log.G(ctx).WithField("retry_time", time.Since(retryStart)).Info("qemu: TTRPC connection established")
 		return conn, nil
+	}
+}
+
+// monitorVMStatus polls QMP status to detect guest-initiated shutdown when
+// QMP events are missed. If the status shows shutdown or paused, it forces
+// QEMU to exit via a quit command.
+func (q *Instance) monitorVMStatus(ctx context.Context) {
+	log.G(ctx).Debug("qemu: starting VM status monitor")
+	t := time.NewTicker(1 * time.Second)
+	defer t.Stop()
+
+	for {
+		if vmState(q.vmState.Load()) == vmStateShutdown {
+			log.G(ctx).Debug("qemu: VM status monitor exiting (state shutdown)")
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			log.G(ctx).Debug("qemu: VM status monitor exiting (context done)")
+			return
+		case <-t.C:
+		}
+
+		q.mu.Lock()
+		qmp := q.qmpClient
+		q.mu.Unlock()
+
+		if qmp == nil {
+			continue
+		}
+
+		status, err := qmp.QueryStatus(context.Background())
+		if err != nil {
+			log.G(ctx).WithError(err).Debug("qemu: query-status failed")
+			continue
+		}
+
+		if status.Status == "shutdown" || status.Status == "paused" {
+			log.G(ctx).WithField("status", status.Status).Info("qemu: VM no longer running, sending quit command")
+			if err := qmp.execute(context.Background(), "quit", nil); err != nil {
+				log.G(ctx).WithError(err).Warn("qemu: failed to send quit command after status change")
+			}
+			return
+		}
+	}
+}
+
+// monitorGuestRPC periodically checks if the in-guest vminitd RPC server is reachable.
+// If the server disappears (e.g., guest reboot/poweroff), we force the VMM to exit.
+func (q *Instance) monitorGuestRPC(ctx context.Context) {
+	log.G(ctx).Debug("qemu: starting guest RPC monitor")
+	t := time.NewTicker(1 * time.Second)
+	defer t.Stop()
+
+	failures := 0
+	for {
+		if vmState(q.vmState.Load()) == vmStateShutdown {
+			log.G(ctx).Debug("qemu: guest RPC monitor exiting (state shutdown)")
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			log.G(ctx).Debug("qemu: guest RPC monitor exiting (context done)")
+			return
+		case <-t.C:
+		}
+
+		conn, err := vsock.Dial(vsockCID, vsockRPCPort, nil)
+		if err == nil {
+			conn.SetDeadline(time.Now().Add(200 * time.Millisecond))
+			if err := pingTTRPC(conn); err != nil {
+				failures++
+			} else {
+				failures = 0
+			}
+			conn.Close()
+		} else {
+			failures++
+		}
+
+		if failures >= 3 {
+			log.G(ctx).WithError(err).Warn("qemu: guest RPC unreachable, forcing VM exit")
+			q.forceQuit(ctx)
+			return
+		}
+	}
+}
+
+// forceQuit attempts to terminate the VM process via QMP quit, falling back to SIGKILL.
+func (q *Instance) forceQuit(ctx context.Context) {
+	q.mu.Lock()
+	qmp := q.qmpClient
+	cmd := q.cmd
+	q.mu.Unlock()
+
+	if qmp != nil {
+		if err := qmp.execute(context.Background(), "quit", nil); err != nil {
+			log.G(ctx).WithError(err).Warn("qemu: failed to send quit command during force quit")
+		}
+	}
+	if cmd != nil && cmd.Process != nil {
+		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			log.G(ctx).WithError(err).Warn("qemu: failed to kill process during force quit")
+		}
 	}
 }
 

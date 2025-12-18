@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"context"
 	"net"
 	"os/exec"
 	"sync"
@@ -22,16 +23,15 @@ const (
 )
 
 const (
-	vsockCID            = 3      // Guest context ID for vsock
-	vsockRPCPort        = 1025   // Port for TTRPC RPC communication
-	vsockStreamPort     = 1026   // Port for streaming I/O
-	defaultBootCPUs     = 1      // Default number of boot vCPUs
-	defaultMaxCPUs      = 2      // Default maximum vCPUs (set equal to boot for lean mode)
-	defaultMemorySize   = 512 * 1024 * 1024      // 512 MiB
-	defaultMemoryMax    = 1024 * 1024 * 1024     // 1 GiB (reduced from 2 GiB for leaner defaults)
+	vsockCID            = 3                  // Guest context ID for vsock
+	vsockRPCPort        = 1025               // Port for TTRPC RPC communication
+	vsockStreamPort     = 1026               // Port for streaming I/O
+	defaultBootCPUs     = 1                  // Default number of boot vCPUs
+	defaultMaxCPUs      = 2                  // Default maximum vCPUs (set equal to boot for lean mode)
+	defaultMemorySize   = 512 * 1024 * 1024  // 512 MiB
+	defaultMemoryMax    = 1024 * 1024 * 1024 // 1 GiB (reduced from 2 GiB for leaner defaults)
 	vmStartTimeout      = 10 * time.Second
 	connectRetryTimeout = 10 * time.Second
-	maxLogBytes         = 4096 // Maximum log output to include in errors
 )
 
 // Instance represents a QEMU microvm instance.
@@ -39,9 +39,9 @@ type Instance struct {
 	// mu protects fields that are read/written concurrently during configuration
 	// and startup: disks, nets, cmd, qmpClient, client, vsockConn.
 	// State transitions are managed via vmState atomic.
-	mu        sync.Mutex
-	vmState   atomic.Uint32 // Current VM state (vmState)
-	streamC   uint32        // Stream ID counter
+	mu      sync.Mutex
+	vmState atomic.Uint32 // Current VM state (vmState)
+	streamC uint32        // Stream ID counter
 
 	// Configuration
 	binaryPath  string
@@ -62,6 +62,10 @@ type Instance struct {
 	qmpClient *QMPClient
 	client    *ttrpc.Client
 	vsockConn net.Conn
+
+	// Long-lived context for background monitors started after the VM boots.
+	runCtx    context.Context
+	runCancel context.CancelFunc
 
 	// Device tracking (configured before Start)
 	disks      []*DiskConfig
