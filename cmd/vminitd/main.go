@@ -432,6 +432,10 @@ func New(ctx context.Context, config ServiceConfig) (Runnable, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on vsock port %d with context id %d: %w", config.RPCPort, config.VSockContextID, err)
 	}
+	log.G(ctx).WithFields(log.Fields{
+		"cid":  config.VSockContextID,
+		"port": config.RPCPort,
+	}).Info("listening on vsock for RPC connections")
 	config.Shutdown.RegisterCallback(func(ctx context.Context) error {
 		return l.Close()
 	})
@@ -512,5 +516,6 @@ func New(ctx context.Context, config ServiceConfig) (Runnable, error) {
 }
 
 func (s *service) Run(ctx context.Context) error {
+	log.G(ctx).Info("starting TTRPC server")
 	return s.server.Serve(ctx, s.l)
 }

@@ -349,10 +349,9 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 
 	// Create long-lived context for background monitors; Start ctx may be cancelled by callers.
 	runCtx, runCancel := context.WithCancel(context.Background())
-	q.mu.Lock()
+	// Note: q.mu is already held (locked at line 200), so we can set these fields directly
 	q.runCtx = runCtx
 	q.runCancel = runCancel
-	q.mu.Unlock()
 
 	// Monitor QMP status as a fallback to detect guest shutdown even if
 	// asynchronous events are missed. If QEMU transitions to a shutdown/paused
@@ -360,7 +359,17 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	go q.monitorVMStatus(runCtx)
 
 	// Connect to vsock RPC server
+	log.G(ctx).Debug("qemu: about to call connectVsockRPC")
+	select {
+	case <-ctx.Done():
+		log.G(ctx).WithError(ctx.Err()).Error("qemu: context cancelled before connectVsockRPC")
+		q.cmd.Process.Kill()
+		q.qmpClient.Close()
+		return ctx.Err()
+	default:
+	}
 	conn, err := q.connectVsockRPC(ctx)
+	log.G(ctx).WithError(err).Debug("qemu: connectVsockRPC returned")
 	if err != nil {
 		q.cmd.Process.Kill()
 		q.qmpClient.Close()
@@ -690,7 +699,9 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 	}).Info("qemu: connecting to vsock RPC port")
 
 	// Wait a bit for vminitd to fully initialize
+	log.G(ctx).Debug("qemu: sleeping 500ms before vsock dial")
 	time.Sleep(500 * time.Millisecond)
+	log.G(ctx).Debug("qemu: starting vsock dial loop")
 
 	retryStart := time.Now()
 	pingDeadline := 50 * time.Millisecond
