@@ -426,8 +426,6 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 		"systemd.unified_cgroup_hierarchy=1", // Force cgroup v2
 		"cgroup_no_v1=all",                   // Disable cgroup v1
 		"nohz=off",                           // Disable tickless kernel (reduces overhead for short-lived VMs)
-		"systemd.journald.forward_to_console",
-		"systemd.log_color=false",
 	}
 
 	if len(netConfigs) > 0 {
