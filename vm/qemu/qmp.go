@@ -53,6 +53,14 @@ type qmpStatus struct {
 	Running    bool   `json:"running"`
 }
 
+// SetCommandTimeout sets the timeout for QMP commands
+// If not set or set to 0, defaults to 5 seconds
+func (q *QMPClient) SetCommandTimeout(timeout time.Duration) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.commandTimeout = timeout
+}
+
 // NewQMPClient creates a QMP client and performs initial handshake.
 // The QMP protocol requires:
 // 1. Read greeting message from server
@@ -70,10 +78,11 @@ func NewQMPClient(ctx context.Context, socketPath string) (*QMPClient, error) {
 	}
 
 	qmp := &QMPClient{
-		conn:    conn,
-		scanner: bufio.NewScanner(conn),
-		encoder: json.NewEncoder(conn),
-		pending: make(map[uint64]chan *qmpResponse),
+		conn:           conn,
+		scanner:        bufio.NewScanner(conn),
+		encoder:        json.NewEncoder(conn),
+		pending:        make(map[uint64]chan *qmpResponse),
+		commandTimeout: 5 * time.Second, // Default timeout
 	}
 	// QMP can emit large JSON objects; ensure we don't drop events due to scanner limits.
 	qmp.scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -150,6 +159,12 @@ func (q *QMPClient) execute(ctx context.Context, command string, args map[string
 		return fmt.Errorf("failed to send QMP command %s: %w", command, err)
 	}
 
+	// Use configured timeout (default: 5 seconds)
+	timeout := q.commandTimeout
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+
 	// Wait for response with timeout
 	select {
 	case resp := <-respChan:
@@ -165,11 +180,11 @@ func (q *QMPClient) execute(ctx context.Context, command string, args map[string
 		delete(q.pending, id)
 		q.mu.Unlock()
 		return ctx.Err()
-	case <-time.After(5 * time.Second):
+	case <-time.After(timeout):
 		q.mu.Lock()
 		delete(q.pending, id)
 		q.mu.Unlock()
-		return fmt.Errorf("timeout waiting for QMP response to %s", command)
+		return fmt.Errorf("timeout (%v) waiting for QMP response to %s", timeout, command)
 	}
 }
 
