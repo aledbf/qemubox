@@ -584,43 +584,35 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		return resp, err
 	}
 	if err == nil {
-		// Note: VM shutdown is handled below after cleanup (line ~643)
-		// No need for async goroutine here - it causes race conditions
-
+		// Collect cleanup functions and references while holding lock
 		var (
-			needShutdown bool
-			vmInst       vm.Instance
+			ioShutdowns      []func(context.Context) error
+			needShutdown     bool
+			vmInst           vm.Instance
+			cpuController    *cpuhotplug.Controller
+			needNetworkClean bool
 		)
+
 		s.mu.Lock()
 		if c, ok := s.containers[r.ID]; ok {
 			if r.ExecID != "" {
+				// Exec process cleanup
 				if ioShutdown, ok := c.execShutdowns[r.ExecID]; ok {
-					if err := ioShutdown(ctx); err != nil {
-						log.G(ctx).WithError(err).WithField("exec", r.ExecID).Error("failed to shutdown exec io after delete")
-					}
+					ioShutdowns = append(ioShutdowns, ioShutdown)
 					delete(c.execShutdowns, r.ExecID)
 				}
 			} else {
+				// Main container cleanup
 				if c.ioShutdown != nil {
-					if err := c.ioShutdown(ctx); err != nil {
-						log.G(ctx).WithError(err).Error("failed to shutdown io after delete")
-					}
+					ioShutdowns = append(ioShutdowns, c.ioShutdown)
 				}
-				for execID, ioShutdown := range c.execShutdowns {
-					if err := ioShutdown(ctx); err != nil {
-						log.G(ctx).WithError(err).WithField("exec", execID).Error("failed to shutdown exec io after delete")
-					}
+				for _, ioShutdown := range c.execShutdowns {
+					ioShutdowns = append(ioShutdowns, ioShutdown)
 				}
 
-				// Release network resources before deleting from map
-				env := &network.Environment{ID: r.ID}
-				if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
-					log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
-				}
-
-				// Stop CPU hotplug controller if running
-				s.stopCPUHotplugController(ctx)
-
+				needNetworkClean = true
+				cpuController = s.cpuHotplugController
+				s.cpuHotplugController = nil
 				delete(s.containers, r.ID)
 			}
 		}
@@ -632,14 +624,38 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		}
 		s.mu.Unlock()
 
+		// Execute cleanup operations WITHOUT holding the mutex
+		for i, ioShutdown := range ioShutdowns {
+			if err := ioShutdown(ctx); err != nil {
+				if i == 0 && r.ExecID == "" {
+					log.G(ctx).WithError(err).Error("failed to shutdown io after delete")
+				} else {
+					log.G(ctx).WithError(err).WithField("exec", r.ExecID).Error("failed to shutdown exec io after delete")
+				}
+			}
+		}
+
+		// Release network resources
+		if needNetworkClean {
+			env := &network.Environment{ID: r.ID}
+			if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
+				log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
+			}
+		}
+
+		// Stop CPU hotplug controller
+		if cpuController != nil {
+			cpuController.Stop()
+			log.G(ctx).Info("cpu-hotplug: controller stopped")
+		}
+
 		log.G(ctx).WithFields(log.Fields{
-			"id":            r.ID,
-			"exec":          r.ExecID,
-			"needShutdown":  needShutdown,
-			"vm_nil_after":  vmInst == nil,
-			"vm_nil_locked": s.vm == nil,
+			"id":           r.ID,
+			"exec":         r.ExecID,
+			"needShutdown": needShutdown,
 		}).Info("delete: shutdown decision")
 
+		// Shutdown VM if needed
 		if needShutdown {
 			log.G(ctx).Info("container deleted, shutting down VM")
 			// Mark as intentional shutdown so event stream close doesn't trigger panic
@@ -648,7 +664,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
 			}
 		} else {
-			log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "vm_nil": s.vm == nil}).Info("container deleted, VM shutdown skipped")
+			log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("container deleted, VM shutdown skipped")
 		}
 	}
 	return resp, err
@@ -1116,16 +1132,16 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 }
 
 // stopCPUHotplugController stops the CPU hotplug controller.
-// Must be called with s.mu held.
+// Note: This is now unused as Delete() handles it directly.
+// Kept for potential future use.
 func (s *service) stopCPUHotplugController(ctx context.Context) {
+	s.mu.Lock()
 	controller := s.cpuHotplugController
 	s.cpuHotplugController = nil
+	s.mu.Unlock()
 
 	if controller != nil {
-		// Stop is blocking - release mutex during shutdown to avoid deadlock
-		s.mu.Unlock()
 		controller.Stop()
 		log.G(ctx).Info("cpu-hotplug: controller stopped")
-		s.mu.Lock()
 	}
 }
