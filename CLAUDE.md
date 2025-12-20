@@ -31,7 +31,8 @@ Host (containerd)
 /usr/share/beacon/bin/qemu-system-x86_64  # VMM binary
 /usr/share/beacon/kernel/beacon-kernel-x86_64  # VM kernel
 /usr/share/beacon/kernel/beacon-initrd    # Initial ramdisk
-/var/lib/beacon/network.db                # IP allocation state
+/var/lib/beacon/cni-config.db             # CNI network configuration metadata
+/var/lib/cni/networks/                    # CNI IPAM state (IP allocations)
 /var/log/beacon/                          # VM logs
 ```
 
@@ -61,16 +62,14 @@ Override with environment variables:
 - **VM RESOURCES**: Configurable CPU and memory via `vm.VMResourceConfig`
 
 ### `network/` - Network Management
-- **Dual-mode architecture**: Legacy (default) or CNI (opt-in)
-- **Legacy mode**: Direct TAP creation, BoltDB IP allocation, beacon0 bridge
-- **CNI mode**: Standard CNI plugin chains for network configuration
-- Creates `beacon0` bridge (10.88.0.0/16)
-- Allocates IPs from pool (BoltDB in legacy mode, CNI IPAM in CNI mode)
-- Creates TAP devices per VM
-- Configures nftables rules for NAT
+- **CNI-based networking**: Uses standard CNI plugin chains exclusively
+- Creates TAP devices per VM using CNI
+- IP allocation managed by CNI IPAM plugins (host-local, static, dhcp)
+- Creates `beacon0` bridge (10.88.0.0/16) via CNI bridge plugin
+- Firewall rules managed by CNI firewall plugin
 - **Key files**:
-  - `network/network.go` - Network manager with mode routing
-  - `network/manager_cni.go` - CNI mode implementation
+  - `network/network.go` - Network manager interface
+  - `network/manager_cni.go` - CNI implementation
   - `network/cni/` - CNI plugin execution package
 
 ### `services/` - VM Services
@@ -134,26 +133,13 @@ go test -v -timeout 10m ./integration/...
 
 ### Debugging VM Networking
 
-**Legacy Mode**:
 ```bash
 # Check bridge
 ip link show beacon0
 ip addr show beacon0
 
 # Check TAP devices
-ip link show | grep beacon-
-
-# Check IP allocations
-ls -la /var/lib/beacon/network.db
-
-# Check nftables rules
-nft list ruleset | grep beacon_runner
-```
-
-**CNI Mode**:
-```bash
-# Check if CNI mode is active
-journalctl -u beacon-containerd -f | grep -i cni
+ip link show | grep -E "tap|beacon"
 
 # Verify CNI configuration
 ls /etc/cni/net.d/
@@ -162,11 +148,14 @@ cat /etc/cni/net.d/10-beacon.conflist | jq .
 # Check CNI plugins
 ls -la /opt/cni/bin/
 
+# Check CNI network metadata
+ls -la /var/lib/beacon/cni-config.db
+
 # Check CNI IPAM state (host-local)
 ls -la /var/lib/cni/networks/beacon-net/
 
-# Check TAP devices (if using tc-redirect-tap)
-ip link show | grep -E "tap|beacon"
+# Check firewall rules (managed by CNI)
+nft list ruleset | grep beacon
 
 # Test CNI plugin manually
 CNI_COMMAND=ADD CNI_CONTAINERID=test CNI_NETNS=/var/run/netns/test \
@@ -226,7 +215,7 @@ ps aux | grep qemu-system-x86_64
 1. `shim/task/service.go` - Shim service implementation
 2. `vminit/task/service.go` - VM init service
 3. `vm/qemu/instance.go` - QEMU integration
-4. `network/network.go` - Network manager with dual-mode routing
+4. `network/network.go` - CNI-based network manager interface
 5. `network/manager_cni.go` - CNI mode implementation
 6. `network/cni/cni.go` - CNI plugin executor
 7. `integration/vm_test.go` - Integration test examples
@@ -288,17 +277,10 @@ sudo usermod -aG kvm $USER
 
 ### "IP allocation failed"
 
-**Legacy Mode**:
 ```bash
-# Check network database
-ls -la /var/lib/beacon/network.db
+# Check CNI network metadata
+ls -la /var/lib/beacon/cni-config.db
 
-# Reconciliation runs every minute to clean stale leases
-# Wait or manually trigger by restarting shim
-```
-
-**CNI Mode**:
-```bash
 # Check CNI IPAM state
 ls -la /var/lib/cni/networks/beacon-net/
 
@@ -413,39 +395,25 @@ From `vminit/task/service.go`:
 
 ## Network Architecture
 
-### Network Modes
+### CNI-Based Networking
 
-Beacon supports two network modes:
+Beacon uses **CNI (Container Network Interface)** exclusively for all network management:
 
-#### Legacy Mode (Default)
-- Built-in NetworkManager with custom TAP device creation
-- BoltDB-based IP allocation (bitmap allocator)
-- Direct netlink calls for network configuration
-- Fixed subnet: 10.88.0.0/16
-- **Advantages**: Fast (~10-15ms network setup), simple configuration
-- **Use case**: Existing deployments, performance-critical workloads
-
-#### CNI Mode (Opt-in)
 - Standard CNI plugin chains for network configuration
 - Integration with CNI ecosystem (Calico, Cilium, etc.)
 - Support for multiple networks, custom routing, network policies
 - Firecracker-compatible via tc-redirect-tap plugin
-- **Advantages**: Standard ecosystem, advanced features
-- **Use case**: Advanced networking requirements, multiple networks
-- **See**: `docs/CNI_SETUP.md` for detailed setup guide
+- IP allocation delegated to CNI IPAM plugins (host-local, static, dhcp)
 
-### Enabling CNI Mode
+### CNI Configuration
 
-Set environment variables before starting containerd:
+Set environment variables to customize CNI settings:
 
 ```bash
-# Enable CNI mode
-export BEACON_CNI_MODE=1
-
 # Optional: Override default paths
-export BEACON_CNI_CONF_DIR=/etc/cni/net.d
-export BEACON_CNI_BIN_DIR=/opt/cni/bin
-export BEACON_CNI_NETWORK=beacon-net
+export BEACON_CNI_CONF_DIR=/etc/cni/net.d      # Default
+export BEACON_CNI_BIN_DIR=/opt/cni/bin         # Default
+export BEACON_CNI_NETWORK=beacon-net           # Default
 
 # Restart containerd shim
 systemctl restart beacon-containerd
@@ -489,19 +457,14 @@ go build -o /opt/cni/bin/tc-redirect-tap
 
 See `examples/cni/` for more configuration examples.
 
-### Subnet and IP Allocation
+### IP Allocation and State
 
-**Legacy Mode**:
-```
-beacon0 bridge: 10.88.0.1/16
-Container IPs:  10.88.0.2 - 10.88.255.254 (65,533 addresses)
-```
-**Persistent storage**: `/var/lib/beacon/network.db` (BoltDB)
-
-**CNI Mode**:
-- IP allocation managed by CNI IPAM plugins (host-local, static, dhcp)
-- Subnet and range configured in CNI configuration file
-- State stored by CNI plugin (typically `/var/lib/cni/networks/`)
+- **IP allocation**: Managed by CNI IPAM plugins (host-local, static, dhcp)
+- **Network metadata**: `/var/lib/beacon/cni-config.db` (BoltDB - stores CNI network config)
+- **IP allocation state**: `/var/lib/cni/networks/<network-name>/` (managed by CNI IPAM)
+- **Default subnet**: 10.88.0.0/16 (configured in CNI conflist)
+  - Gateway: 10.88.0.1
+  - Container IPs: 10.88.0.2 - 10.88.255.254 (65,533 addresses)
 
 ### Firewall Rules
 

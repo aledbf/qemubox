@@ -40,9 +40,11 @@ func GetLogDir() string {
 	return LogDir
 }
 
-// NetworkDBPath returns the path to the network allocation database
-func NetworkDBPath() string {
-	return filepath.Join(GetStateDir(), "network.db")
+// CNIConfigDBPath returns the path to the CNI network configuration database.
+// This database stores CNI network metadata, not IP allocations.
+// IP allocation is handled by CNI IPAM plugins (typically in /var/lib/cni/networks/).
+func CNIConfigDBPath() string {
+	return filepath.Join(GetStateDir(), "cni-config.db")
 }
 
 // KernelPath returns the full path to the kernel binary

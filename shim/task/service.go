@@ -152,29 +152,32 @@ func checkKVM() error {
 	return nil
 }
 
-// initNetworkManager creates and initializes a new NetworkManager instance
+// initNetworkManager creates and initializes a new NetworkManager instance.
+// Beacon uses CNI (Container Network Interface) for all network management.
+// This store persists CNI network configuration metadata; IP allocation
+// is delegated to CNI IPAM plugins (state stored in /var/lib/cni/networks/).
 func initNetworkManager(ctx context.Context) (network.NetworkManagerInterface, error) {
-	// Create stores using the new boltstore package
-	dbPath := paths.NetworkDBPath()
+	// Create BoltDB store for CNI network configuration metadata
+	dbPath := paths.CNIConfigDBPath()
 
 	networkConfigStore, err := boltstore.NewBoltStore[network.NetworkConfig](
 		dbPath, "network_configs",
 	)
 	if err != nil {
-		return nil, fmt.Errorf("create network config store: %w", err)
+		return nil, fmt.Errorf("create CNI network config store: %w", err)
 	}
 
-	// Load network configuration (CNI mode only)
+	// Load CNI network configuration from environment
 	netCfg := network.LoadNetworkConfig()
 
-	// Create NetworkManager (CNI mode only)
+	// Create CNI-based NetworkManager
 	nm, err := network.NewNetworkManager(
 		netCfg,
 		networkConfigStore,
 	)
 	if err != nil {
-		networkConfigStore.Close()
-		return nil, fmt.Errorf("create network manager: %w", err)
+		_ = networkConfigStore.Close()
+		return nil, fmt.Errorf("create CNI network manager: %w", err)
 	}
 
 	log.G(ctx).WithField("mode", netCfg.Mode).Info("NetworkManager initialized")
