@@ -20,10 +20,11 @@ type QMPClient struct {
 	scanner *bufio.Scanner
 	encoder *json.Encoder
 
-	nextID  atomic.Uint64
-	pending map[uint64]chan *qmpResponse
-	mu      sync.Mutex
-	closed  atomic.Bool
+	nextID         atomic.Uint64
+	pending        map[uint64]chan *qmpResponse
+	mu             sync.Mutex
+	closed         atomic.Bool
+	commandTimeout time.Duration // Timeout for QMP commands (default: 5 seconds)
 }
 
 type qmpCommand struct {

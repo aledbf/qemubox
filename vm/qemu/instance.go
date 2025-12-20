@@ -119,6 +119,35 @@ func (q *Instance) AddFS(ctx context.Context, tag, mountPath string, opts ...vm.
 	return fmt.Errorf("AddFS not implemented for QEMU: use EROFS or block devices")
 }
 
+// generateStableDiskID generates a stable device ID based on file metadata
+// This ensures consistent device naming across VM reboots and reduces issues
+// with device enumeration order. Uses inode and device number as stable identifiers.
+func generateStableDiskID(path string) (string, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to stat disk path: %w", err)
+	}
+
+	stat, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		// Fallback to simple hash if syscall.Stat_t not available
+		return fmt.Sprintf("disk-%x", hash(path)), nil
+	}
+
+	// Generate stable ID from device and inode numbers
+	// Format: disk-<dev>-<inode>
+	return fmt.Sprintf("disk-%x-%x", stat.Dev, stat.Ino), nil
+}
+
+// hash generates a simple hash of a string for fallback ID generation
+func hash(s string) uint32 {
+	h := uint32(0)
+	for i := 0; i < len(s); i++ {
+		h = h*31 + uint32(s[i])
+	}
+	return h
+}
+
 // AddDisk schedules a disk to be attached to the VM
 func (q *Instance) AddDisk(ctx context.Context, blockID, mountPath string, opts ...vm.MountOpt) error {
 	if vmState(q.vmState.Load()) != vmStateNew {
@@ -131,6 +160,15 @@ func (q *Instance) AddDisk(ctx context.Context, blockID, mountPath string, opts 
 	var mc vm.MountConfig
 	for _, o := range opts {
 		o(&mc)
+	}
+
+	// Generate stable device ID if not provided
+	if blockID == "" {
+		stableID, err := generateStableDiskID(mountPath)
+		if err != nil {
+			return fmt.Errorf("failed to generate stable disk ID: %w", err)
+		}
+		blockID = stableID
 	}
 
 	q.disks = append(q.disks, &DiskConfig{
