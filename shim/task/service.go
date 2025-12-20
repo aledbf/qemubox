@@ -1041,7 +1041,7 @@ func extractCPURequest(spec *specs.Spec) int {
 // extractMemoryRequest extracts the memory request from the OCI spec
 // Returns the memory limit in bytes, defaulting to 512MB if not specified
 func extractMemoryRequest(spec *specs.Spec) int64 {
-	const defaultMemory = 512 * 1024 * 1024 // 512MB default (was incorrectly commented as 512MB but set to 2GB)
+	const defaultMemory = 512 * 1024 * 1024 // 512MB default
 
 	if spec == nil || spec.Linux == nil || spec.Linux.Resources == nil || spec.Linux.Resources.Memory == nil {
 		return defaultMemory
@@ -1121,7 +1121,7 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 
 	// Type assert to check if this is a QEMU instance (only QEMU supports CPU hotplug currently)
 	type qemuInstance interface {
-		QMPClient() interface{}
+		QMPClient() *qemu.QMPClient
 	}
 
 	qemuVM, ok := vmi.(qemuInstance)
@@ -1130,16 +1130,10 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 		return
 	}
 
-	// Get QMP client - type assert to *qemu.QMPClient directly
-	qmpClientInterface := qemuVM.QMPClient()
-	if qmpClientInterface == nil {
+	// Get QMP client
+	qmpClient := qemuVM.QMPClient()
+	if qmpClient == nil {
 		log.G(ctx).Warn("cpu-hotplug: QMP client not available")
-		return
-	}
-
-	qmpClient, ok := qmpClientInterface.(*qemu.QMPClient)
-	if !ok {
-		log.G(ctx).Warn("cpu-hotplug: QMP client type assertion failed")
 		return
 	}
 
