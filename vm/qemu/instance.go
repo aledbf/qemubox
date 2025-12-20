@@ -69,14 +69,27 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}
 
+	qmpSocketPath := filepath.Join(stateDir, "qmp.sock")
+	vsockPath := filepath.Join(stateDir, "vsock.sock")
+
+	// Unix domain sockets have a 108-character path limit on Linux (including null terminator)
+	// Validate socket paths to prevent runtime errors
+	const maxSocketPathLen = 107
+	if len(qmpSocketPath) > maxSocketPathLen {
+		return nil, fmt.Errorf("QMP socket path too long (%d > %d): %s", len(qmpSocketPath), maxSocketPathLen, qmpSocketPath)
+	}
+	if len(vsockPath) > maxSocketPathLen {
+		return nil, fmt.Errorf("vsock socket path too long (%d > %d): %s", len(vsockPath), maxSocketPathLen, vsockPath)
+	}
+
 	inst := &Instance{
 		binaryPath:    binaryPath,
 		stateDir:      stateDir,
 		logDir:        logDir,
 		kernelPath:    kernelPath,
 		initrdPath:    initrdPath,
-		qmpSocketPath: filepath.Join(stateDir, "qmp.sock"),
-		vsockPath:     filepath.Join(stateDir, "vsock.sock"),
+		qmpSocketPath: qmpSocketPath,
+		vsockPath:     vsockPath,
 		consolePath:   filepath.Join(logDir, "console.log"),
 		qemuLogPath:   filepath.Join(logDir, "qemu.log"),
 		disks:         []*DiskConfig{},
