@@ -5,6 +5,7 @@ package manager
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -203,6 +204,21 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 	}
 
 	goruntime.LockOSThread()
+	defer goruntime.UnlockOSThread()
+
+	origNS, err := os.Open("/proc/self/ns/mnt")
+	if err != nil {
+		return params, err
+	}
+	defer func() {
+		_ = origNS.Close()
+	}()
+	defer func() {
+		if restoreErr := unix.Setns(int(origNS.Fd()), unix.CLONE_NEWNS); restoreErr != nil && retErr == nil {
+			retErr = restoreErr
+		}
+	}()
+
 	if err := setupMntNs(); err != nil {
 		return params, err
 	}
@@ -211,11 +227,11 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 		return params, err
 	}
 
-	goruntime.UnlockOSThread()
-
 	defer func() {
 		if retErr != nil {
-			cmd.Process.Kill()
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
 		}
 	}()
 	// make sure to wait after start
@@ -236,6 +252,9 @@ func (manager) Stop(ctx context.Context, id string) (shim.StopStatus, error) {
 	}
 	pid, err := strconv.Atoi(string(p))
 	if err != nil {
+		return shim.StopStatus{}, err
+	}
+	if err := unix.Kill(pid, unix.SIGKILL); err != nil && !errors.Is(err, unix.ESRCH) {
 		return shim.StopStatus{}, err
 	}
 	return shim.StopStatus{
