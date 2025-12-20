@@ -115,6 +115,7 @@ func (nm *NetworkManager) ensureNetworkResourcesCNI(env *Environment) error {
 	env.NetworkInfo = &NetworkInfo{
 		TapName:    result.TAPDevice,
 		BridgeName: bridgeName, // CNI may use different bridge, but keep for compatibility
+		MAC:        result.TAPMAC,
 		IP:         result.IPAddress,
 		Netmask:    "255.255.0.0", // TODO: Extract from CNI result
 		Gateway:    result.Gateway,

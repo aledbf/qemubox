@@ -4,7 +4,6 @@ package task
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"net"
 
@@ -14,21 +13,6 @@ import (
 	"github.com/aledbf/beacon/containerd/network"
 	"github.com/aledbf/beacon/containerd/vm"
 )
-
-// generateGuestMAC generates a unique MAC address for the VM guest interface
-// based on the container ID. This ensures the guest MAC is different from the
-// host TAP device MAC, preventing bridge loops.
-//
-// The MAC uses the locally administered unicast address format:
-// - First byte: 0x02 (locally administered, unicast)
-// - Remaining 5 bytes: derived from SHA256 hash of the ID
-func generateGuestMAC(id string) net.HardwareAddr {
-	hash := sha256.Sum256([]byte(id))
-	mac := make(net.HardwareAddr, 6)
-	mac[0] = 0x02 // Locally administered, unicast
-	copy(mac[1:], hash[:5])
-	return mac
-}
 
 // setupNetworking sets up networking using NetworkManager for dynamic IP allocation
 // and TAP device management. NetworkManager handles bridge creation, IP allocation,
@@ -54,9 +38,16 @@ func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vm
 		"netmask": env.NetworkInfo.Netmask,
 	}).Info("network resources allocated")
 
-	// Generate unique MAC address for the guest VM
-	// We must NOT use the TAP device's MAC as it would create a bridge loop
-	guestMAC := generateGuestMAC(containerID)
+	if env.NetworkInfo.MAC == "" {
+		nm.ReleaseNetworkResources(env)
+		return nil, fmt.Errorf("CNI did not report TAP MAC address")
+	}
+
+	guestMAC, err := net.ParseMAC(env.NetworkInfo.MAC)
+	if err != nil {
+		nm.ReleaseNetworkResources(env)
+		return nil, fmt.Errorf("invalid CNI TAP MAC address %q: %w", env.NetworkInfo.MAC, err)
+	}
 
 	log.G(ctx).WithFields(log.Fields{
 		"tap":       env.NetworkInfo.TapName,

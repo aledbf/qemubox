@@ -5,14 +5,20 @@ package cni
 import (
 	"fmt"
 	"net"
+	"runtime"
 
+	"github.com/containerd/log"
 	current "github.com/containernetworking/cni/pkg/types/100"
+	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netns"
 )
 
 // CNIResult contains the parsed result from CNI plugin execution.
 type CNIResult struct {
 	// TAPDevice is the name of the TAP device created by CNI plugins.
 	TAPDevice string
+	// TAPMAC is the MAC address reported for the TAP device (if provided by CNI).
+	TAPMAC string
 
 	// IPAddress is the IP address allocated to the VM.
 	IPAddress net.IP
@@ -27,14 +33,31 @@ type CNIResult struct {
 // 1. Extracts the TAP device from the CNI result interfaces
 // 2. Parses IP address and gateway information
 func ParseCNIResult(result *current.Result) (*CNIResult, error) {
+	return ParseCNIResultWithNetNS(result, "")
+}
+
+// ParseCNIResultWithNetNS parses a CNI result and extracts networking information.
+// If the TAP MAC is missing from the result, it attempts to read it from the
+// TAP device inside the provided network namespace.
+func ParseCNIResultWithNetNS(result *current.Result, netnsPath string) (*CNIResult, error) {
 	if result == nil {
 		return nil, fmt.Errorf("CNI result is nil")
 	}
 
 	// Extract TAP device
-	tapDevice, err := ExtractTAPDevice(result)
+	tapDevice, tapMAC, err := ExtractTAPDeviceInfo(result)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract TAP device: %w", err)
+	}
+	if tapMAC == "" {
+		if netnsPath == "" {
+			return nil, fmt.Errorf("TAP device %q has empty MAC and no netns provided", tapDevice)
+		}
+		resolvedMAC, err := readInterfaceMAC(netnsPath, tapDevice)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read TAP MAC from netns: %w", err)
+		}
+		tapMAC = resolvedMAC
 	}
 
 	// Parse IP address and gateway
@@ -50,7 +73,44 @@ func ParseCNIResult(result *current.Result) (*CNIResult, error) {
 
 	return &CNIResult{
 		TAPDevice: tapDevice,
+		TAPMAC:    tapMAC,
 		IPAddress: ipAddress,
 		Gateway:   gateway,
 	}, nil
+}
+
+func readInterfaceMAC(netnsPath, ifName string) (string, error) {
+	targetNS, err := netns.GetFromPath(netnsPath)
+	if err != nil {
+		return "", fmt.Errorf("get target netns: %w", err)
+	}
+	defer func() { _ = targetNS.Close() }()
+
+	origNS, err := netns.Get()
+	if err != nil {
+		return "", fmt.Errorf("get current netns: %w", err)
+	}
+	defer func() { _ = origNS.Close() }()
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	if err := netns.Set(targetNS); err != nil {
+		return "", fmt.Errorf("set target netns: %w", err)
+	}
+	defer func() {
+		if err := netns.Set(origNS); err != nil {
+			log.L.WithError(err).Error("failed to restore original netns")
+		}
+	}()
+
+	link, err := netlink.LinkByName(ifName)
+	if err != nil {
+		return "", fmt.Errorf("lookup interface %s: %w", ifName, err)
+	}
+	mac := link.Attrs().HardwareAddr
+	if mac == nil || len(mac) == 0 {
+		return "", fmt.Errorf("interface %q has empty MAC", ifName)
+	}
+	return mac.String(), nil
 }

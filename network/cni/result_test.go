@@ -16,6 +16,7 @@ func TestParseCNIResult_Success(t *testing.T) {
 		name        string
 		result      *current.Result
 		expectedTAP string
+		expectedMAC string
 		expectedIP  string
 		expectedGW  string
 	}{
@@ -39,6 +40,7 @@ func TestParseCNIResult_Success(t *testing.T) {
 				},
 			},
 			expectedTAP: "tap123",
+			expectedMAC: "11:22:33:44:55:66",
 			expectedIP:  "10.88.0.5",
 			expectedGW:  "10.88.0.1",
 		},
@@ -62,6 +64,7 @@ func TestParseCNIResult_Success(t *testing.T) {
 				},
 			},
 			expectedTAP: "tapABC123",
+			expectedMAC: "11:22:33:44:55:66",
 			expectedIP:  "10.88.0.10",
 			expectedGW:  "10.88.0.1",
 		},
@@ -101,6 +104,9 @@ func TestParseCNIResult_Success(t *testing.T) {
 			assert.NotNil(t, result)
 
 			assert.Equal(t, tt.expectedTAP, result.TAPDevice)
+			if tt.expectedMAC != "" {
+				assert.Equal(t, tt.expectedMAC, result.TAPMAC)
+			}
 			assert.Equal(t, tt.expectedIP, result.IPAddress.String())
 
 			if tt.expectedGW != "" {
@@ -122,6 +128,28 @@ func TestParseCNIResult_NoIPs(t *testing.T) {
 	_, err := ParseCNIResult(result)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no IP addresses")
+}
+
+func TestParseCNIResult_TAPMACRequired(t *testing.T) {
+	result := &current.Result{
+		CNIVersion: "1.0.0",
+		Interfaces: []*current.Interface{
+			{Name: "tap123", Sandbox: ""},
+		},
+		IPs: []*current.IPConfig{
+			{
+				Address: net.IPNet{
+					IP:   net.ParseIP("10.88.0.5"),
+					Mask: net.CIDRMask(16, 32),
+				},
+				Gateway: net.ParseIP("10.88.0.1"),
+			},
+		},
+	}
+
+	_, err := ParseCNIResult(result)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty MAC")
 }
 
 func TestParseCNIResult_NoTAPDevice(t *testing.T) {

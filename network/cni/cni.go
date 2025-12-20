@@ -56,7 +56,7 @@ func (m *CNIManager) Setup(ctx context.Context, vmID string, netns string) (*CNI
 	}
 
 	// Parse the result
-	cniResult, err := ParseCNIResult(result)
+	cniResult, err := ParseCNIResultWithNetNS(result, netns)
 	if err != nil {
 		// Clean up on parse failure
 		_ = m.Teardown(ctx, vmID, netns)

@@ -82,6 +82,7 @@ func LoadNetworkConfig() NetworkConfig {
 type NetworkInfo struct {
 	TapName    string `json:"tap_name"`
 	BridgeName string `json:"bridge_name"`
+	MAC        string `json:"mac"`
 	IP         net.IP `json:"ip"`
 	Netmask    string `json:"netmask"`
 	Gateway    net.IP `json:"gateway"`
