@@ -9,6 +9,7 @@ import (
 	"net"
 
 	"github.com/containerd/log"
+	"github.com/docker/docker/libnetwork/resolvconf"
 
 	"github.com/aledbf/beacon/containerd/network"
 	"github.com/aledbf/beacon/containerd/vm"
@@ -70,12 +71,8 @@ func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vm
 
 	log.G(ctx).WithField("tap", env.NetworkInfo.TapName).Info("TAP device attached to VM")
 
-	// Use the gateway as DNS server. The host bridge (10.88.0.1) will handle DNS forwarding.
-	// This avoids complexity of parsing /etc/resolv.conf, handling systemd-resolved (127.0.0.53),
-	// dnsmasq (127.0.0.1), and other local DNS proxies. Let the host handle DNS resolution.
-	// Fallback to Google DNS if for some reason there's no gateway.
-	dnsServers := []string{env.NetworkInfo.Gateway.String()}
-	if env.NetworkInfo.Gateway.IsUnspecified() {
+	dnsServers := resolveHostDNSServers(ctx)
+	if len(dnsServers) == 0 {
 		dnsServers = []string{"8.8.8.8", "8.8.4.4"}
 	}
 
@@ -89,4 +86,32 @@ func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vm
 		Netmask:       env.NetworkInfo.Netmask,
 		DNS:           dnsServers,
 	}, nil
+}
+
+func resolveHostDNSServers(ctx context.Context) []string {
+	path := resolvconf.Path()
+	file, err := resolvconf.GetSpecific(path)
+	if err != nil {
+		log.G(ctx).WithError(err).WithField("path", path).Warn("failed to read host resolv.conf for DNS")
+		return nil
+	}
+
+	filtered, err := resolvconf.FilterResolvDNS(file.Content, false)
+	if err != nil {
+		log.G(ctx).WithError(err).WithField("path", path).Warn("failed to filter host resolv.conf for DNS")
+		return nil
+	}
+
+	nameservers := resolvconf.GetNameservers(filtered.Content, resolvconf.IPv4)
+	if len(nameservers) == 0 {
+		log.G(ctx).WithField("path", path).Warn("no valid DNS servers found in host resolv.conf")
+		return nil
+	}
+
+	log.G(ctx).WithFields(log.Fields{
+		"path":        path,
+		"nameservers": nameservers,
+	}).Debug("resolved host DNS servers")
+
+	return nameservers
 }

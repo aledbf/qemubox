@@ -17,6 +17,7 @@ require (
 	github.com/containerd/ttrpc v1.2.7
 	github.com/containerd/typeurl/v2 v2.2.3
 	github.com/containernetworking/cni v1.3.0
+	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-events v0.0.0-20250808211157-605354379745
 	github.com/mdlayher/vsock v1.2.1
 	github.com/moby/sys/userns v0.1.0
