@@ -469,13 +469,19 @@ func (q *QMPClient) QueryCPUs(ctx context.Context) ([]CPUInfo, error) {
 // cpuID should be the next available CPU index (e.g., if you have CPUs 0-1, use cpuID=2)
 func (q *QMPClient) HotplugCPU(ctx context.Context, cpuID int) error {
 	args := map[string]interface{}{
-		"driver": "host-x86_64-cpu",
-		"id":     fmt.Sprintf("cpu%d", cpuID),
+		"driver":    "host-x86_64-cpu",
+		"id":        fmt.Sprintf("cpu%d", cpuID),
+		"socket-id": 0,
+		"core-id":   cpuID,
+		"thread-id": 0,
 	}
 
 	log.G(ctx).WithFields(log.Fields{
-		"cpu_id": cpuID,
-		"driver": "host-x86_64-cpu",
+		"cpu_id":    cpuID,
+		"driver":    "host-x86_64-cpu",
+		"socket_id": 0,
+		"core_id":   cpuID,
+		"thread_id": 0,
 	}).Debug("qemu: hotplugging vCPU")
 
 	return q.DeviceAdd(ctx, "host-x86_64-cpu", args)
