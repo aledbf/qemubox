@@ -717,7 +717,9 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 			log.G(ctx).Info("delete failed, attempting VM shutdown anyway")
 			s.intentionalShutdown.Store(true)
 			if err := s.vm.Shutdown(ctx); err != nil {
-				log.G(ctx).WithError(err).Warn("failed to shutdown VM after delete error")
+				if !isProcessAlreadyFinished(err) {
+					log.G(ctx).WithError(err).Warn("failed to shutdown VM after delete error")
+				}
 			}
 		}
 		return resp, err
@@ -1138,7 +1140,6 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 
 	qemuVM, ok := vmi.(qemuInstance)
 	if !ok {
-		log.G(ctx).Debug("cpu-hotplug: not supported (VM type does not support QMP)")
 		return
 	}
 

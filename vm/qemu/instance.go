@@ -261,8 +261,6 @@ func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
 			_ = fifo.Close()
 		}()
 
-		log.G(ctx).Debug("qemu: started console streaming from FIFO to log file")
-
 		// Stream console output from FIFO to log file
 		buf := make([]byte, 8192)
 		for {
@@ -279,15 +277,13 @@ func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
 				break
 			}
 		}
-
-		log.G(ctx).Debug("qemu: console streaming stopped")
 	}()
 
 	return nil
 }
 
 // validateConfiguration validates the VM configuration before starting
-func (q *Instance) validateConfiguration(ctx context.Context) error {
+func (q *Instance) validateConfiguration() error {
 	// Validate kernel exists
 	if _, err := os.Stat(q.kernelPath); err != nil {
 		return fmt.Errorf("kernel not found at %s: %w", q.kernelPath, err)
@@ -324,7 +320,6 @@ func (q *Instance) validateConfiguration(ctx context.Context) error {
 		return fmt.Errorf("max CPUs (%d) cannot be less than boot CPUs (%d)", q.resourceCfg.MaxCPUs, q.resourceCfg.BootCPUs)
 	}
 
-	log.G(ctx).Debug("qemu: configuration validation passed")
 	return nil
 }
 
@@ -408,8 +403,6 @@ func (q *Instance) monitorProcess(ctx context.Context) {
 		logger := log.G(ctx)
 		if exitErr != nil {
 			logger.WithError(exitErr).Debug("qemu: process exited")
-		} else {
-			logger.Debug("qemu: process exited cleanly")
 		}
 
 		// Signal Shutdown() that process exited
@@ -443,7 +436,6 @@ func (q *Instance) connectQMP(ctx context.Context) error {
 }
 
 func (q *Instance) connectVsockClient(ctx context.Context) error {
-	log.G(ctx).Debug("qemu: about to call connectVsockRPC")
 	select {
 	case <-ctx.Done():
 		log.G(ctx).WithError(ctx.Err()).Error("qemu: context cancelled before connectVsockRPC")
@@ -457,7 +449,6 @@ func (q *Instance) connectVsockClient(ctx context.Context) error {
 	default:
 	}
 	conn, err := q.connectVsockRPC(ctx)
-	log.G(ctx).WithError(err).Debug("qemu: connectVsockRPC returned")
 	if err != nil {
 		if q.cmd != nil && q.cmd.Process != nil {
 			_ = q.cmd.Process.Kill()
@@ -505,7 +496,7 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	}
 
 	// Validate configuration before starting
-	if err := q.validateConfiguration(ctx); err != nil {
+	if err := q.validateConfiguration(); err != nil {
 		q.vmState.Store(uint32(vmStateNew))
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
@@ -780,7 +771,7 @@ func (q *Instance) shutdownGuest(ctx context.Context, logger *log.Entry) {
 	}
 }
 
-func (q *Instance) cleanupAfterFailedKill(logger *log.Entry) {
+func (q *Instance) cleanupAfterFailedKill() {
 	// Clean up QMP and TAPs before returning error
 	if q.qmpClient != nil {
 		_ = q.qmpClient.Close()
@@ -791,7 +782,6 @@ func (q *Instance) cleanupAfterFailedKill(logger *log.Entry) {
 			_ = nic.TapFile.Close()
 		}
 	}
-	logger.Debug("qemu: cleaned up QMP and TAPs after failed shutdown")
 }
 
 func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error {
@@ -800,8 +790,6 @@ func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error
 	if q.cmd == nil || q.cmd.Process == nil {
 		return nil
 	}
-
-	logger.WithField("pid", q.cmd.Process.Pid).Debug("qemu: waiting briefly for guest shutdown to start")
 
 	// Wait up to 500ms for guest to receive ACPI signal
 	select {
@@ -846,7 +834,7 @@ func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error
 	if err := q.cmd.Process.Kill(); err != nil {
 		logger.WithError(err).Error("qemu: failed to send SIGKILL")
 		q.cmd = nil
-		q.cleanupAfterFailedKill(logger)
+		q.cleanupAfterFailedKill()
 		return fmt.Errorf("failed to kill QEMU process: %w", err)
 	}
 	logger.Info("qemu: sent SIGKILL to process")
@@ -860,7 +848,7 @@ func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error
 	case <-time.After(2 * time.Second):
 		logger.Error("qemu: process did not exit after SIGKILL")
 		q.cmd = nil
-		q.cleanupAfterFailedKill(logger)
+		q.cleanupAfterFailedKill()
 		return fmt.Errorf("process did not exit after SIGKILL")
 	}
 	q.cmd = nil
@@ -870,7 +858,6 @@ func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error
 func (q *Instance) cleanupResources(logger *log.Entry) {
 	// Close QMP client
 	if q.qmpClient != nil {
-		logger.Debug("qemu: closing QMP client")
 		if err := q.qmpClient.Close(); err != nil {
 			logger.WithError(err).Debug("qemu: error closing QMP client")
 		}
@@ -879,7 +866,6 @@ func (q *Instance) cleanupResources(logger *log.Entry) {
 
 	// Close console file (this will also stop the FIFO streaming goroutine)
 	if q.consoleFile != nil {
-		logger.Debug("qemu: closing console log file")
 		if err := q.consoleFile.Close(); err != nil {
 			logger.WithError(err).Debug("qemu: error closing console file")
 		}
@@ -888,7 +874,6 @@ func (q *Instance) cleanupResources(logger *log.Entry) {
 
 	// Remove FIFO pipe
 	if q.consoleFifoPath != "" {
-		logger.Debug("qemu: removing console FIFO")
 		if err := os.Remove(q.consoleFifoPath); err != nil && !os.IsNotExist(err) {
 			logger.WithError(err).Debug("qemu: error removing console FIFO")
 		}
@@ -901,7 +886,6 @@ func (q *Instance) cleanupResources(logger *log.Entry) {
 				logger.WithError(err).WithField("tap", nic.TapName).Debug("error closing TAP file descriptor")
 			}
 			nic.TapFile = nil
-			logger.WithField("tap", nic.TapName).Debug("closed TAP file descriptor")
 		}
 	}
 	q.tapNetns = ""
@@ -1014,9 +998,7 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 	}).Info("qemu: connecting to vsock RPC port")
 
 	// Wait a bit for vminitd to fully initialize
-	log.G(ctx).Debug("qemu: sleeping 500ms before vsock dial")
 	time.Sleep(500 * time.Millisecond)
-	log.G(ctx).Debug("qemu: starting vsock dial loop")
 
 	retryStart := time.Now()
 	pingDeadline := 50 * time.Millisecond
@@ -1079,20 +1061,17 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 // If the server disappears (e.g., guest reboot/poweroff), log a warning for debugging.
 // Shutdown() is responsible for coordinating all shutdown actions.
 func (q *Instance) monitorGuestRPC(ctx context.Context) {
-	log.G(ctx).Debug("qemu: starting guest RPC monitor")
 	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
 
 	failures := 0
 	for {
 		if vmState(q.vmState.Load()) == vmStateShutdown {
-			log.G(ctx).Debug("qemu: guest RPC monitor exiting (state shutdown)")
 			return
 		}
 
 		select {
 		case <-ctx.Done():
-			log.G(ctx).Debug("qemu: guest RPC monitor exiting (context done)")
 			return
 		case <-t.C:
 		}
