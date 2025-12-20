@@ -674,11 +674,23 @@ func (s *service) runDeleteCleanup(ctx context.Context, r *taskAPI.DeleteRequest
 		// Mark as intentional shutdown so event stream close doesn't trigger panic
 		s.intentionalShutdown.Store(true)
 		if err := plan.vmInst.Shutdown(ctx); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
+			if !isProcessAlreadyFinished(err) {
+				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
+			}
 		}
 	} else {
 		log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("container deleted, VM shutdown skipped")
 	}
+}
+
+func isProcessAlreadyFinished(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrProcessDone) {
+		return true
+	}
+	return strings.Contains(err.Error(), "process already finished")
 }
 
 // Delete the initial process and container.
