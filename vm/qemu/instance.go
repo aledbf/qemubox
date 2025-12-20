@@ -292,52 +292,32 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	log.G(ctx).Info("qemu: process started, waiting for QMP socket...")
 
 	// Monitor QEMU process in background
-	// When QEMU exits (poweroff, reboot, crash), trigger cleanup
+	// Process monitor: detects when QEMU exits (poweroff, reboot, crash)
+	// This goroutine only signals exit - cleanup is handled by Shutdown()
 	go func() {
 		exitErr := q.cmd.Wait()
+
+		logger := log.G(ctx)
+		if exitErr != nil {
+			logger.WithError(exitErr).Debug("qemu: process exited")
+		} else {
+			logger.Debug("qemu: process exited cleanly")
+		}
+
+		// Signal Shutdown() that process exited
 		select {
 		case q.waitCh <- exitErr:
 		default:
+			// Channel may be closed if Shutdown() already completed
 		}
-		close(q.waitCh)
 
-		// Cancel background monitors
-		q.mu.Lock()
+		// Cancel background monitors if still running
 		if q.runCancel != nil {
 			q.runCancel()
 		}
-		q.mu.Unlock()
 
-		// Update state to shutdown
-		q.vmState.Store(uint32(vmStateShutdown))
-
-		if exitErr != nil {
-			log.G(ctx).WithError(exitErr).Warn("qemu: process exited with error")
-		} else {
-			log.G(ctx).Info("qemu: process exited cleanly")
-		}
-
-		// Clean up resources
-		q.mu.Lock()
-		defer q.mu.Unlock()
-
-		// Close TTRPC client
-		if q.client != nil {
-			q.client.Close()
-			q.client = nil
-		}
-
-		// Close vsock connection
-		if q.vsockConn != nil {
-			q.vsockConn.Close()
-			q.vsockConn = nil
-		}
-
-		// Close QMP client
-		if q.qmpClient != nil {
-			q.qmpClient.Close()
-			q.qmpClient = nil
-		}
+		// Don't close clients/TAP here - Shutdown() owns cleanup
+		// This goroutine just detects process exit
 	}()
 
 	// Connect to QMP for control
@@ -358,11 +338,6 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// Note: q.mu is already held (locked at line 200), so we can set these fields directly
 	q.runCtx = runCtx
 	q.runCancel = runCancel
-
-	// Monitor QMP status as a fallback to detect guest shutdown even if
-	// asynchronous events are missed. If QEMU transitions to a shutdown/paused
-	// state, we explicitly send quit to ensure the process exits.
-	go q.monitorVMStatus(runCtx)
 
 	// Connect to vsock RPC server
 	log.G(ctx).Debug("qemu: about to call connectVsockRPC")
@@ -563,112 +538,139 @@ func (q *Instance) QMPClient() *QMPClient {
 
 // Shutdown gracefully shuts down the VM
 func (q *Instance) Shutdown(ctx context.Context) error {
-	log.G(ctx).Info("qemu: Shutdown() called, initiating VM shutdown")
+	logger := log.G(ctx)
+	logger.Info("qemu: Shutdown() called, initiating VM shutdown")
 
-	// Update state
-	q.vmState.Store(uint32(vmStateShutdown))
+	// Mark VM as shutting down (atomic flag prevents re-entry)
+	if !q.vmState.CompareAndSwap(uint32(vmStateRunning), uint32(vmStateShutdown)) {
+		currentState := vmState(q.vmState.Load())
+		logger.WithField("state", currentState).Debug("qemu: VM not in running state, shutdown may already be in progress")
+		// Not an error - idempotent shutdown
+		return nil
+	}
 
-	q.mu.Lock()
+	// Cancel background monitors (VM status, guest RPC)
 	if q.runCancel != nil {
-		log.G(ctx).Debug("qemu: cancelling background monitors")
+		logger.Debug("qemu: cancelling background monitors")
 		q.runCancel()
 	}
-	q.mu.Unlock()
 
+	// Hold mutex for entire shutdown to prevent races
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	var errs []error
-
-	// Close TTRPC client first
+	// Close TTRPC client to stop guest communication
 	if q.client != nil {
+		logger.Debug("qemu: closing TTRPC client")
 		if err := q.client.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("close ttrpc client: %w", err))
+			logger.WithError(err).Debug("qemu: error closing TTRPC client")
 		}
 		q.client = nil
 	}
 
-	// Close vsock connection
+	// Close vsock listener
 	if q.vsockConn != nil {
+		logger.Debug("qemu: closing vsock connection")
 		if err := q.vsockConn.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("close vsock connection: %w", err))
+			logger.WithError(err).Debug("qemu: error closing vsock connection")
 		}
 		q.vsockConn = nil
 	}
 
-	// Shutdown VM via QMP
+	// Send ACPI powerdown to guest OS
 	if q.qmpClient != nil {
-		log.G(ctx).Info("qemu: sending ACPI powerdown via QMP")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		logger.Info("qemu: sending ACPI powerdown via QMP")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		if err := q.qmpClient.Shutdown(shutdownCtx); err != nil {
-			log.G(ctx).WithError(err).Warn("qemu: QMP shutdown command failed")
-			errs = append(errs, fmt.Errorf("shutdown VM: %w", err))
-		} else {
-			log.G(ctx).Info("qemu: QMP shutdown command sent successfully")
+			logger.WithError(err).Warning("qemu: failed to send ACPI powerdown")
 		}
-		q.qmpClient.Close()
+		cancel()
+
+		// Close QMP connection (prevents further commands)
+		logger.Debug("qemu: closing QMP client")
+		if err := q.qmpClient.Close(); err != nil {
+			logger.WithError(err).Debug("qemu: error closing QMP client")
+		}
 		q.qmpClient = nil
 	}
 
-	// Wait for QEMU process to exit gracefully after ACPI powerdown
+	// Wait for QEMU process to exit gracefully (5 seconds)
+	shutdownTimeout := 5 * time.Second
 	if q.cmd != nil && q.cmd.Process != nil {
-		log.G(ctx).WithField("pid", q.cmd.Process.Pid).Info("qemu: waiting for QEMU process to exit (3 second timeout)")
-		waitCh := q.waitCh
-		if waitCh == nil {
-			log.G(ctx).Warn("qemu: wait channel missing; forcing process kill")
-			if err := q.cmd.Process.Kill(); err != nil {
-				log.G(ctx).WithError(err).Error("qemu: failed to kill process")
-				errs = append(errs, fmt.Errorf("kill process: %w", err))
-			} else {
-				log.G(ctx).Info("qemu: sent SIGKILL to process")
-			}
-			q.cmd = nil
-			goto cleanupTAPs
-		}
+		logger.WithFields(log.Fields{
+			"pid":     q.cmd.Process.Pid,
+			"timeout": shutdownTimeout,
+		}).Info("qemu: waiting for QEMU process to exit")
 
-		// Wait up to 3 seconds for graceful shutdown
 		select {
-		case exitErr := <-waitCh:
-			// Process exited cleanly
-			if exitErr != nil {
-				log.G(ctx).WithError(exitErr).Info("qemu: process exited with error")
-			} else {
-				log.G(ctx).Info("qemu: process exited cleanly after shutdown command")
+		case exitErr := <-q.waitCh:
+			// Process exited (may be nil or error)
+			if exitErr != nil && exitErr.Error() != "signal: killed" {
+				logger.WithError(exitErr).Warning("qemu: process exited with error")
+				// Return error but continue cleanup
+				defer func() {
+					// Clean up TAPs before returning
+					for _, nic := range q.nets {
+						if nic.TapFile != nil {
+							if err := nic.TapFile.Close(); err != nil {
+								log.G(ctx).WithError(err).WithField("tap", nic.TapName).Debug("error closing TAP file descriptor")
+							}
+						}
+					}
+				}()
+				return exitErr
 			}
-			q.cmd = nil
-		case <-time.After(3 * time.Second):
-			// Timeout - force quit then kill
-			log.G(ctx).Warn("qemu: process did not exit after 3 seconds, sending QMP quit then SIGKILL")
-			if q.qmpClient != nil {
-				if err := q.qmpClient.execute(context.Background(), "quit", nil); err != nil {
-					log.G(ctx).WithError(err).Warn("qemu: failed to send quit command during shutdown timeout")
-				}
-			}
+			logger.Info("qemu: process exited gracefully")
+
+		case <-time.After(shutdownTimeout):
+			// Process didn't exit after ACPI powerdown - force kill
+			logger.Warning("qemu: process did not exit after timeout, sending SIGKILL")
+
 			if err := q.cmd.Process.Kill(); err != nil {
-				log.G(ctx).WithError(err).Error("qemu: failed to kill process")
-				errs = append(errs, fmt.Errorf("kill process: %w", err))
-			} else {
-				log.G(ctx).Info("qemu: sent SIGKILL to process")
+				logger.WithError(err).Error("qemu: failed to send SIGKILL")
+				// Clean up TAPs before returning error
+				for _, nic := range q.nets {
+					if nic.TapFile != nil {
+						_ = nic.TapFile.Close() // Best effort
+					}
+				}
+				return fmt.Errorf("failed to kill QEMU process: %w", err)
 			}
-			<-waitCh // Wait for Wait() to finish
-			q.cmd = nil
+			logger.Info("qemu: sent SIGKILL to process")
+
+			// Wait for kill to complete (with timeout)
+			select {
+			case exitErr := <-q.waitCh:
+				if exitErr != nil && exitErr.Error() != "signal: killed" {
+					logger.WithError(exitErr).Debug("qemu: process exited after SIGKILL")
+				}
+			case <-time.After(2 * time.Second):
+				logger.Error("qemu: process did not exit after SIGKILL")
+				// Clean up TAPs before returning error
+				for _, nic := range q.nets {
+					if nic.TapFile != nil {
+						_ = nic.TapFile.Close() // Best effort
+					}
+				}
+				return fmt.Errorf("process did not exit after SIGKILL")
+			}
 		}
+		q.cmd = nil
 	}
 
 	// Close TAP file descriptors
-	// No need to move TAPs back - they never left their sandbox namespaces!
-cleanupTAPs:
 	for _, nic := range q.nets {
 		if nic.TapFile != nil {
-			nic.TapFile.Close()
+			if err := nic.TapFile.Close(); err != nil {
+				logger.WithError(err).WithField("tap", nic.TapName).Debug("error closing TAP file descriptor")
+			}
 			nic.TapFile = nil
-			log.G(ctx).WithField("tap", nic.TapName).Debug("closed TAP file descriptor")
+			logger.WithField("tap", nic.TapName).Debug("closed TAP file descriptor")
 		}
 	}
 	q.tapNetns = ""
 
-	return errors.Join(errs...)
+	return nil
 }
 
 // StartStream creates a new stream connection to the VM for I/O operations.
@@ -778,67 +780,11 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 	}
 }
 
-// monitorVMStatus polls QMP status to detect guest-initiated shutdown when
-// QMP events are missed. If the status shows shutdown or paused, it forces
-// QEMU to exit via a quit command.
-func (q *Instance) monitorVMStatus(ctx context.Context) {
-	log.G(ctx).Debug("qemu: starting VM status monitor")
-	// Poll more frequently (500ms instead of 1s) for faster shutdown detection
-	t := time.NewTicker(500 * time.Millisecond)
-	defer t.Stop()
-
-	for {
-		if vmState(q.vmState.Load()) == vmStateShutdown {
-			log.G(ctx).Debug("qemu: VM status monitor exiting (state shutdown)")
-			return
-		}
-
-		select {
-		case <-ctx.Done():
-			log.G(ctx).Debug("qemu: VM status monitor exiting (context done)")
-			return
-		case <-t.C:
-		}
-
-		q.mu.Lock()
-		qmp := q.qmpClient
-		q.mu.Unlock()
-
-		if qmp == nil {
-			continue
-		}
-
-		status, err := qmp.QueryStatus(context.Background())
-		if err != nil {
-			log.G(ctx).WithError(err).Debug("qemu: query-status failed")
-			continue
-		}
-
-		log.G(ctx).WithFields(log.Fields{
-			"status":  status.Status,
-			"running": status.Running,
-		}).Debug("qemu: VM status check")
-
-		// Check both status string and running flag
-		// When guest powers off, status may be "shutdown", "finish-migrate", or running=false
-		if status.Status == "shutdown" || status.Status == "paused" || status.Status == "inmigrate" || !status.Running {
-			log.G(ctx).WithFields(log.Fields{
-				"status":  status.Status,
-				"running": status.Running,
-			}).Info("qemu: VM no longer running, sending quit command")
-			if err := qmp.execute(context.Background(), "quit", nil); err != nil {
-				log.G(ctx).WithError(err).Warn("qemu: failed to send quit command after status change")
-			}
-			return
-		}
-	}
-}
-
 // monitorGuestRPC periodically checks if the in-guest vminitd RPC server is reachable.
-// If the server disappears (e.g., guest reboot/poweroff), we force the VMM to exit.
+// If the server disappears (e.g., guest reboot/poweroff), log a warning for debugging.
+// Shutdown() is responsible for coordinating all shutdown actions.
 func (q *Instance) monitorGuestRPC(ctx context.Context) {
 	log.G(ctx).Debug("qemu: starting guest RPC monitor")
-	// Check more frequently (500ms) for faster shutdown detection
 	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
 
@@ -871,30 +817,10 @@ func (q *Instance) monitorGuestRPC(ctx context.Context) {
 			log.G(ctx).WithError(err).WithField("failures", failures).Debug("qemu: guest RPC dial failed")
 		}
 
-		// Reduce threshold from 3 to 2 for faster detection (2 failures = 1 second max)
+		// Log when guest becomes unreachable (may indicate reboot or hang)
 		if failures >= 2 {
-			log.G(ctx).WithError(err).WithField("failures", failures).Warn("qemu: guest RPC unreachable, forcing VM exit")
-			q.forceQuit(ctx)
-			return
-		}
-	}
-}
-
-// forceQuit attempts to terminate the VM process via QMP quit, falling back to SIGKILL.
-func (q *Instance) forceQuit(ctx context.Context) {
-	q.mu.Lock()
-	qmp := q.qmpClient
-	cmd := q.cmd
-	q.mu.Unlock()
-
-	if qmp != nil {
-		if err := qmp.execute(context.Background(), "quit", nil); err != nil {
-			log.G(ctx).WithError(err).Warn("qemu: failed to send quit command during force quit")
-		}
-	}
-	if cmd != nil && cmd.Process != nil {
-		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			log.G(ctx).WithError(err).Warn("qemu: failed to kill process during force quit")
+			log.G(ctx).WithField("failures", failures).Warning("qemu: guest RPC unreachable for 1 second (may be rebooting or hung)")
+			// Don't force quit - Shutdown() will handle timeouts
 		}
 	}
 }

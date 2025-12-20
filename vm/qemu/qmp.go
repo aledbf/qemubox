@@ -192,42 +192,15 @@ func (q *QMPClient) eventLoop(ctx context.Context) {
 				"data":  resp.Data,
 			}).Info("qemu: QMP event received")
 
-			// Handle guest-initiated shutdown/reboot
-			// With -no-reboot, QEMU pauses on RESET instead of rebooting
-			// We want to exit cleanly in both cases
+			// Handle guest-initiated shutdown/reboot events
+			// These are informational - the process monitor will detect when QEMU exits
+			// and trigger cleanup. Shutdown() coordinates all shutdown actions.
 			switch resp.Event {
-			case "SHUTDOWN":
-				// Guest called poweroff - explicitly tell QEMU to exit so the host
-				// process and shim are cleaned up even if QEMU wouldn't exit itself.
-				log.G(ctx).WithField("data", resp.Data).Info("qemu: guest initiated SHUTDOWN event, sending quit command")
-				go func() {
-					if err := q.execute(context.Background(), "quit", nil); err != nil {
-						log.G(ctx).WithError(err).Warn("qemu: failed to send quit command after SHUTDOWN")
-					} else {
-						log.G(ctx).Info("qemu: quit command sent successfully after SHUTDOWN")
-					}
-				}()
-			case "POWERDOWN":
-				// Some QEMU builds emit POWERDOWN instead of SHUTDOWN for ACPI poweroff.
-				log.G(ctx).WithField("data", resp.Data).Info("qemu: guest POWERDOWN event, sending quit command")
-				go func() {
-					if err := q.execute(context.Background(), "quit", nil); err != nil {
-						log.G(ctx).WithError(err).Warn("qemu: failed to send quit command after POWERDOWN")
-					} else {
-						log.G(ctx).Info("qemu: quit command sent successfully after POWERDOWN")
-					}
-				}()
-			case "RESET":
-				// Guest called reboot - with -no-reboot QEMU paused
-				// Send quit command to exit cleanly
-				log.G(ctx).WithField("data", resp.Data).Info("qemu: guest initiated RESET event, sending quit command")
-				go func() {
-					if err := q.execute(context.Background(), "quit", nil); err != nil {
-						log.G(ctx).WithError(err).Warn("qemu: failed to send quit command after RESET")
-					} else {
-						log.G(ctx).Info("qemu: quit command sent successfully after RESET")
-					}
-				}()
+			case "SHUTDOWN", "POWERDOWN", "RESET":
+				log.G(ctx).WithFields(log.Fields{
+					"event": resp.Event,
+					"data":  resp.Data,
+				}).Debug("qemu: received shutdown event from guest")
 			}
 			continue
 		}
