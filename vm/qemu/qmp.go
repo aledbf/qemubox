@@ -405,6 +405,13 @@ type CPUInfo struct {
 	Target   string `json:"target"`
 }
 
+// HotpluggableCPU describes an available CPU hotplug slot.
+type HotpluggableCPU struct {
+	Type       string                 `json:"type"`
+	Props      map[string]interface{} `json:"props"`
+	VCPUsCount int                    `json:"vcpus-count"`
+}
+
 // QueryCPUs returns information about all vCPUs in the VM
 // Uses query-cpus-fast which is more efficient than query-cpus
 func (q *QMPClient) QueryCPUs(ctx context.Context) ([]CPUInfo, error) {
@@ -465,26 +472,143 @@ func (q *QMPClient) QueryCPUs(ctx context.Context) ([]CPUInfo, error) {
 	}
 }
 
+// QueryHotpluggableCPUs returns available CPU hotplug slots.
+func (q *QMPClient) QueryHotpluggableCPUs(ctx context.Context) ([]HotpluggableCPU, error) {
+	if q.closed.Load() {
+		return nil, fmt.Errorf("QMP client closed")
+	}
+
+	id := q.nextID.Add(1)
+	respChan := make(chan *qmpResponse, 1)
+
+	q.mu.Lock()
+	q.pending[id] = respChan
+	q.mu.Unlock()
+
+	cmd := qmpCommand{
+		Execute: "query-hotpluggable-cpus",
+		ID:      id,
+	}
+
+	if err := q.encoder.Encode(cmd); err != nil {
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, fmt.Errorf("failed to send query-hotpluggable-cpus: %w", err)
+	}
+
+	select {
+	case resp := <-respChan:
+		if resp.Error != nil {
+			return nil, fmt.Errorf("QMP error for query-hotpluggable-cpus: %s: %s", resp.Error.Class, resp.Error.Desc)
+		}
+
+		var cpus []HotpluggableCPU
+		returnBytes, err := json.Marshal(resp.Return)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal hotpluggable CPU info: %w", err)
+		}
+
+		if err := json.Unmarshal(returnBytes, &cpus); err != nil {
+			return nil, fmt.Errorf("failed to parse hotpluggable CPU info: %w", err)
+		}
+
+		return cpus, nil
+
+	case <-ctx.Done():
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, ctx.Err()
+
+	case <-time.After(5 * time.Second):
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, fmt.Errorf("timeout waiting for query-hotpluggable-cpus response")
+	}
+}
+
 // HotplugCPU adds a new vCPU to the running VM
 // cpuID should be the next available CPU index (e.g., if you have CPUs 0-1, use cpuID=2)
 func (q *QMPClient) HotplugCPU(ctx context.Context, cpuID int) error {
+	driver := "host-x86_64-cpu"
 	args := map[string]interface{}{
-		"driver":    "host-x86_64-cpu",
 		"id":        fmt.Sprintf("cpu%d", cpuID),
 		"socket-id": 0,
 		"core-id":   cpuID,
 		"thread-id": 0,
 	}
 
+	if cpus, err := q.QueryHotpluggableCPUs(ctx); err == nil {
+		if len(cpus) == 0 {
+			log.G(ctx).WithField("cpu_id", cpuID).
+				Warn("qemu: no hotpluggable CPU slots reported by QEMU")
+			return fmt.Errorf("no hotpluggable CPU slots reported by QEMU")
+		}
+		if match := matchHotpluggableCPU(cpus, cpuID); match != nil {
+			driver = match.Type
+			args = map[string]interface{}{
+				"id": fmt.Sprintf("cpu%d", cpuID),
+			}
+			for k, v := range match.Props {
+				args[k] = v
+			}
+		} else {
+			log.G(ctx).WithFields(log.Fields{
+				"cpu_id": cpuID,
+				"count":  len(cpus),
+			}).Debug("qemu: no matching hotpluggable CPU slot; using default props")
+		}
+	} else {
+		log.G(ctx).WithFields(log.Fields{
+			"cpu_id": cpuID,
+			"error":  err,
+		}).Debug("qemu: failed to query hotpluggable CPUs; using default props")
+	}
+
 	log.G(ctx).WithFields(log.Fields{
 		"cpu_id":    cpuID,
-		"driver":    "host-x86_64-cpu",
-		"socket_id": 0,
-		"core_id":   cpuID,
-		"thread_id": 0,
+		"driver":    driver,
+		"socket_id": args["socket-id"],
+		"core_id":   args["core-id"],
+		"thread_id": args["thread-id"],
 	}).Debug("qemu: hotplugging vCPU")
 
-	return q.DeviceAdd(ctx, "host-x86_64-cpu", args)
+	return q.DeviceAdd(ctx, driver, args)
+}
+
+func matchHotpluggableCPU(cpus []HotpluggableCPU, cpuID int) *HotpluggableCPU {
+	for i := range cpus {
+		props := cpus[i].Props
+		if props == nil {
+			continue
+		}
+		coreID, ok := intFromProp(props["core-id"])
+		if ok && coreID == cpuID {
+			return &cpus[i]
+		}
+	}
+	return nil
+}
+
+func intFromProp(value interface{}) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case uint32:
+		return int(v), true
+	case uint64:
+		return int(v), true
+	default:
+		return 0, false
+	}
 }
 
 // UnplugCPU removes a vCPU from the running VM

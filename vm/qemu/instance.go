@@ -661,7 +661,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 		"-machine", "q35,accel=kvm,kernel-irqchip=on,hpet=off,acpi=on", // Optimize: use kernel IRQ chip, disable HPET
 		"-cpu", "host,migratable=on",
 
-		"-smp", fmt.Sprintf("%d,maxcpus=%d", q.resourceCfg.BootCPUs, q.resourceCfg.MaxCPUs),
+		"-smp", fmt.Sprintf("cpus=%d,sockets=1,cores=%d,threads=1,maxcpus=%d", q.resourceCfg.BootCPUs, q.resourceCfg.MaxCPUs, q.resourceCfg.MaxCPUs),
 	}
 
 	// Memory configuration - optimize slots based on hotplug needs

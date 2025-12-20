@@ -1153,6 +1153,19 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 		return
 	}
 
+	if cpus, err := qmpClient.QueryHotpluggableCPUs(ctx); err != nil {
+		log.G(ctx).WithError(err).Warn("cpu-hotplug: failed to query hotpluggable CPUs")
+	} else {
+		sample := ""
+		if len(cpus) > 0 {
+			sample = fmt.Sprintf("type=%s props=%v", cpus[0].Type, cpus[0].Props)
+		}
+		log.G(ctx).WithFields(log.Fields{
+			"count":  len(cpus),
+			"sample": sample,
+		}).Debug("cpu-hotplug: hotpluggable CPU slots")
+	}
+
 	// Create controller configuration from environment variables
 	config := cpuhotplug.DefaultConfig()
 
