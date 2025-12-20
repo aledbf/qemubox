@@ -188,6 +188,60 @@ func (q *QMPClient) execute(ctx context.Context, command string, args map[string
 	}
 }
 
+type qmpEventHandler func(logger *log.Entry, data map[string]interface{})
+
+var qmpEventHandlers = map[string]qmpEventHandler{
+	"SHUTDOWN": func(logger *log.Entry, data map[string]interface{}) {
+		reason := qmpStringField(data, "reason", "unknown")
+		logger.WithField("reason", reason).Info("qemu: guest initiated shutdown")
+	},
+	"POWERDOWN": func(logger *log.Entry, data map[string]interface{}) {
+		logger.Info("qemu: ACPI powerdown event received")
+	},
+	"RESET": func(logger *log.Entry, data map[string]interface{}) {
+		logger.Warn("qemu: guest reset/reboot detected")
+	},
+	"STOP": func(logger *log.Entry, data map[string]interface{}) {
+		logger.Debug("qemu: VM execution paused")
+	},
+	"RESUME": func(logger *log.Entry, data map[string]interface{}) {
+		logger.Debug("qemu: VM execution resumed")
+	},
+	"DEVICE_DELETED": func(logger *log.Entry, data map[string]interface{}) {
+		deviceID := qmpStringField(data, "device", "unknown")
+		logger.WithField("device", deviceID).Debug("qemu: device removed")
+	},
+	"NIC_RX_FILTER_CHANGED": func(logger *log.Entry, data map[string]interface{}) {
+		nicName := qmpStringField(data, "name", "unknown")
+		logger.WithField("nic", nicName).Debug("qemu: NIC RX filter changed")
+	},
+	"WATCHDOG": func(logger *log.Entry, data map[string]interface{}) {
+		action := qmpStringField(data, "action", "unknown")
+		logger.WithField("action", action).Warn("qemu: watchdog timer expired")
+	},
+	"GUEST_PANICKED": func(logger *log.Entry, data map[string]interface{}) {
+		logger.Error("qemu: guest kernel panic detected")
+	},
+	"BLOCK_IO_ERROR": func(logger *log.Entry, data map[string]interface{}) {
+		device := qmpStringField(data, "device", "unknown")
+		operation := qmpStringField(data, "operation", "unknown")
+		logger.WithFields(log.Fields{
+			"device":    device,
+			"operation": operation,
+		}).Error("qemu: block I/O error")
+	},
+}
+
+func qmpStringField(data map[string]interface{}, key string, fallback string) string {
+	if data == nil {
+		return fallback
+	}
+	if value, ok := data[key].(string); ok {
+		return value
+	}
+	return fallback
+}
+
 // handleEvent processes QMP asynchronous events with structured logging
 func (q *QMPClient) handleEvent(ctx context.Context, resp *qmpResponse) {
 	logger := log.G(ctx).WithFields(log.Fields{
@@ -195,91 +249,12 @@ func (q *QMPClient) handleEvent(ctx context.Context, resp *qmpResponse) {
 		"data":  resp.Data,
 	})
 
-	// Process events based on type
-	switch resp.Event {
-	case "SHUTDOWN":
-		// Guest initiated clean shutdown (e.g., via 'poweroff' command)
-		// The VM will exit shortly after this event
-		reason := "unknown"
-		if resp.Data != nil {
-			if r, ok := resp.Data["reason"].(string); ok {
-				reason = r
-			}
-		}
-		logger.WithField("reason", reason).Info("qemu: guest initiated shutdown")
-
-	case "POWERDOWN":
-		// ACPI power button pressed or system_powerdown command received
-		logger.Info("qemu: ACPI powerdown event received")
-
-	case "RESET":
-		// Guest rebooted (either via 'reboot' command or system_reset QMP command)
-		// This may indicate an unexpected reboot if not initiated by us
-		logger.Warn("qemu: guest reset/reboot detected")
-
-	case "STOP":
-		// VM execution paused (e.g., via 'stop' QMP command)
-		logger.Debug("qemu: VM execution paused")
-
-	case "RESUME":
-		// VM execution resumed (e.g., via 'cont' QMP command)
-		logger.Debug("qemu: VM execution resumed")
-
-	case "DEVICE_DELETED":
-		// Device removal completed (useful for tracking hotplug operations)
-		deviceID := "unknown"
-		if resp.Data != nil {
-			if id, ok := resp.Data["device"].(string); ok {
-				deviceID = id
-			}
-		}
-		logger.WithField("device", deviceID).Debug("qemu: device removed")
-
-	case "NIC_RX_FILTER_CHANGED":
-		// Network interface RX filter changed (MAC address filter, VLAN settings, etc.)
-		nicName := "unknown"
-		if resp.Data != nil {
-			if name, ok := resp.Data["name"].(string); ok {
-				nicName = name
-			}
-		}
-		logger.WithField("nic", nicName).Debug("qemu: NIC RX filter changed")
-
-	case "WATCHDOG":
-		// Watchdog timer expired - indicates guest may be hung
-		action := "unknown"
-		if resp.Data != nil {
-			if a, ok := resp.Data["action"].(string); ok {
-				action = a
-			}
-		}
-		logger.WithField("action", action).Warn("qemu: watchdog timer expired")
-
-	case "GUEST_PANICKED":
-		// Guest kernel panic detected
-		logger.Error("qemu: guest kernel panic detected")
-
-	case "BLOCK_IO_ERROR":
-		// Disk I/O error occurred
-		device := "unknown"
-		operation := "unknown"
-		if resp.Data != nil {
-			if d, ok := resp.Data["device"].(string); ok {
-				device = d
-			}
-			if op, ok := resp.Data["operation"].(string); ok {
-				operation = op
-			}
-		}
-		logger.WithFields(log.Fields{
-			"device":    device,
-			"operation": operation,
-		}).Error("qemu: block I/O error")
-
-	default:
-		// Log other events at debug level
+	handler, ok := qmpEventHandlers[resp.Event]
+	if !ok {
 		logger.Debug("qemu: QMP event received")
+		return
 	}
+	handler(logger, resp.Data)
 }
 
 // eventLoop processes QMP messages (responses and events)

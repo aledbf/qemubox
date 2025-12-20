@@ -100,7 +100,9 @@ func DumpVMDKDescriptorToFile(vmdkdesc string, cid uint32, devices []string) err
 	if err != nil {
 		return err
 	}
-	err = DumpVMDKDescriptor(f, cid, devices)
-	f.Close()
-	return err
+	if err := DumpVMDKDescriptor(f, cid, devices); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }

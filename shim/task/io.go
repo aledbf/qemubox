@@ -65,7 +65,9 @@ func (s *service) forwardIO(ctx context.Context, ss streamCreator, sio stdio.Std
 		if err != nil {
 			return stdio.Stdio{}, nil, err
 		}
-		f.Close()
+		if err := f.Close(); err != nil {
+			return stdio.Stdio{}, nil, err
+		}
 		pio.Stdout = filePath
 		pio.Stderr = filePath
 		pio, streams, err = createStreams(ctx, ss, pio)
