@@ -233,7 +233,21 @@ func (q *QMPClient) eventLoop(ctx context.Context) {
 	}
 }
 
-// Shutdown gracefully shuts down the VM
+// SendCtrlAltDelete sends CTRL+ALT+DELETE key sequence to the VM
+// This is more reliable than ACPI powerdown for some Linux distributions
+func (q *QMPClient) SendCtrlAltDelete(ctx context.Context) error {
+	// Send CTRL+ALT+DELETE key sequence via QMP
+	keys := []interface{}{
+		map[string]interface{}{"type": "qcode", "data": "ctrl"},
+		map[string]interface{}{"type": "qcode", "data": "alt"},
+		map[string]interface{}{"type": "qcode", "data": "delete"},
+	}
+	return q.execute(ctx, "send-key", map[string]interface{}{
+		"keys": keys,
+	})
+}
+
+// Shutdown gracefully shuts down the VM using ACPI powerdown
 func (q *QMPClient) Shutdown(ctx context.Context) error {
 	return q.execute(ctx, "system_powerdown", nil)
 }

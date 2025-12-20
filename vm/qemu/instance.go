@@ -590,12 +590,17 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 		q.vsockConn = nil
 	}
 
-	// Send ACPI powerdown to guest OS
+	// Send graceful shutdown to guest OS
+	// Try CTRL+ALT+DELETE first (more reliable for some distributions), then ACPI powerdown
 	if q.qmpClient != nil {
-		logger.Info("qemu: sending ACPI powerdown via QMP")
+		logger.Info("qemu: sending CTRL+ALT+DELETE via QMP")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		if err := q.qmpClient.Shutdown(shutdownCtx); err != nil {
-			logger.WithError(err).Warning("qemu: failed to send ACPI powerdown")
+		if err := q.qmpClient.SendCtrlAltDelete(shutdownCtx); err != nil {
+			logger.WithError(err).Debug("qemu: failed to send CTRL+ALT+DELETE, trying ACPI powerdown")
+			// Fall back to ACPI powerdown
+			if err := q.qmpClient.Shutdown(shutdownCtx); err != nil {
+				logger.WithError(err).Warning("qemu: failed to send ACPI powerdown")
+			}
 		}
 		cancel()
 	}
