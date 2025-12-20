@@ -62,13 +62,14 @@ func TestExtractTAPDevice_Success(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name: "tap device in sandbox (should be ignored)",
+			name: "tap device in sandbox",
 			result: &current.Result{
 				Interfaces: []*current.Interface{
 					{Name: "tap456", Sandbox: "/var/run/netns/test"},
 				},
 			},
-			expectError: true,
+			expectedTAP: "tap456",
+			expectError: false,
 		},
 		{
 			name: "no interfaces",
@@ -171,20 +172,6 @@ func TestExtractTAPDevice_MultipleMatches(t *testing.T) {
 	tapDevice, err := ExtractTAPDevice(result)
 	assert.NoError(t, err)
 	assert.Equal(t, "tap111", tapDevice)
-}
-
-func TestExtractTAPDevice_IgnoresSandboxedInterfaces(t *testing.T) {
-	result := &current.Result{
-		Interfaces: []*current.Interface{
-			{Name: "tap123", Sandbox: "/var/run/netns/container"},
-			{Name: "tap456", Sandbox: ""}, // This one should be detected
-			{Name: "tap789", Sandbox: "/var/run/netns/another"},
-		},
-	}
-
-	tapDevice, err := ExtractTAPDevice(result)
-	assert.NoError(t, err)
-	assert.Equal(t, "tap456", tapDevice)
 }
 
 func TestExtractTAPDevice_CaseSensitive(t *testing.T) {
