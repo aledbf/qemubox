@@ -408,6 +408,7 @@ type CPUInfo struct {
 // HotpluggableCPU describes an available CPU hotplug slot.
 type HotpluggableCPU struct {
 	Type       string                 `json:"type"`
+	QOMPath    string                 `json:"qom-path"`
 	Props      map[string]interface{} `json:"props"`
 	VCPUsCount int                    `json:"vcpus-count"`
 }
@@ -532,6 +533,11 @@ func (q *QMPClient) QueryHotpluggableCPUs(ctx context.Context) ([]HotpluggableCP
 // HotplugCPU adds a new vCPU to the running VM
 // cpuID should be the next available CPU index (e.g., if you have CPUs 0-1, use cpuID=2)
 func (q *QMPClient) HotplugCPU(ctx context.Context, cpuID int) error {
+	beforeCount := -1
+	if cpus, err := q.QueryCPUs(ctx); err == nil {
+		beforeCount = len(cpus)
+	}
+
 	driver := "host-x86_64-cpu"
 	args := map[string]interface{}{
 		"id":        fmt.Sprintf("cpu%d", cpuID),
@@ -554,6 +560,12 @@ func (q *QMPClient) HotplugCPU(ctx context.Context, cpuID int) error {
 			for k, v := range match.Props {
 				args[k] = v
 			}
+			log.G(ctx).WithFields(log.Fields{
+				"cpu_id":   cpuID,
+				"driver":   driver,
+				"props":    match.Props,
+				"qom_path": match.QOMPath,
+			}).Debug("qemu: using hotpluggable CPU slot")
 		} else {
 			log.G(ctx).WithFields(log.Fields{
 				"cpu_id": cpuID,
@@ -575,11 +587,32 @@ func (q *QMPClient) HotplugCPU(ctx context.Context, cpuID int) error {
 		"thread_id": args["thread-id"],
 	}).Debug("qemu: hotplugging vCPU")
 
-	return q.DeviceAdd(ctx, driver, args)
+	if err := q.DeviceAdd(ctx, driver, args); err != nil {
+		return err
+	}
+
+	if beforeCount >= 0 {
+		if cpus, err := q.QueryCPUs(ctx); err == nil {
+			if len(cpus) <= beforeCount {
+				log.G(ctx).WithFields(log.Fields{
+					"cpu_id":       cpuID,
+					"before_count": beforeCount,
+					"after_count":  len(cpus),
+				}).Warn("qemu: device_add did not increase CPU count")
+				return fmt.Errorf("device_add did not increase CPU count")
+			}
+		}
+	}
+
+	return nil
 }
 
 func matchHotpluggableCPU(cpus []HotpluggableCPU, cpuID int) *HotpluggableCPU {
+	var fallback *HotpluggableCPU
 	for i := range cpus {
+		if cpus[i].QOMPath != "" {
+			continue
+		}
 		props := cpus[i].Props
 		if props == nil {
 			continue
@@ -588,8 +621,11 @@ func matchHotpluggableCPU(cpus []HotpluggableCPU, cpuID int) *HotpluggableCPU {
 		if ok && coreID == cpuID {
 			return &cpus[i]
 		}
+		if fallback == nil {
+			fallback = &cpus[i]
+		}
 	}
-	return nil
+	return fallback
 }
 
 func intFromProp(value interface{}) (int, bool) {

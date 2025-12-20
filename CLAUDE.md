@@ -379,6 +379,7 @@ type VMResourceConfig struct {
 
 **Features**:
 - Dynamic CPU hotplug support via QEMU QMP
+- CPU scale-down uses projected utilization after removing one vCPU (default target 50%)
 - Configurable memory limits
 - Container-specific resource allocation
 

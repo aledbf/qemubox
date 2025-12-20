@@ -65,11 +65,13 @@ WORKDIR /build/qemu-src
 # Focused on microvm use case with virtio devices
 # Note: Using dynamic linking with glibc (not fully static like Alpine/musl)
 # Building both system emulator (qemu-system-x86_64) and disk utilities (qemu-img)
+RUN ./configure --help
 RUN ./configure \
     --prefix=/opt/qemu \
     --target-list=x86_64-softmmu \
     --enable-tools \
     # Disable unnecessary features for minimal build
+    --disable-containers \
     --disable-docs \
     --disable-debug-info \
     --disable-werror \
@@ -87,50 +89,6 @@ RUN ./configure \
     --disable-pa \
     --disable-jack \
     --disable-sndio \
-    # Disable unnecessary features
-    --disable-guest-agent \
-    --disable-guest-agent-msi \
-    --disable-vte \
-    --disable-curses \
-    --disable-iconv \
-    --disable-brlapi \
-    --disable-usb-redir \
-    --disable-libusb \
-    --disable-smartcard \
-    --disable-rdma \
-    --disable-xkbcommon \
-    --disable-cocoa \
-    --disable-glusterfs \
-    --disable-libnfs \
-    --disable-libssh \
-    --disable-vde \
-    --disable-netmap \
-    --disable-xen \
-    --disable-xen-pci-passthrough \
-    --disable-bzip2 \
-    --disable-lzo \
-    --disable-snappy \
-    --disable-zstd \
-    --disable-libiscsi \
-    --disable-lzfse \
-    --disable-libpmem \
-    --disable-libdaxctl \
-    --disable-l2tpv3 \
-    --disable-crypto-afalg \
-    --disable-gcrypt \
-    --disable-nettle \
-    --disable-gnutls \
-    --disable-auth-pam \
-    --disable-tpm \
-    --disable-numa \
-    --disable-dmg \
-    --disable-qcow1 \
-    --disable-vdi \
-    --disable-vvfat \
-    --disable-qed \
-    --disable-parallels \
-    --disable-capstone \
-    --disable-libdw \
     # Enable features needed for microvm
     --enable-kvm \
     --enable-virtfs \
@@ -179,13 +137,7 @@ COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-
 COPY --from=builder /opt/qemu/bin/qemu-img /usr/local/bin/qemu-img
 
 # Copy BIOS/firmware files needed for boot
-COPY --from=builder /opt/qemu/share/qemu/bios-256k.bin /usr/local/share/qemu/bios-256k.bin
-COPY --from=builder /opt/qemu/share/qemu/bios.bin /usr/local/share/qemu/bios.bin
-COPY --from=builder /opt/qemu/share/qemu/kvmvapic.bin /usr/local/share/qemu/kvmvapic.bin
-COPY --from=builder /opt/qemu/share/qemu/linuxboot.bin /usr/local/share/qemu/linuxboot.bin
-COPY --from=builder /opt/qemu/share/qemu/linuxboot_dma.bin /usr/local/share/qemu/linuxboot_dma.bin
-COPY --from=builder /opt/qemu/share/qemu/vgabios-stdvga.bin /usr/local/share/qemu/vgabios-stdvga.bin
-COPY --from=builder /opt/qemu/share/qemu/efi-virtio.rom /usr/local/share/qemu/efi-virtio.rom
+COPY --from=builder /opt/qemu/share/qemu/pvh.bin /usr/local/share/qemu/pvh.bin
 
 ENTRYPOINT ["/usr/local/bin/qemu-system-x86_64"]
 
@@ -199,13 +151,7 @@ COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu/bin/qemu-img /bin/qemu-img
 
 # Copy BIOS/firmware files needed for boot
-COPY --from=builder /opt/qemu/share/qemu/bios-256k.bin /share/qemu/bios-256k.bin
-COPY --from=builder /opt/qemu/share/qemu/bios.bin /share/qemu/bios.bin
-COPY --from=builder /opt/qemu/share/qemu/kvmvapic.bin /share/qemu/kvmvapic.bin
-COPY --from=builder /opt/qemu/share/qemu/linuxboot.bin /share/qemu/linuxboot.bin
-COPY --from=builder /opt/qemu/share/qemu/linuxboot_dma.bin /share/qemu/linuxboot_dma.bin
-COPY --from=builder /opt/qemu/share/qemu/vgabios-stdvga.bin /share/qemu/vgabios-stdvga.bin
-COPY --from=builder /opt/qemu/share/qemu/efi-virtio.rom /share/qemu/efi-virtio.rom
+COPY --from=builder /opt/qemu/share/qemu/pvh.bin /share/qemu/pvh.bin
 
 # ============================================
 # Alternative: Full QEMU installation tarball

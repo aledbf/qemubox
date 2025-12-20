@@ -100,12 +100,42 @@ file {
       json_name: "kernelVersion"
     }
   }
+  message_type {
+    name: "OfflineCPURequest"
+    field {
+      name: "cpu_id"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT32
+      json_name: "cpuId"
+    }
+  }
+  message_type {
+    name: "OnlineCPURequest"
+    field {
+      name: "cpu_id"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT32
+      json_name: "cpuId"
+    }
+  }
   service {
     name: "System"
     method {
       name: "Info"
       input_type: ".google.protobuf.Empty"
       output_type: ".containerd.vminitd.services.system.v1.InfoResponse"
+    }
+    method {
+      name: "OfflineCPU"
+      input_type: ".containerd.vminitd.services.system.v1.OfflineCPURequest"
+      output_type: ".google.protobuf.Empty"
+    }
+    method {
+      name: "OnlineCPU"
+      input_type: ".containerd.vminitd.services.system.v1.OnlineCPURequest"
+      output_type: ".google.protobuf.Empty"
     }
   }
   options {

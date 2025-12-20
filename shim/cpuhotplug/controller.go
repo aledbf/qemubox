@@ -18,6 +18,7 @@ type Controller struct {
 	qmpClient   *qemu.QMPClient
 	stats       StatsProvider
 	offlineCPU  CPUOffliner
+	onlineCPU   CPUOnliner
 
 	// Resource limits
 	bootCPUs int // Minimum vCPUs (never go below this)
@@ -52,6 +53,9 @@ type StatsProvider func(ctx context.Context) (usageUsec, throttledUsec uint64, e
 // CPUOffliner offlines a CPU in the guest before unplug.
 type CPUOffliner func(ctx context.Context, cpuID int) error
 
+// CPUOnliner onlines a CPU in the guest after hotplug.
+type CPUOnliner func(ctx context.Context, cpuID int) error
+
 // Config holds configuration for the CPU hotplug controller
 type Config struct {
 	// Monitoring interval
@@ -63,7 +67,7 @@ type Config struct {
 
 	// Thresholds (0-100 percentage)
 	ScaleUpThreshold     float64
-	ScaleDownThreshold   float64
+	ScaleDownThreshold   float64 // Target utilization after removing one vCPU
 	ScaleUpThrottleLimit float64
 
 	// Stability requirements (number of consecutive readings)
@@ -81,7 +85,7 @@ func DefaultConfig() Config {
 		ScaleUpCooldown:      10 * time.Second,
 		ScaleDownCooldown:    30 * time.Second,
 		ScaleUpThreshold:     80.0,
-		ScaleDownThreshold:   30.0,
+		ScaleDownThreshold:   50.0,
 		ScaleUpThrottleLimit: 5.0,  // Avoid scaling if throttling exceeds this %
 		ScaleUpStability:     2,    // Need 2 consecutive high readings (10s total)
 		ScaleDownStability:   6,    // Need 6 consecutive low readings (30s total)
@@ -90,12 +94,13 @@ func DefaultConfig() Config {
 }
 
 // NewController creates a new CPU hotplug controller
-func NewController(containerID string, qmpClient *qemu.QMPClient, stats StatsProvider, offliner CPUOffliner, bootCPUs, maxCPUs int, config Config) *Controller {
+func NewController(containerID string, qmpClient *qemu.QMPClient, stats StatsProvider, offliner CPUOffliner, onliner CPUOnliner, bootCPUs, maxCPUs int, config Config) *Controller {
 	return &Controller{
 		containerID: containerID,
 		qmpClient:   qmpClient,
 		stats:       stats,
 		offlineCPU:  offliner,
+		onlineCPU:   onliner,
 		bootCPUs:    bootCPUs,
 		maxCPUs:     maxCPUs,
 		currentCPUs: bootCPUs, // Start with boot CPUs
@@ -284,8 +289,14 @@ func (c *Controller) calculateTargetCPUs(ctx context.Context) int {
 		return c.currentCPUs + 1
 	}
 
-	if c.config.EnableScaleDown && usagePct <= c.config.ScaleDownThreshold && c.currentCPUs > c.bootCPUs {
-		return c.currentCPUs - 1
+	if c.config.EnableScaleDown && c.currentCPUs > c.bootCPUs {
+		// Only scale down if the projected utilization after removal stays under the target.
+		if c.currentCPUs > 1 {
+			projectedUsage := usagePct * float64(c.currentCPUs) / float64(c.currentCPUs-1)
+			if projectedUsage <= c.config.ScaleDownThreshold {
+				return c.currentCPUs - 1
+			}
+		}
 	}
 
 	return c.currentCPUs
@@ -387,6 +398,22 @@ func (c *Controller) scaleUp(ctx context.Context, targetCPUs int) error {
 			"container_id": c.containerID,
 			"cpu_id":       i,
 		}).Info("cpu-hotplug: added vCPU")
+
+		// Online the CPU in the guest (if onliner callback is provided)
+		if c.onlineCPU != nil {
+			if err := c.onlineCPU(ctx, i); err != nil {
+				log.G(ctx).WithError(err).WithFields(log.Fields{
+					"container_id": c.containerID,
+					"cpu_id":       i,
+				}).Warn("cpu-hotplug: failed to online vCPU in guest (may auto-online via uevents)")
+				// Don't fail the operation - CPU may auto-online via kernel uevents
+			} else {
+				log.G(ctx).WithFields(log.Fields{
+					"container_id": c.containerID,
+					"cpu_id":       i,
+				}).Debug("cpu-hotplug: vCPU onlined in guest")
+			}
+		}
 	}
 
 	c.currentCPUs = targetCPUs

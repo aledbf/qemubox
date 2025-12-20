@@ -11,6 +11,7 @@ option go_package = "github.com/aledbf/beacon/containerd/api/services/system/v1;
 service System {
 	rpc Info(google.protobuf.Empty) returns (InfoResponse);
 	rpc OfflineCPU(OfflineCPURequest) returns (google.protobuf.Empty);
+	rpc OnlineCPU(OnlineCPURequest) returns (google.protobuf.Empty);
 }
 
 message InfoResponse {
@@ -19,5 +20,9 @@ message InfoResponse {
 }
 
 message OfflineCPURequest {
+	uint32 cpu_id = 1;
+}
+
+message OnlineCPURequest {
 	uint32 cpu_id = 1;
 }

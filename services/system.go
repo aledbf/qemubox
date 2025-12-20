@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/containerd/errdefs"
 	"github.com/containerd/errdefs/pkg/errgrpc"
@@ -63,7 +64,7 @@ func (s *systemService) Info(ctx context.Context, _ *emptypb.Empty) (*api.InfoRe
 }
 
 func (s *systemService) OfflineCPU(ctx context.Context, req *api.OfflineCPURequest) (*emptypb.Empty, error) {
-	cpuID := req.GetCpuId()
+	cpuID := req.GetCpuID()
 	if cpuID == 0 {
 		return nil, errgrpc.ToGRPCf(errdefs.ErrInvalidArgument, "cpu 0 cannot be offlined")
 	}
@@ -89,6 +90,66 @@ func (s *systemService) OfflineCPU(ctx context.Context, req *api.OfflineCPUReque
 	}
 
 	return &emptypb.Empty{}, nil
+}
+
+func (s *systemService) OnlineCPU(ctx context.Context, req *api.OnlineCPURequest) (*emptypb.Empty, error) {
+	cpuID := req.GetCpuID()
+	if cpuID == 0 {
+		// CPU 0 is always online (boot processor)
+		return &emptypb.Empty{}, nil
+	}
+
+	path := fmt.Sprintf("/sys/devices/system/cpu/cpu%d/online", cpuID)
+
+	// Retry logic: kernel may need time to create sysfs files after hotplug
+	// Wait up to 1 second with exponential backoff
+	maxRetries := 10
+	var lastErr error
+	for retry := 0; retry < maxRetries; retry++ {
+		if retry > 0 {
+			// Exponential backoff: 10ms, 20ms, 40ms, 80ms, 160ms, 320ms (total ~1s)
+			delay := time.Duration(10<<uint(retry-1)) * time.Millisecond
+			time.Sleep(delay)
+		}
+
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				lastErr = err
+				continue // Retry
+			}
+			return nil, errgrpc.ToGRPC(err)
+		}
+
+		// Check if already online
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, errgrpc.ToGRPC(err)
+		}
+		if strings.TrimSpace(string(data)) == "1" {
+			if retry > 0 {
+				log.G(ctx).WithFields(log.Fields{
+					"cpu_id": cpuID,
+					"retry":  retry,
+				}).Debug("CPU already online (auto-onlined)")
+			}
+			return &emptypb.Empty{}, nil
+		}
+
+		// Write "1" to online the CPU
+		if err := os.WriteFile(path, []byte("1"), 0644); err != nil {
+			return nil, errgrpc.ToGRPC(err)
+		}
+
+		log.G(ctx).WithFields(log.Fields{
+			"cpu_id": cpuID,
+			"retry":  retry,
+		}).Debug("CPU onlined successfully")
+
+		return &emptypb.Empty{}, nil
+	}
+
+	// All retries exhausted
+	return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "cpu %d not present after %d retries: %v", cpuID, maxRetries, lastErr)
 }
 
 // writeRuntimeFeatures writes the runtime features to a well-known location

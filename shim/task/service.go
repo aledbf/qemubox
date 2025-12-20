@@ -1210,7 +1210,17 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 			return err
 		}
 		client := systemAPI.NewTTRPCSystemClient(vmc)
-		_, err = client.OfflineCPU(ctx, &systemAPI.OfflineCPURequest{CpuId: uint32(cpuID)})
+		_, err = client.OfflineCPU(ctx, &systemAPI.OfflineCPURequest{CpuID: uint32(cpuID)})
+		return err
+	}
+
+	onlineCPU := func(ctx context.Context, cpuID int) error {
+		vmc, err := s.client()
+		if err != nil {
+			return err
+		}
+		client := systemAPI.NewTTRPCSystemClient(vmc)
+		_, err = client.OnlineCPU(ctx, &systemAPI.OnlineCPURequest{CpuID: uint32(cpuID)})
 		return err
 	}
 
@@ -1219,6 +1229,7 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 		qmpClient,
 		statsProvider,
 		offlineCPU,
+		onlineCPU,
 		resourceCfg.BootCPUs,
 		resourceCfg.MaxCPUs,
 		config,

@@ -655,13 +655,16 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 	}
 
 	args := []string{
-		// BIOS/firmware path needed for PVH boot loader (pvh.bin)
+		// BIOS/firmware path
 		"-L", "/usr/share/qemu",
 
 		"-machine", "q35,accel=kvm,kernel-irqchip=on,hpet=off,acpi=on", // Optimize: use kernel IRQ chip, disable HPET
 		"-cpu", "host,migratable=on",
 
-		"-smp", fmt.Sprintf("cpus=%d,sockets=1,cores=%d,threads=1,maxcpus=%d", q.resourceCfg.BootCPUs, q.resourceCfg.MaxCPUs, q.resourceCfg.MaxCPUs),
+		// CPU configuration for hotplug:
+		// Simple topology: just specify initial CPUs and max CPUs, let QEMU handle the rest
+		// This creates a single socket with enough capacity for maxcpus
+		"-smp", fmt.Sprintf("%d,maxcpus=%d", q.resourceCfg.BootCPUs, q.resourceCfg.MaxCPUs),
 	}
 
 	// Memory configuration - optimize slots based on hotplug needs
