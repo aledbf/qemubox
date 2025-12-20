@@ -109,10 +109,11 @@ type service struct {
 
 	containers map[string]*container
 
-	initiateShutdown func()
-	eventsClosed     atomic.Bool
-	shutdownSvc      shutdown.Service
-	inflight         atomic.Int64
+	initiateShutdown   func()
+	eventsClosed       atomic.Bool
+	intentionalShutdown atomic.Bool // Set when we intentionally close VM (not a crash)
+	shutdownSvc        shutdown.Service
+	inflight           atomic.Int64
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
@@ -439,12 +440,19 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		for {
 			ev, err := sc.Recv()
 				if err != nil {
+					// Check if this was an intentional shutdown (Delete/Shutdown called)
+					// vs unexpected VM crash
+					if s.intentionalShutdown.Load() {
+						log.G(ctx).Info("vm event stream closed (intentional shutdown)")
+						return
+					}
+
 					if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
-						log.G(ctx).Info("vm event stream closed, initiating shim shutdown")
+						log.G(ctx).Info("vm event stream closed unexpectedly, initiating shim shutdown")
 					} else {
 						log.G(ctx).WithError(err).Error("vm event stream error, initiating shim shutdown")
 					}
-					// VM died - trigger shim shutdown to clean up and exit the shim process.
+					// VM died unexpectedly - trigger shim shutdown to clean up and exit
 					s.requestShutdownAndExit(ctx, "vm event stream closed")
 					return
 				}
@@ -568,6 +576,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Warn("delete task failed")
 		if r.ExecID == "" && s.vm != nil {
 			log.G(ctx).Info("delete failed, attempting VM shutdown anyway")
+			s.intentionalShutdown.Store(true)
 			if err := s.vm.Shutdown(ctx); err != nil {
 				log.G(ctx).WithError(err).Warn("failed to shutdown VM after delete error")
 			}
@@ -575,15 +584,8 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		return resp, err
 	}
 	if err == nil {
-		if r.ExecID == "" && s.vm != nil {
-			vmInst := s.vm
-			log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("delete: requesting VM shutdown")
-			go func() {
-				if err := vmInst.Shutdown(context.Background()); err != nil {
-					log.G(ctx).WithError(err).Warn("delete: VM shutdown request failed")
-				}
-			}()
-		}
+		// Note: VM shutdown is handled below after cleanup (line ~643)
+		// No need for async goroutine here - it causes race conditions
 
 		var (
 			needShutdown bool
@@ -640,6 +642,8 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 
 		if needShutdown {
 			log.G(ctx).Info("container deleted, shutting down VM")
+			// Mark as intentional shutdown so event stream close doesn't trigger panic
+			s.intentionalShutdown.Store(true)
 			if err := vmInst.Shutdown(ctx); err != nil {
 				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
 			}
@@ -847,6 +851,9 @@ func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*pt
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Mark as intentional shutdown
+	s.intentionalShutdown.Store(true)
 
 	if s.shutdownSvc != nil {
 		go s.requestShutdownAndExit(ctx, "shutdown rpc")
@@ -1108,15 +1115,17 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 	}).Info("cpu-hotplug: controller started")
 }
 
-// stopCPUHotplugController stops the CPU hotplug controller if running
+// stopCPUHotplugController stops the CPU hotplug controller.
+// Must be called with s.mu held.
 func (s *service) stopCPUHotplugController(ctx context.Context) {
-	s.mu.Lock()
 	controller := s.cpuHotplugController
 	s.cpuHotplugController = nil
-	s.mu.Unlock()
 
 	if controller != nil {
+		// Stop is blocking - release mutex during shutdown to avoid deadlock
+		s.mu.Unlock()
 		controller.Stop()
 		log.G(ctx).Info("cpu-hotplug: controller stopped")
+		s.mu.Lock()
 	}
 }
