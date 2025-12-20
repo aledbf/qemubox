@@ -24,6 +24,7 @@ type Store[T any] interface {
 	Close() error
 }
 
+// ErrNotFound is returned when a key is missing from the store.
 var ErrNotFound = errdefs.ErrNotFound
 
 // BoltStore provides a bolt-backed implementation of Store[T]
@@ -52,7 +53,7 @@ func NewBoltStore[T any](dbPath string, bucketName string) (Store[T], error) {
 	defer dbMu.Unlock()
 
 	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0750); err != nil {
 		return nil, fmt.Errorf("failed to create db dir: %w", err)
 	}
 

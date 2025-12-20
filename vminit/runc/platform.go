@@ -116,7 +116,7 @@ func (p *linuxPlatform) CopyConsole(ctx context.Context, console console.Console
 			return nil, err
 		}
 
-		cmd := process.NewBinaryCmd(uri, id, ns)
+		cmd := process.NewBinaryCmd(ctx, uri, id, ns)
 
 		// In case of unexpected errors during logging binary start, close open pipes
 		var filesToClose []*os.File

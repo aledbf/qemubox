@@ -11,6 +11,8 @@ import (
 )
 
 // Process on a system
+//
+//nolint:interfacebloat // Process aggregates lifecycle hooks for vminit execution.
 type Process interface {
 	// ID returns the id for the process
 	ID() string
@@ -25,17 +27,17 @@ type Process interface {
 	// Stdio returns io information for the container
 	Stdio() stdio.Stdio
 	// Status returns the process status
-	Status(context.Context) (string, error)
+	Status(ctx context.Context) (string, error)
 	// Wait blocks until the process has exited
 	Wait()
 	// Resize resizes the process console
 	Resize(ws console.WinSize) error
 	// Start execution of the process
-	Start(context.Context) error
+	Start(ctx context.Context) error
 	// Delete deletes the process and its resourcess
-	Delete(context.Context) error
+	Delete(ctx context.Context) error
 	// Kill kills the process
-	Kill(context.Context, uint32, bool) error
+	Kill(ctx context.Context, sig uint32, all bool) error
 	// SetExited sets the exit status for the process
 	SetExited(status int)
 }

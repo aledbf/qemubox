@@ -13,6 +13,7 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
+// Bundle represents an OCI bundle with extra files for the VM.
 type Bundle struct {
 	Path   string // Path is the bundle path.
 	Spec   specs.Spec
@@ -24,6 +25,7 @@ type Bundle struct {
 	extraFiles map[string][]byte
 }
 
+// Transformer mutates a bundle before it is sent to the VM.
 type Transformer func(ctx context.Context, b *Bundle) error
 
 // Load loads an OCI bundle from the given path and apply a series of transformers
@@ -58,6 +60,7 @@ func Load(ctx context.Context, path string, transformers ...Transformer) (*Bundl
 	return b, nil
 }
 
+// AddExtraFile adds an extra file to the bundle that is not part of the OCI spec.
 func (b *Bundle) AddExtraFile(name string, data []byte) error {
 	if name == "" {
 		return fmt.Errorf("file name cannot be empty")

@@ -53,6 +53,7 @@ func DumpInfo(ctx context.Context) {
 	DumpPids(ctx)
 }
 
+// DumpFile writes a file's contents to stderr for debugging.
 func DumpFile(ctx context.Context, name string) {
 	e := log.G(ctx)
 	if e.Logger.IsLevelEnabled(log.DebugLevel) {

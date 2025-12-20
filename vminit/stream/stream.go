@@ -3,6 +3,7 @@ package stream
 
 import "io"
 
+// Manager manages stream connections for vminit.
 type Manager interface {
 	Get(id uint32) (io.ReadWriteCloser, error)
 }

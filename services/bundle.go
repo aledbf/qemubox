@@ -26,7 +26,7 @@ func init() {
 			cplugins.InternalPlugin,
 		},
 		InitFn: func(ic *plugin.InitContext) (interface{}, error) {
-			if err := os.MkdirAll(bundle.RootDir, 0755); err != nil {
+			if err := os.MkdirAll(bundle.RootDir, 0750); err != nil {
 				return nil, err
 			}
 			return &service{
@@ -47,16 +47,16 @@ func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
 
 func (s *service) Create(ctx context.Context, r *api.CreateRequest) (*api.CreateResponse, error) {
 	d := filepath.Join(s.bundleRoot, r.ID)
-	if err := os.Mkdir(d, 0755); err != nil {
+	if err := os.Mkdir(d, 0750); err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
 	log.G(ctx).Infof("Creating bundle at %s", d)
-	if err := os.Mkdir(filepath.Join(d, "rootfs"), 0755); err != nil {
+	if err := os.Mkdir(filepath.Join(d, "rootfs"), 0750); err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
 
 	for f, b := range r.Files {
-		if err := os.WriteFile(filepath.Join(d, f), b, 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(d, f), b, 0600); err != nil {
 			return nil, errgrpc.ToGRPC(err)
 		}
 	}

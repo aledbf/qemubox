@@ -50,32 +50,29 @@ var _ events.Subscriber = &Exchange{}
 //
 // This is useful when an event is forwarded on behalf of another namespace or
 // when the event is propagated on behalf of another publisher.
-func (e *Exchange) Forward(ctx context.Context, envelope *events.Envelope) (err error) {
+func (e *Exchange) Forward(ctx context.Context, envelope *events.Envelope) error {
 	if err := validateEnvelope(envelope); err != nil {
 		return err
 	}
 
-	defer func() {
-		logger := log.G(ctx).WithFields(log.Fields{
-			"topic": envelope.Topic,
-			"ns":    envelope.Namespace,
-			"type":  envelope.Event.GetTypeUrl(),
-		})
-
-		if err != nil {
-			logger.WithError(err).Error("error forwarding event")
-		} else {
-			logger.Trace("event forwarded")
-		}
-	}()
-
-	return e.broadcaster.Write(envelope)
+	err := e.broadcaster.Write(envelope)
+	logger := log.G(ctx).WithFields(log.Fields{
+		"topic": envelope.Topic,
+		"ns":    envelope.Namespace,
+		"type":  envelope.Event.GetTypeUrl(),
+	})
+	if err != nil {
+		logger.WithError(err).Error("error forwarding event")
+	} else {
+		logger.Trace("event forwarded")
+	}
+	return err
 }
 
 // Publish packages and sends an event. The caller will be considered the
 // initial publisher of the event. This means the timestamp will be calculated
 // at this point and this method may read from the calling context.
-func (e *Exchange) Publish(ctx context.Context, topic string, event events.Event) (err error) {
+func (e *Exchange) Publish(ctx context.Context, topic string, event events.Event) error {
 	var envelope events.Envelope
 
 	namespace, _ := namespaces.Namespace(ctx)
@@ -93,21 +90,18 @@ func (e *Exchange) Publish(ctx context.Context, topic string, event events.Event
 	envelope.Topic = topic
 	envelope.Event = encoded
 
-	defer func() {
-		logger := log.G(ctx).WithFields(log.Fields{
-			"topic": envelope.Topic,
-			"ns":    envelope.Namespace,
-			"type":  envelope.Event.GetTypeUrl(),
-		})
-
-		if err != nil {
-			logger.WithError(err).Error("error publishing event")
-		} else {
-			logger.Trace("event published")
-		}
-	}()
-
-	return e.broadcaster.Write(&envelope)
+	err = e.broadcaster.Write(&envelope)
+	logger := log.G(ctx).WithFields(log.Fields{
+		"topic": envelope.Topic,
+		"ns":    envelope.Namespace,
+		"type":  envelope.Event.GetTypeUrl(),
+	})
+	if err != nil {
+		logger.WithError(err).Error("error publishing event")
+	} else {
+		logger.Trace("event published")
+	}
+	return err
 }
 
 // Subscribe to events on the exchange. Events are sent through the returned
@@ -117,7 +111,7 @@ func (e *Exchange) Publish(ctx context.Context, topic string, event events.Event
 // Zero or more filters may be provided as strings. Only events that match
 // *any* of the provided filters will be sent on the channel. The filters use
 // the standard containerd filters package syntax.
-func (e *Exchange) Subscribe(ctx context.Context, fs ...string) (ch <-chan *events.Envelope, errs <-chan error) {
+func (e *Exchange) Subscribe(ctx context.Context, fs ...string) (<-chan *events.Envelope, <-chan error) {
 	var (
 		evch                  = make(chan *events.Envelope)
 		errq                  = make(chan error, 1)
@@ -133,15 +127,12 @@ func (e *Exchange) Subscribe(ctx context.Context, fs ...string) (ch <-chan *even
 		close(errq)
 	}
 
-	ch = evch
-	errs = errq
-
 	if len(fs) > 0 {
 		filter, err := filters.ParseAll(fs...)
 		if err != nil {
 			errq <- fmt.Errorf("failed parsing subscription filters: %w", err)
 			closeAll()
-			return
+			return evch, errq
 		}
 
 		dst = goevents.NewFilter(queue, goevents.MatcherFunc(func(gev goevents.Event) bool {
@@ -152,7 +143,7 @@ func (e *Exchange) Subscribe(ctx context.Context, fs ...string) (ch <-chan *even
 	if err := e.broadcaster.Add(dst); err != nil {
 		errq <- fmt.Errorf("add sink to broadcaster: %w", err)
 		closeAll()
-		return
+		return evch, errq
 	}
 
 	go func() {
@@ -190,7 +181,7 @@ func (e *Exchange) Subscribe(ctx context.Context, fs ...string) (ch <-chan *even
 		errq <- err
 	}()
 
-	return
+	return evch, errq
 }
 
 func validateTopic(topic string) error {

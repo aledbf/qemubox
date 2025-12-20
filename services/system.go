@@ -69,7 +69,7 @@ func (s *systemService) writeRuntimeFeatures() error {
 	}
 
 	featuresDir := "/run/vminitd"
-	if err := os.MkdirAll(featuresDir, 0755); err != nil {
+	if err := os.MkdirAll(featuresDir, 0750); err != nil {
 		return err
 	}
 
@@ -79,5 +79,5 @@ func (s *systemService) writeRuntimeFeatures() error {
 	}
 
 	featuresFile := filepath.Join(featuresDir, "features.json")
-	return os.WriteFile(featuresFile, data, 0644)
+	return os.WriteFile(featuresFile, data, 0600)
 }

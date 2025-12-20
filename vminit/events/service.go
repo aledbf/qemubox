@@ -38,14 +38,16 @@ func init() {
 	})
 }
 
+// Subscriber provides access to the event stream.
 type Subscriber interface {
-	Subscribe(context.Context, ...string) (<-chan *events.Envelope, <-chan error)
+	Subscribe(ctx context.Context, topics ...string) (<-chan *events.Envelope, <-chan error)
 }
 
 type service struct {
 	sub Subscriber
 }
 
+// NewService returns a TTRPC-backed events service.
 func NewService(s Subscriber) *service {
 	return &service{
 		sub: s,

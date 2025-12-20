@@ -297,6 +297,27 @@ type resourceConfigInfo struct {
 	hostMemory             int64
 }
 
+func loadBundleForCreate(ctx context.Context, bundlePath string) (*bundle.Bundle, error) {
+	// QEMU requires KVM - check if available
+	if err := checkKVM(); err != nil {
+		return nil, err
+	}
+
+	// Load the OCI bundle and apply transformers to get the bundle that'll be
+	// set up on the VM side.
+	// We remove the network namespace to allow the container to share the VM's
+	// network namespace (where eth0 is configured).
+	return bundle.Load(ctx, bundlePath, transformBindMounts, disableNetworkNamespace)
+}
+
+func (s *service) initVMInstance(ctx context.Context, r *taskAPI.CreateTaskRequest, resourceCfg *vm.VMResourceConfig) (vm.Instance, error) {
+	vmState := filepath.Join(r.Bundle, "vm")
+	if err := os.Mkdir(vmState, 0700); err != nil {
+		return nil, errgrpc.ToGRPCf(err, "failed to create vm state directory %q", vmState)
+	}
+	return s.vmInstance(ctx, r.ID, vmState, resourceCfg)
+}
+
 func computeResourceConfig(ctx context.Context, spec *specs.Spec) (*vm.VMResourceConfig, resourceConfigInfo) {
 	// Extract resource requests from OCI spec
 	cpuRequest := extractCPURequest(spec)
@@ -402,7 +423,7 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 // 4. Creating and booting the QEMU VM.
 // 5. Setting up networking (IP allocation, TAP device).
 // 6. Connecting to the VM via vsock and creating the container task inside.
-func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, err error) {
+func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*taskAPI.CreateTaskResponse, error) {
 	log.G(ctx).WithFields(log.Fields{
 		"id":     r.ID,
 		"bundle": r.Bundle,
@@ -418,16 +439,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 
 	presetup := time.Now()
 
-	// QEMU requires KVM - check if available
-	if err := checkKVM(); err != nil {
-		return nil, errgrpc.ToGRPC(err)
-	}
-
-	// Load the OCI bundle and apply transformers to get the bundle that'll be
-	// set up on the VM side.
-	// We remove the network namespace to allow the container to share the VM's
-	// network namespace (where eth0 is configured).
-	b, err := bundle.Load(ctx, r.Bundle, transformBindMounts, disableNetworkNamespace)
+	b, err := loadBundleForCreate(ctx, r.Bundle)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
@@ -445,11 +457,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		"host_memory":            resourceInfo.hostMemory,
 	}).Info("VM resource configuration")
 
-	vmState := filepath.Join(r.Bundle, "vm")
-	if err := os.Mkdir(vmState, 0700); err != nil {
-		return nil, errgrpc.ToGRPCf(err, "failed to create vm state directory %q", vmState)
-	}
-	vmi, err := s.vmInstance(ctx, r.ID, vmState, resourceCfg)
+	vmi, err := s.initVMInstance(ctx, r, resourceCfg)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
@@ -979,7 +987,7 @@ func (s *service) forward(ctx context.Context, publisher shim.Publisher) {
 	for e := range s.events {
 		switch e := e.(type) {
 		case *types.Envelope:
-			// TODO: Transform event fields?
+			// Note: consider transforming event fields.
 			if err := publisher.Publish(ctx, e.Topic, e.Event); err != nil {
 				log.G(ctx).WithError(err).Error("forward event")
 			}
@@ -1102,12 +1110,6 @@ func getHostMemoryTotal() (int64, error) {
 // - MaxCPUs > BootCPUs (hotplug is possible)
 // - CPU hotplug is enabled (via environment variable)
 func (s *service) startCPUHotplugController(ctx context.Context, containerID string, vmi vm.Instance, resourceCfg *vm.VMResourceConfig) {
-	// Check if CPU hotplug is enabled via environment variable
-	if os.Getenv("BEACON_CPU_HOTPLUG_ENABLED") != "true" {
-		log.G(ctx).Debug("cpu-hotplug: disabled (set BEACON_CPU_HOTPLUG_ENABLED=true to enable)")
-		return
-	}
-
 	// Only enable for VMs that support hotplug (MaxCPUs > BootCPUs)
 	if resourceCfg.MaxCPUs <= resourceCfg.BootCPUs {
 		log.G(ctx).WithFields(log.Fields{

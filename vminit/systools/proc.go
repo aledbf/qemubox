@@ -11,6 +11,7 @@ import (
 	"github.com/containerd/log"
 )
 
+// DumpPids logs basic information for processes in /proc.
 func DumpPids(ctx context.Context) {
 	log.G(ctx).Debug("Dumping /proc/pid info")
 

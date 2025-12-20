@@ -7,13 +7,13 @@ import (
 )
 
 const (
-	// Binaries and config directory
+	// ShareDir is the binaries and config directory.
 	ShareDir = "/usr/share/beacon"
 
-	// State files directory
+	// StateDir is the state files directory.
 	StateDir = "/var/lib/beacon"
 
-	// Logs directory
+	// LogDir is the logs directory.
 	LogDir = "/var/log/beacon"
 )
 

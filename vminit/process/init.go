@@ -96,26 +96,29 @@ func New(id string, runtime *runc.Runc, stdio stdio.Stdio, sm stream.Manager) *I
 }
 
 // Create the process with the provided config
-func (p *Init) Create(ctx context.Context, r *CreateConfig) (retError error) {
+func (p *Init) Create(ctx context.Context, r *CreateConfig) error {
 	var (
 		err     error
 		socket  *runc.Socket
 		pio     *processIO
 		pidFile = newPidFile(p.Bundle)
+		retErr  error
 	)
 
 	if r.Terminal {
 		if socket, err = runc.NewTempConsoleSocket(); err != nil {
-			return fmt.Errorf("failed to create OCI runtime console socket: %w", err)
+			retErr = fmt.Errorf("failed to create OCI runtime console socket: %w", err)
+			return retErr
 		}
 		defer func() { _ = socket.Close() }()
 	} else {
 		if pio, err = createIO(ctx, p.id, p.IoUID, p.IoGID, p.stdio, p.streams); err != nil {
-			return fmt.Errorf("failed to create init process I/O: %w", err)
+			retErr = fmt.Errorf("failed to create init process I/O: %w", err)
+			return retErr
 		}
 		p.io = pio
 		defer func() {
-			if retError != nil && p.io != nil {
+			if retErr != nil && p.io != nil {
 				_ = p.io.Close()
 			}
 		}()
@@ -137,7 +140,8 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) (retError error) {
 
 	if err := p.runtime.Create(context.WithoutCancel(ctx), r.ID, r.Bundle, opts); err != nil {
 		systools.DumpFile(ctx, p.runtime.Log)
-		return p.runtimeError(err, "OCI runtime create failed")
+		retErr = p.runtimeError(err, "OCI runtime create failed")
+		return retErr
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -145,11 +149,13 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) (retError error) {
 	if socket != nil {
 		console, err := socket.ReceiveMaster()
 		if err != nil {
-			return fmt.Errorf("failed to retrieve console master: %w", err)
+			retErr = fmt.Errorf("failed to retrieve console master: %w", err)
+			return retErr
 		}
 		console, err = p.Platform.CopyConsole(ctx, console, p.id, r.Stdin, r.Stdout, r.Stderr, &p.wg)
 		if err != nil {
-			return fmt.Errorf("failed to start console copy: %w", err)
+			retErr = fmt.Errorf("failed to start console copy: %w", err)
+			return retErr
 		}
 		p.console = console
 		if sc, ok := console.(interface{ StdinCloser() io.Closer }); ok {
@@ -160,7 +166,8 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) (retError error) {
 	} else {
 		c, err := pio.Copy(ctx, &p.wg)
 		if err != nil {
-			return fmt.Errorf("failed to start io pipe copy: %w", err)
+			retErr = fmt.Errorf("failed to start io pipe copy: %w", err)
+			return retErr
 		}
 		if c != nil {
 			p.stdin = c
@@ -169,7 +176,8 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) (retError error) {
 	}
 	pid, err := pidFile.Read()
 	if err != nil {
-		return fmt.Errorf("failed to retrieve OCI runtime container pid: %w", err)
+		retErr = fmt.Errorf("failed to retrieve OCI runtime container pid: %w", err)
+		return retErr
 	}
 	p.pid = pid
 	return nil

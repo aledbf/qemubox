@@ -118,11 +118,11 @@ func createIO(ctx context.Context, id string, ioUID, ioGID int, stdio stdio.Stdi
 		pio.io, err = NewBinaryIO(ctx, id, u)
 	case "file":
 		filePath := u.Path
-		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(filePath), 0750); err != nil {
 			return nil, err
 		}
 		var f *os.File
-		f, err = os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f, err = os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			return nil, err
 		}
@@ -142,103 +142,100 @@ func createIO(ctx context.Context, id string, ioUID, ioGID int, stdio stdio.Stdi
 	return pio, nil
 }
 
+type pipeOutput struct {
+	name  string
+	index int
+	label string
+}
+
 func copyPipes(ctx context.Context, rio runc.IO, stdin, stdout, stderr string, streams [3]io.ReadWriteCloser, wg, cwg *sync.WaitGroup) (io.Closer, error) {
 	var sameFile *countingWriteCloser
-	for _, i := range []struct {
-		name  string
-		index int
-		dest  func(wc io.WriteCloser, rc io.Closer)
-	}{
-		{
-			name:  stdout,
-			index: 1,
-			dest: func(wc io.WriteCloser, rc io.Closer) {
-				wg.Add(1)
-				cwg.Add(1)
-				go func() {
-					cwg.Done()
-					p := iobuf.Get()
-					defer iobuf.Put(p)
-					if _, err := io.CopyBuffer(wc, rio.Stdout(), *p); err != nil {
-						log.G(ctx).WithError(err).Warn("error copying stdout")
-					}
-					wg.Done()
-					if err := wc.Close(); err != nil {
-						log.G(ctx).WithError(err).Warn("error closing stdout writer")
-					}
-					if rc != nil {
-						if err := rc.Close(); err != nil {
-							log.G(ctx).WithError(err).Warn("error closing stdout reader")
-						}
-					}
-				}()
-			},
-		}, {
-			name:  stderr,
-			index: 2,
-			dest: func(wc io.WriteCloser, rc io.Closer) {
-				wg.Add(1)
-				cwg.Add(1)
-				go func() {
-					cwg.Done()
-					p := iobuf.Get()
-					defer iobuf.Put(p)
-					if _, err := io.CopyBuffer(wc, rio.Stderr(), *p); err != nil {
-						log.G(ctx).WithError(err).Warn("error copying stderr")
-					}
-					wg.Done()
-					if err := wc.Close(); err != nil {
-						log.G(ctx).WithError(err).Warn("error closing stderr writer")
-					}
-					if rc != nil {
-						if err := rc.Close(); err != nil {
-							log.G(ctx).WithError(err).Warn("error closing stderr reader")
-						}
-					}
-				}()
-			},
-		},
-	} {
-		if i.name == "" {
+	outputs := []pipeOutput{
+		{name: stdout, index: 1, label: "stdout"},
+		{name: stderr, index: 2, label: "stderr"},
+	}
+
+	for _, out := range outputs {
+		if out.name == "" {
 			continue
 		}
-		var (
-			fw io.WriteCloser
-			fr io.Closer
-		)
-		if streams[i.index] != nil {
-			if streams[i.index] == nil {
-				continue
-			}
-			fw = streams[i.index]
+		fw, fr, err := openPipeOutput(ctx, out, stdout, stderr, streams, &sameFile)
+		if err != nil {
+			return nil, err
+		}
+		startPipeCopy(ctx, rio, out, fw, fr, wg, cwg)
+	}
+
+	return startPipeStdin(ctx, rio, stdin, streams, cwg)
+}
+
+func openPipeOutput(ctx context.Context, out pipeOutput, stdout, stderr string, streams [3]io.ReadWriteCloser, sameFile **countingWriteCloser) (io.WriteCloser, io.Closer, error) {
+	if streams[out.index] != nil {
+		return streams[out.index], nil, nil
+	}
+
+	ok, err := fifo.IsFifo(out.name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ok {
+		fw, err := fifo.OpenFifo(ctx, out.name, syscall.O_WRONLY, 0)
+		if err != nil {
+			return nil, nil, fmt.Errorf("containerd-shim: opening w/o fifo %q failed: %w", out.name, err)
+		}
+		fr, err := fifo.OpenFifo(ctx, out.name, syscall.O_RDONLY, 0)
+		if err != nil {
+			return nil, nil, fmt.Errorf("containerd-shim: opening r/o fifo %q failed: %w", out.name, err)
+		}
+		return fw, fr, nil
+	}
+
+	if *sameFile != nil {
+		(*sameFile).bumpCount(1)
+		return *sameFile, nil, nil
+	}
+
+	fw, err := os.OpenFile(out.name, syscall.O_WRONLY|syscall.O_APPEND, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("containerd-shim: opening file %q failed: %w", out.name, err)
+	}
+	if stdout == stderr {
+		*sameFile = newCountingWriteCloser(fw, 1)
+		return *sameFile, nil, nil
+	}
+	return fw, nil, nil
+}
+
+func startPipeCopy(ctx context.Context, rio runc.IO, out pipeOutput, wc io.WriteCloser, rc io.Closer, wg, cwg *sync.WaitGroup) {
+	wg.Add(1)
+	cwg.Add(1)
+	go func() {
+		cwg.Done()
+		p := iobuf.Get()
+		defer iobuf.Put(p)
+
+		var err error
+		if out.index == 1 {
+			_, err = io.CopyBuffer(wc, rio.Stdout(), *p)
 		} else {
-			ok, err := fifo.IsFifo(i.name)
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				if fw, err = fifo.OpenFifo(ctx, i.name, syscall.O_WRONLY, 0); err != nil {
-					return nil, fmt.Errorf("containerd-shim: opening w/o fifo %q failed: %w", i.name, err)
-				}
-				if fr, err = fifo.OpenFifo(ctx, i.name, syscall.O_RDONLY, 0); err != nil {
-					return nil, fmt.Errorf("containerd-shim: opening r/o fifo %q failed: %w", i.name, err)
-				}
-			} else {
-				if sameFile != nil {
-					sameFile.bumpCount(1)
-					i.dest(sameFile, nil)
-					continue
-				}
-				if fw, err = os.OpenFile(i.name, syscall.O_WRONLY|syscall.O_APPEND, 0); err != nil {
-					return nil, fmt.Errorf("containerd-shim: opening file %q failed: %w", i.name, err)
-				}
-				if stdout == stderr {
-					sameFile = newCountingWriteCloser(fw, 1)
-				}
+			_, err = io.CopyBuffer(wc, rio.Stderr(), *p)
+		}
+		if err != nil {
+			log.G(ctx).WithError(err).WithField("stream", out.label).Warn("error copying output")
+		}
+		wg.Done()
+		if err := wc.Close(); err != nil {
+			log.G(ctx).WithError(err).WithField("stream", out.label).Warn("error closing output writer")
+		}
+		if rc != nil {
+			if err := rc.Close(); err != nil {
+				log.G(ctx).WithError(err).WithField("stream", out.label).Warn("error closing output reader")
 			}
 		}
-		i.dest(fw, fr)
-	}
+	}()
+}
+
+func startPipeStdin(ctx context.Context, rio runc.IO, stdin string, streams [3]io.ReadWriteCloser, cwg *sync.WaitGroup) (io.Closer, error) {
 	if stdin == "" {
 		return nopCloser{}, nil
 	}
@@ -345,7 +342,7 @@ func NewBinaryIO(ctx context.Context, id string, uri *url.URL) (_ runc.IO, err e
 	}
 	closers = append(closers, r.Close, w.Close)
 
-	cmd := NewBinaryCmd(uri, id, ns)
+	cmd := NewBinaryCmd(ctx, uri, id, ns)
 	cmd.ExtraFiles = append(cmd.ExtraFiles, out.r, serr.r, w)
 	// don't need to register this with the reaper or wait when
 	// running inside a shim

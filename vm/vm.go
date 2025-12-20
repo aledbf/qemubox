@@ -9,10 +9,13 @@ import (
 	"github.com/containerd/ttrpc"
 )
 
+// NetworkMode describes how the VM networking is wired.
 type NetworkMode int
 
 const (
+	// NetworkModeUnixgram uses unixgram for VM networking.
 	NetworkModeUnixgram NetworkMode = iota
+	// NetworkModeUnixstream uses unixstream for VM networking.
 	NetworkModeUnixstream
 )
 
@@ -40,39 +43,47 @@ type StartOpts struct {
 	NetworkNamespace string // Path to network namespace (e.g., "/var/run/netns/cni-xxx")
 }
 
+// StartOpt configures VM start options.
 type StartOpt func(*StartOpts)
 
+// WithInitArgs sets init arguments for the VM.
 func WithInitArgs(args ...string) StartOpt {
 	return func(o *StartOpts) {
 		o.InitArgs = append(o.InitArgs, args...)
 	}
 }
 
+// WithNetworkConfig sets the network configuration for the VM.
 func WithNetworkConfig(cfg *NetworkConfig) StartOpt {
 	return func(o *StartOpts) {
 		o.NetworkConfig = cfg
 	}
 }
 
+// WithNetworkNamespace sets the network namespace path for the VM.
 func WithNetworkNamespace(path string) StartOpt {
 	return func(o *StartOpts) {
 		o.NetworkNamespace = path
 	}
 }
 
+// MountConfig defines configuration for mounting disks into the VM.
 type MountConfig struct {
 	Readonly bool
 	Vmdk     bool
 }
 
+// MountOpt configures mount options.
 type MountOpt func(*MountConfig)
 
+// WithReadOnly mounts the disk read-only.
 func WithReadOnly() MountOpt {
 	return func(o *MountConfig) {
 		o.Readonly = true
 	}
 }
 
+// WithVmdk mounts the disk using VMDK format.
 func WithVmdk() MountOpt {
 	return func(o *MountConfig) {
 		o.Vmdk = true

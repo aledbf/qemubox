@@ -51,10 +51,10 @@ func setupForwardIO(ctx context.Context, ss streamCreator, pio stdio.Stdio) (for
 		// Handled below via createStreams
 	case "file":
 		filePath := u.Path
-		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(filePath), 0750); err != nil {
 			return forwardIOSetup{}, err
 		}
-		f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			return forwardIOSetup{}, err
 		}
@@ -122,9 +122,11 @@ func (s *service) forwardIO(ctx context.Context, ss streamCreator, sio stdio.Std
 	}, nil
 }
 
-func createStreams(ctx context.Context, ss streamCreator, io stdio.Stdio) (_ stdio.Stdio, conns [3]io.ReadWriteCloser, err error) {
+func createStreams(ctx context.Context, ss streamCreator, sio stdio.Stdio) (stdio.Stdio, [3]io.ReadWriteCloser, error) {
+	var conns [3]io.ReadWriteCloser
+	var retErr error
 	defer func() {
-		if err != nil {
+		if retErr != nil {
 			for i, c := range conns {
 				if c != nil && (i != 2 || c != conns[1]) {
 					_ = c.Close()
@@ -132,39 +134,42 @@ func createStreams(ctx context.Context, ss streamCreator, io stdio.Stdio) (_ std
 			}
 		}
 	}()
-	if io.Stdin != "" {
+	if sio.Stdin != "" {
 		sid, conn, err := ss.StartStream(ctx)
 		if err != nil {
-			return io, conns, fmt.Errorf("failed to start fifo stream: %w", err)
+			retErr = fmt.Errorf("failed to start fifo stream: %w", err)
+			return sio, conns, retErr
 		}
-		io.Stdin = fmt.Sprintf("stream://%d", sid)
+		sio.Stdin = fmt.Sprintf("stream://%d", sid)
 		conns[0] = conn
 	}
 
-	stdout := io.Stdout
+	stdout := sio.Stdout
 	if stdout != "" {
 		sid, conn, err := ss.StartStream(ctx)
 		if err != nil {
-			return io, conns, fmt.Errorf("failed to start fifo stream: %w", err)
+			retErr = fmt.Errorf("failed to start fifo stream: %w", err)
+			return sio, conns, retErr
 		}
-		io.Stdout = fmt.Sprintf("stream://%d", sid)
+		sio.Stdout = fmt.Sprintf("stream://%d", sid)
 		conns[1] = conn
 	}
 
-	if io.Stderr != "" {
-		if io.Stderr == stdout {
-			io.Stderr = io.Stdout
+	if sio.Stderr != "" {
+		if sio.Stderr == stdout {
+			sio.Stderr = sio.Stdout
 			conns[2] = conns[1]
 		} else {
 			sid, conn, err := ss.StartStream(ctx)
 			if err != nil {
-				return io, conns, fmt.Errorf("failed to start fifo stream: %w", err)
+				retErr = fmt.Errorf("failed to start fifo stream: %w", err)
+				return sio, conns, retErr
 			}
-			io.Stderr = fmt.Sprintf("stream://%d", sid)
+			sio.Stderr = fmt.Sprintf("stream://%d", sid)
 			conns[2] = conn
 		}
 	}
-	return io, conns, nil
+	return sio, conns, nil
 }
 
 type outputTarget struct {

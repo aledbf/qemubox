@@ -9,6 +9,7 @@ import (
 )
 
 func main() {
+	//nolint:staticcheck // shim.Run ignores the context on this build.
 	ctx := context.Background()
 	shim.Run(ctx, manager.NewShimManager("io.containerd.beaconbox.v1"))
 }

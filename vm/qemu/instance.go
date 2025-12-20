@@ -65,7 +65,7 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 
 	// Use dedicated log directory per container
 	logDir := filepath.Join("/var/log/beacon", containerID)
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}
 
@@ -143,7 +143,7 @@ func generateStableDiskID(path string) (string, error) {
 // hash generates a simple hash of a string for fallback ID generation
 func hash(s string) uint32 {
 	h := uint32(0)
-	for i := 0; i < len(s); i++ {
+	for i := range s {
 		h = h*31 + uint32(s[i])
 	}
 	return h
@@ -362,6 +362,7 @@ func (q *Instance) startQemuProcess(ctx context.Context, qemuArgs []string) erro
 	}
 
 	// Start QEMU
+	//nolint:gosec // QEMU path and args are controlled by VM configuration.
 	q.cmd = exec.CommandContext(ctx, q.binaryPath, qemuArgs...)
 	q.cmd.Stdout = qemuLogFile
 	q.cmd.Stderr = qemuLogFile
@@ -472,6 +473,29 @@ func (q *Instance) connectVsockClient(ctx context.Context) error {
 	return nil
 }
 
+func (q *Instance) rollbackStart(success *bool) {
+	if success != nil && *success {
+		return
+	}
+	q.vmState.Store(uint32(vmStateNew))
+	// Close console file and remove FIFO on failure
+	if q.consoleFile != nil {
+		_ = q.consoleFile.Close()
+		q.consoleFile = nil
+	}
+	if q.consoleFifoPath != "" {
+		_ = os.Remove(q.consoleFifoPath)
+	}
+	// Close any opened TAP FDs on failure
+	for _, nic := range q.nets {
+		if nic.TapFile != nil {
+			_ = nic.TapFile.Close()
+			nic.TapFile = nil
+		}
+	}
+	q.tapNetns = ""
+}
+
 // Start starts the QEMU VM
 func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// Check and update state atomically
@@ -494,27 +518,7 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 
 	// Ensure we revert to New on failure
 	success := false
-	defer func() {
-		if !success {
-			q.vmState.Store(uint32(vmStateNew))
-			// Close console file and remove FIFO on failure
-			if q.consoleFile != nil {
-				_ = q.consoleFile.Close()
-				q.consoleFile = nil
-			}
-			if q.consoleFifoPath != "" {
-				_ = os.Remove(q.consoleFifoPath)
-			}
-			// Close any opened TAP FDs on failure
-			for _, nic := range q.nets {
-				if nic.TapFile != nil {
-					_ = nic.TapFile.Close()
-					nic.TapFile = nil
-				}
-			}
-			q.tapNetns = ""
-		}
-	}()
+	defer q.rollbackStart(&success)
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -1197,6 +1201,7 @@ func openTAPInNetNS(ctx context.Context, tapName, netnsPath string) (*os.File, e
 	copy(req.Name[:], tapName)
 	req.Flags = iffTap | iffNoPI | iffVNetHdr
 
+	//nolint:gosec // Required ioctl to attach to existing TAP device.
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, tunFile.Fd(), tunSetIFF, uintptr(unsafe.Pointer(&req)))
 	if errno != 0 {
 		_ = tunFile.Close()

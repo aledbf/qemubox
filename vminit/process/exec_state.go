@@ -11,12 +11,12 @@ import (
 )
 
 type execState interface {
-	Resize(console.WinSize) error
-	Start(context.Context) error
-	Delete(context.Context) error
-	Kill(context.Context, uint32, bool) error
-	SetExited(int)
-	Status(context.Context) (string, error)
+	Resize(ws console.WinSize) error
+	Start(ctx context.Context) error
+	Delete(ctx context.Context) error
+	Kill(ctx context.Context, sig uint32, all bool) error
+	SetExited(status int)
+	Status(ctx context.Context) (string, error)
 }
 
 type execCreatedState struct {
@@ -25,11 +25,11 @@ type execCreatedState struct {
 
 func (s *execCreatedState) transition(name string) error {
 	switch name {
-	case "running":
+	case stateRunning:
 		s.p.execState = &execRunningState{p: s.p}
-	case "stopped":
+	case stateStopped:
 		s.p.execState = &execStoppedState{p: s.p}
-	case "deleted":
+	case stateDeleted:
 		s.p.execState = &deletedState{}
 	default:
 		return fmt.Errorf("invalid state transition %q to %q", stateName(s), name)
@@ -45,7 +45,7 @@ func (s *execCreatedState) Start(ctx context.Context) error {
 	if err := s.p.start(ctx); err != nil {
 		return err
 	}
-	return s.transition("running")
+	return s.transition(stateRunning)
 }
 
 func (s *execCreatedState) Delete(ctx context.Context) error {
@@ -53,7 +53,7 @@ func (s *execCreatedState) Delete(ctx context.Context) error {
 		return err
 	}
 
-	return s.transition("deleted")
+	return s.transition(stateDeleted)
 }
 
 func (s *execCreatedState) Kill(ctx context.Context, sig uint32, all bool) error {
@@ -63,13 +63,13 @@ func (s *execCreatedState) Kill(ctx context.Context, sig uint32, all bool) error
 func (s *execCreatedState) SetExited(status int) {
 	s.p.setExited(status)
 
-	if err := s.transition("stopped"); err != nil {
+	if err := s.transition(stateStopped); err != nil {
 		panic(err)
 	}
 }
 
 func (s *execCreatedState) Status(ctx context.Context) (string, error) {
-	return "created", nil
+	return stateCreated, nil
 }
 
 type execRunningState struct {
@@ -78,7 +78,7 @@ type execRunningState struct {
 
 func (s *execRunningState) transition(name string) error {
 	switch name {
-	case "stopped":
+	case stateStopped:
 		s.p.execState = &execStoppedState{p: s.p}
 	default:
 		return fmt.Errorf("invalid state transition %q to %q", stateName(s), name)
@@ -105,13 +105,13 @@ func (s *execRunningState) Kill(ctx context.Context, sig uint32, all bool) error
 func (s *execRunningState) SetExited(status int) {
 	s.p.setExited(status)
 
-	if err := s.transition("stopped"); err != nil {
+	if err := s.transition(stateStopped); err != nil {
 		panic(err)
 	}
 }
 
 func (s *execRunningState) Status(ctx context.Context) (string, error) {
-	return "running", nil
+	return stateRunning, nil
 }
 
 type execStoppedState struct {
@@ -120,7 +120,7 @@ type execStoppedState struct {
 
 func (s *execStoppedState) transition(name string) error {
 	switch name {
-	case "deleted":
+	case stateDeleted:
 		s.p.execState = &deletedState{}
 	default:
 		return fmt.Errorf("invalid state transition %q to %q", stateName(s), name)
@@ -141,7 +141,7 @@ func (s *execStoppedState) Delete(ctx context.Context) error {
 		return err
 	}
 
-	return s.transition("deleted")
+	return s.transition(stateDeleted)
 }
 
 func (s *execStoppedState) Kill(ctx context.Context, sig uint32, all bool) error {
@@ -153,5 +153,5 @@ func (s *execStoppedState) SetExited(status int) {
 }
 
 func (s *execStoppedState) Status(ctx context.Context) (string, error) {
-	return "stopped", nil
+	return stateStopped, nil
 }

@@ -12,6 +12,7 @@ import (
 type VMType string
 
 const (
+	// VMTypeQEMU identifies the QEMU VMM backend.
 	VMTypeQEMU VMType = "qemu"
 )
 

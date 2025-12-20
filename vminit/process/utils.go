@@ -43,7 +43,7 @@ func (s *safePid) get() int {
 	return s.pid
 }
 
-// TODO(mlaventure): move to runc package?
+// Note: consider moving this to the runc package.
 func getLastRuntimeError(r *runc.Runc) (string, error) {
 	if r.Log == "" {
 		return "", nil
@@ -162,18 +162,26 @@ func waitTimeout(ctx context.Context, wg *sync.WaitGroup, timeout time.Duration)
 func stateName(v interface{}) string {
 	switch v.(type) {
 	case *runningState, *execRunningState:
-		return "running"
+		return stateRunning
 	case *createdState, *execCreatedState, *createdCheckpointState:
-		return "created"
+		return stateCreated
 	case *pausedState:
-		return "paused"
+		return statePaused
 	case *deletedState:
-		return "deleted"
+		return stateDeleted
 	case *stoppedState:
-		return "stopped"
+		return stateStopped
 	}
 	panic(fmt.Errorf("invalid state %v", v))
 }
+
+const (
+	stateRunning = "running"
+	stateCreated = "created"
+	statePaused  = "paused"
+	stateDeleted = "deleted"
+	stateStopped = "stopped"
+)
 
 func getStreams(stdio stdio.Stdio, sm stream.Manager) ([3]io.ReadWriteCloser, error) {
 	var streams [3]io.ReadWriteCloser

@@ -23,7 +23,7 @@ func (f *factory) NewInstance(ctx context.Context, containerID, stateDir string,
 	}
 
 	// Ensure state directory exists
-	if err := os.MkdirAll(stateDir, 0755); err != nil {
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create state directory: %w", err)
 	}
 

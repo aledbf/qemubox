@@ -27,8 +27,8 @@ type mockConn struct {
 	closed bool
 }
 
-func (m *mockConn) Read(b []byte) (n int, err error)   { return 0, nil }
-func (m *mockConn) Write(b []byte) (n int, err error)  { return len(b), nil }
+func (m *mockConn) Read(b []byte) (int, error)         { return 0, nil }
+func (m *mockConn) Write(b []byte) (int, error)        { return len(b), nil }
 func (m *mockConn) Close() error                       { m.closed = true; return nil }
 func (m *mockConn) LocalAddr() net.Addr                { return nil }
 func (m *mockConn) RemoteAddr() net.Addr               { return nil }

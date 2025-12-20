@@ -32,6 +32,7 @@ func vmdkDescAddExtent(w io.Writer, sectors uint64, filename string, offset uint
 	return nil
 }
 
+// DumpVMDKDescriptor writes a VMDK descriptor to the provided writer.
 func DumpVMDKDescriptor(w io.Writer, cid uint32, devices []string) error {
 	parentCID := uint32(0xffffffff)
 
@@ -80,6 +81,7 @@ ddb.adapterType = "%s"
 	return nil
 }
 
+// DumpVMDKDescriptorToFile writes a VMDK descriptor to the given file path.
 func DumpVMDKDescriptorToFile(vmdkdesc string, cid uint32, devices []string) error {
 	f, err := os.Create(vmdkdesc)
 	if err != nil {

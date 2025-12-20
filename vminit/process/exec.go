@@ -153,7 +153,7 @@ func (e *execProcess) Start(ctx context.Context) error {
 	return e.execState.Start(ctx)
 }
 
-func (e *execProcess) start(ctx context.Context) (err error) {
+func (e *execProcess) start(ctx context.Context) error {
 	// The reaper may receive exit signal right after
 	// the container is started, before the e.pid is updated.
 	// In that case, we want to block the signal handler to
@@ -165,16 +165,19 @@ func (e *execProcess) start(ctx context.Context) (err error) {
 		socket  *runc.Socket
 		pio     *processIO
 		pidFile = newExecPidFile(e.path, e.id)
+		err     error
 	)
 
 	if e.stdio.Terminal {
 		if socket, err = runc.NewTempConsoleSocket(); err != nil {
-			return fmt.Errorf("failed to create runc console socket: %w", err)
+			err = fmt.Errorf("failed to create runc console socket: %w", err)
+			return err
 		}
 		defer func() { _ = socket.Close() }()
 	} else {
 		if pio, err = createIO(ctx, e.id, e.parent.IoUID, e.parent.IoGID, e.stdio, e.parent.streams); err != nil {
-			return fmt.Errorf("failed to create init process I/O: %w", err)
+			err = fmt.Errorf("failed to create init process I/O: %w", err)
+			return err
 		}
 		e.io = pio
 		defer func() {
@@ -194,9 +197,10 @@ func (e *execProcess) start(ctx context.Context) (err error) {
 	if socket != nil {
 		opts.ConsoleSocket = socket
 	}
-	if err := e.parent.runtime.Exec(ctx, e.parent.id, e.spec, opts); err != nil {
+	if execErr := e.parent.runtime.Exec(ctx, e.parent.id, e.spec, opts); execErr != nil {
 		close(e.waitBlock)
-		return e.parent.runtimeError(err, "OCI runtime exec failed")
+		err = e.parent.runtimeError(execErr, "OCI runtime exec failed")
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -204,10 +208,12 @@ func (e *execProcess) start(ctx context.Context) (err error) {
 	if socket != nil {
 		console, err := socket.ReceiveMaster()
 		if err != nil {
-			return fmt.Errorf("failed to retrieve console master: %w", err)
+			err = fmt.Errorf("failed to retrieve console master: %w", err)
+			return err
 		}
 		if e.console, err = e.parent.Platform.CopyConsole(ctx, console, e.id, e.stdio.Stdin, e.stdio.Stdout, e.stdio.Stderr, &e.wg); err != nil {
-			return fmt.Errorf("failed to start console copy: %w", err)
+			err = fmt.Errorf("failed to start console copy: %w", err)
+			return err
 		}
 		if sc, ok := console.(interface{ StdinCloser() io.Closer }); ok {
 			c := sc.StdinCloser()
@@ -215,9 +221,10 @@ func (e *execProcess) start(ctx context.Context) (err error) {
 			e.closers = append(e.closers, c)
 		}
 	} else {
-		c, err := pio.Copy(ctx, &e.wg)
-		if err != nil {
-			return fmt.Errorf("failed to start io pipe copy: %w", err)
+		c, copyErr := pio.Copy(ctx, &e.wg)
+		if copyErr != nil {
+			err = fmt.Errorf("failed to start io pipe copy: %w", copyErr)
+			return err
 		}
 		if c != nil {
 			e.stdin = c
@@ -226,7 +233,8 @@ func (e *execProcess) start(ctx context.Context) (err error) {
 	}
 	pid, err := pidFile.Read()
 	if err != nil {
-		return fmt.Errorf("failed to retrieve OCI runtime exec pi: %wd", err)
+		err = fmt.Errorf("failed to retrieve OCI runtime exec pi: %w", err)
+		return err
 	}
 	e.pid.pid = pid
 	return nil
@@ -240,7 +248,7 @@ func (e *execProcess) Status(ctx context.Context) (string, error) {
 	// if the container as a whole is in the pausing/paused state, so are all
 	// other processes inside the container, use container state here
 	switch s {
-	case "paused", "pausing":
+	case statePaused, "pausing":
 		return s, nil
 	}
 	e.mu.Lock()
