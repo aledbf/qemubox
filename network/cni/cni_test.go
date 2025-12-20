@@ -1,6 +1,3 @@
-// Copyright The Beacon Authors.
-// SPDX-License-Identifier: Apache-2.0
-
 //go:build linux
 
 package cni
@@ -214,9 +211,9 @@ func TestCNIManager_ConfigurationFormats(t *testing.T) {
 			shouldLoad: true,
 		},
 		{
-			name:     "invalid json",
-			filename: "30-test.conflist",
-			content:  `{invalid json}`,
+			name:       "invalid json",
+			filename:   "30-test.conflist",
+			content:    `{invalid json}`,
 			shouldLoad: false,
 		},
 	}
@@ -378,7 +375,7 @@ func TestCNIManager_NetworkNameValidation(t *testing.T) {
 		{"simple name", "beacon-net", true},
 		{"name with numbers", "beacon-net-123", true},
 		{"name with underscores", "beacon_net", true},
-		{"empty name", "", false}, // Empty name is not allowed
+		{"empty name", "", false},                // Empty name is not allowed
 		{"name with spaces", "beacon net", true}, // CNI spec allows various names
 	}
 

@@ -1,6 +1,3 @@
-// Copyright The Beacon Authors.
-// SPDX-License-Identifier: Apache-2.0
-
 //go:build linux
 
 package cni
@@ -94,7 +91,6 @@ func TestExtractTAPDevice_Success(t *testing.T) {
 	}
 }
 
-
 func TestExtractTAPDevice_NilResult(t *testing.T) {
 	_, err := ExtractTAPDevice(nil)
 	assert.Error(t, err)
@@ -178,9 +174,9 @@ func TestExtractTAPDevice_CaseSensitive(t *testing.T) {
 	// TAP prefix is case-sensitive (must be lowercase "tap")
 	result := &current.Result{
 		Interfaces: []*current.Interface{
-			{Name: "TAP123", Sandbox: ""},  // Wrong case
-			{Name: "Tap456", Sandbox: ""},  // Wrong case
-			{Name: "tap789", Sandbox: ""},  // Correct
+			{Name: "TAP123", Sandbox: ""}, // Wrong case
+			{Name: "Tap456", Sandbox: ""}, // Wrong case
+			{Name: "tap789", Sandbox: ""}, // Correct
 		},
 	}
 
