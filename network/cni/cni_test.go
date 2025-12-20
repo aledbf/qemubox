@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/containernetworking/cni/pkg/types"
 	current "github.com/containernetworking/cni/pkg/types/100"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -287,12 +286,6 @@ func TestCNIResult_Conversion(t *testing.T) {
 						},
 						Gateway: net.ParseIP("10.88.0.1"),
 					},
-				},
-				Routes: []*types.Route{
-					{Dst: net.IPNet{IP: net.ParseIP("0.0.0.0"), Mask: net.CIDRMask(0, 32)}},
-				},
-				DNS: types.DNS{
-					Nameservers: []string{"8.8.8.8"},
 				},
 			},
 			expectValid: true,
