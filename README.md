@@ -8,7 +8,7 @@ Linux containers with enhanced security and isolation.
  - Works with containerd running on native host
  - EROFS support for efficient container image layers
  - One VM per container for maximum isolation
- - Simplified architecture using Cloud Hypervisor
+ - Simplified architecture using QEMU
  - CNI-based networking for standard container networking with IPAM plugin support
 
 beaconbox is a **non-core** sub-project of containerd.
@@ -20,12 +20,12 @@ graph TB
     subgraph "Host"
         containerd[containerd]
         shim[containerd-shim-beaconbox-v1]
-        ch[Cloud Hypervisor]
+        qemu[QEMU]
         nm[Network Manager]
         bridge[beacon0 bridge]
 
         containerd -->|runtime API| shim
-        shim -->|manages| ch
+        shim -->|manages| qemu
         shim -->|allocates IPs/TAP| nm
         nm -->|creates| bridge
     end
@@ -37,7 +37,7 @@ graph TB
         container[Container Process]
         tap[TAP device]
 
-        ch -->|boots| kernel
+        qemu -->|boots| kernel
         kernel -->|runs| vminitd
         vminitd -->|TTRPC over vsock| shim
         vminitd -->|spawns| runc
@@ -54,7 +54,7 @@ graph TB
     end
 
     style shim fill:#e1f5ff
-    style ch fill:#ffe1e1
+    style qemu fill:#ffe1e1
     style vminitd fill:#fff4e1
     style nm fill:#e1ffe1
 ```
@@ -62,12 +62,12 @@ graph TB
 ### How it works
 
 1. **Container Creation**: When containerd creates a container with the beaconbox runtime, it spawns the `containerd-shim-beaconbox-v1` shim process
-2. **VM Setup**: The shim creates a Cloud Hypervisor VM instance with:
+2. **VM Setup**: The shim creates a QEMU VM instance with:
    - Linux kernel and initrd (containing vminitd)
    - EROFS container image layers mounted via virtio-fs
    - TAP network device connected to the beacon0 bridge
 3. **Network Allocation**: The network manager allocates an IP address from the 10.88.0.0/16 subnet and creates a TAP device
-4. **VM Boot**: Cloud Hypervisor boots the Linux kernel with the allocated network configuration
+4. **VM Boot**: QEMU boots the Linux kernel with the allocated network configuration
 5. **Container Execution**: Inside the VM, vminitd communicates with the shim via vsock and uses crun (OCI runtime) to execute the container process
 6. **I/O & Events**: Container stdio and lifecycle events flow through vsock between vminitd and the shim
 
@@ -77,7 +77,7 @@ graph TB
 
 **containerd-shim-beaconbox-v1**
 - Implements containerd's runtime shim API
-- Manages Cloud Hypervisor VM lifecycle (create, start, stop, delete)
+- Manages QEMU VM lifecycle (create, start, stop, delete)
 - Handles network setup via integrated network manager
 - Proxies container I/O between containerd and VM (via vsock)
 - Coordinates with vminitd inside VM using TTRPC protocol
@@ -93,8 +93,8 @@ graph TB
 - Automatically reconciles and cleans up stale resources
 - See `docs/CNI_SETUP.md` for CNI configuration guide
 
-**Cloud Hypervisor**
-- Lightweight KVM-based virtual machine monitor
+**QEMU**
+- KVM-based virtual machine monitor (microvm machine type)
 - Boots Linux kernel with minimal memory footprint
 - Provides virtio devices: virtio-net (TAP), virtio-fs (storage), vsock (communication)
 - Runs as subprocess managed by the shim
@@ -115,7 +115,7 @@ graph TB
 - Creates process namespaces (PID, mount, IPC, UTS) - network namespace explicitly removed
 - Sets process UID/GID and drops Linux capabilities
 - Exits after container starts (minimal runtime overhead)
-- **Resource enforcement**: VM has fixed 2 vCPU + 4GB; crun applies container-specific limits within those bounds
+- **Resource enforcement**: VM sizing is derived from the OCI spec (defaults 1 vCPU/512MiB); crun applies container-specific limits within those bounds
 
 **Linux Kernel**
 - Minimal kernel with virtio drivers and cgroups v2 support
@@ -147,12 +147,12 @@ graph TB
 
 ### Design Decisions
 
-**Why Cloud Hypervisor?**
-- Lightweight VMM optimized for cloud workloads
-- Faster than QEMU for microVM use cases
+**Why QEMU?**
+- Widely supported KVM VMM with mature tooling
+- Microvm machine type for fast, minimal boot
 - Strong virtio device support (virtio-fs, vsock, virtio-net)
-- Active development and KVM expertise
-- Simpler codebase than alternatives
+- Good observability via QMP and standard debugging tools
+- Broad distro packaging and deployment options
 
 **Why crun inside the VM?**
 - **Resource limits**: Enforces memory/CPU limits via cgroups v2 within the VM
@@ -280,15 +280,15 @@ sequenceDiagram
     participant C as containerd
     participant S as shim
     participant N as Network Manager
-    participant CH as Cloud Hypervisor
+    participant Q as QEMU
     participant V as vminitd (VM)
     participant R as crun
 
     C->>S: CreateTask(bundle, rootfs)
     S->>N: AllocateIP()
     N-->>S: IP: 10.88.0.5, TAP: beacon-abc123
-    S->>CH: Start VM (kernel, initrd, TAP, virtio-fs)
-    CH-->>V: Boot (PID 1)
+    S->>Q: Start VM (kernel, initrd, TAP, virtio-fs)
+    Q-->>V: Boot (PID 1)
     V->>S: Connect via vsock
     S->>V: CreateTask(bundle path)
     V->>R: Create(OCI bundle)
@@ -313,7 +313,7 @@ sequenceDiagram
     S->>V: Delete(containerID)
     V->>R: Delete(containerID)
     R-->>V: Cleaned up
-    S->>CH: Shutdown VM
+    S->>Q: Shutdown VM
     S->>N: ReleaseIP(10.88.0.5)
     N-->>S: Released
     S-->>C: Deleted
@@ -328,7 +328,7 @@ beaconbox provides defense-in-depth with multiple isolation layers:
 - Hardware-assisted virtualization (Intel VT-x / AMD-V)
 - Separate kernel address space per container
 - VM escape required to compromise host
-- Cloud Hypervisor runs with minimal privileges
+- QEMU runs with minimal privileges
 
 **Layer 2: Network Isolation**
 - VMs communicate via isolated TAP devices
@@ -365,10 +365,10 @@ beaconbox provides defense-in-depth with multiple isolation layers:
 
 ## VMM Backend
 
-beaconbox uses [Cloud Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor) as its virtual machine monitor. Features:
+beaconbox uses [QEMU](https://www.qemu.org/) as its virtual machine monitor. Features:
 
-- Lightweight and fast VM startup
 - KVM-based virtualization
+- QEMU microvm machine type for fast boot
 - virtio-fs for efficient filesystem sharing
 - vsock for host-VM communication
 - TAP device networking with bridge integration
@@ -378,42 +378,43 @@ beaconbox uses [Cloud Hypervisor](https://github.com/cloud-hypervisor/cloud-hype
 
 **Two-Level Resource Enforcement:**
 
-1. **VM Level (Cloud Hypervisor)** - Hardcoded limits at `vm/cloudhypervisor/instance.go`:
+1. **VM Level (QEMU)** - VM sizing is derived from the OCI spec in `shim/task/service.go`:
    ```
-   - 2 vCPUs (BootVcpus: 2, MaxVcpus: 2)
-   - 4GB memory (Size: 4 * 1024 * 1024 * 1024)
+   - Defaults: 1 vCPU, 512MiB memory
+   - MaxCPUs scales to host CPUs unless an explicit CPU limit is set
+   - Memory hotplug scales to host memory unless an explicit memory limit is set
    ```
-   These limits apply **regardless of container resource requests** in the OCI spec.
+   The VM is configured once at boot based on these values.
 
 2. **Container Level (crun + cgroups v2)** - Within VM boundaries:
-   - Container requests 100MB memory → crun creates cgroup with 100MB limit (within 4GB VM)
-   - Container requests 0.5 CPU → crun creates cgroup with 50% CPU share (within 2 vCPU VM)
-   - Container requests 8GB memory → crun sets 8GB limit, but VM caps at 4GB (hard limit)
+   - Container requests 100MB memory → crun creates cgroup with 100MB limit (within VM memory)
+   - Container requests 0.5 CPU → crun creates cgroup with 50% CPU share (within VM CPUs)
+   - Container requests 8GB memory → VM sizing follows the request (aligned to 128MB, capped by host)
 
 **Key Implications:**
-- **Memory overhead**: Every container consumes a 4GB VM, even if only using 10MB
-- **CPU scheduling**: All containers in the host compete for host CPUs, but each VM gets 2 vCPUs
+- **Memory overhead**: Defaults to 512MiB per VM, aligned to 128MB
+- **CPU scheduling**: Defaults to 1 vCPU per VM, MaxCPUs scales with host or explicit limits
 - **Network namespace**: Explicitly removed from OCI spec - all containers share VM's `eth0`
 - **Resource isolation**: Cgroups prevent containers from exceeding their limits within the VM
 - **Overcommit not possible**: Cannot pack multiple small containers in one VM currently
 
 **Code References:**
-- VM resources: `vm/cloudhypervisor/instance.go`
+- VM resources: `shim/task/service.go`, `vm/qemu/qemu.go`
 - Network namespace removal: `shim/task/service.go`
 - Cgroups requirement: `vminit/task/service.go`
 
 ### Performance Characteristics
 
 **Container Startup Time:**
-- VM boot: Varies with kernel size and Cloud Hypervisor initialization
+- VM boot: Varies with kernel size and QEMU initialization
 - Network setup: ~5-10ms (IP allocation + TAP device creation)
 - vminitd initialization: ~10-20ms
 - crun container creation: ~5-10ms
 - **Total typical startup**: Dominated by VM boot time
 
 **Resource Overhead per Container:**
-- Memory: **Fixed 4GB per VM** (hardcoded) + container memory tracked by cgroups
-- CPU: **Fixed 2 vCPUs per VM** (hardcoded) - cgroups enforce container limits within this
+- Memory: Defaults to **512MiB per VM**, aligned to 128MB; hotplug can expand based on limits
+- CPU: Defaults to **1 vCPU per VM**, MaxCPUs scales with host or explicit limits
 - Disk: Kernel (~10-15MB) + initrd (~5-10MB) per VM
 - Network: One TAP device per container (~0.1ms latency)
 - **Important**: VM resources are fixed regardless of container spec requests
@@ -461,7 +462,7 @@ containerd --log-level debug
 # Check binaries are installed
 ls -la /usr/share/beacon/kernel/beacon-kernel-x86_64
 ls -la /usr/share/beacon/kernel/beacon-initrd
-ls -la /usr/share/beacon/bin/cloud-hypervisor
+ls -la /usr/share/beacon/bin/qemu-system-x86_64
 
 # Verify KVM access
 ls -la /dev/kvm
@@ -475,9 +476,9 @@ ss -x | grep vsock
 
 **Common issues:**
 
-1. **"cloud-hypervisor binary not found at /usr/share/beacon/bin/cloud-hypervisor"**
-   - Install Cloud Hypervisor to `/usr/share/beacon/bin/cloud-hypervisor`
-   - Or use `BEACON_SHARE_DIR` environment variable to override the location
+1. **"qemu-system-x86_64 binary not found at /usr/share/beacon/bin/qemu-system-x86_64"**
+   - Install QEMU to `/usr/share/beacon/bin/qemu-system-x86_64`
+   - Or set `BEACON_QEMU_PATH` to override the location
 
 2. **"kernel not found at /usr/share/beacon/kernel/beacon-kernel-x86_64"**
    - Install the kernel to `/usr/share/beacon/kernel/beacon-kernel-x86_64`
@@ -549,7 +550,7 @@ beacon uses the following standardized paths - these are **not** searched, they 
     - `containerd`, `ctr`, `runc` - Container runtime components
     - `nerdctl` - Docker-compatible CLI
     - `buildkitd`, `buildctl` - BuildKit components
-    - `cloud-hypervisor`, `ch-remote` - VM hypervisor
+    - `qemu-system-x86_64`, `qemu-img` - QEMU VM binaries
     - `containerd-shim-beaconbox-v1` - Beacon runtime shim
   - `/usr/share/beacon/kernel/` - Kernel files
     - `beacon-kernel-x86_64` - VM kernel
@@ -623,21 +624,18 @@ ctr run -t --rm --snapshotter erofs --runtime io.containerd.beaconbox.v1 \
   docker.io/library/alpine:latest test /bin/sh
 ```
 
-### Installing Cloud Hypervisor
+### Installing QEMU
 
-Download and install Cloud Hypervisor to the beacon state directory:
+Install QEMU to the beacon share directory or use the system package:
 
 ```bash
-# Create the bin directory
-sudo mkdir -p /var/lib/beacon/bin
+# Option 1: use the system package
+sudo apt-get install -y qemu-system-x86
 
-# Download the latest release
-wget https://github.com/cloud-hypervisor/cloud-hypervisor/releases/latest/download/cloud-hypervisor
-chmod +x cloud-hypervisor
-sudo mv cloud-hypervisor /var/lib/beacon/bin/
-
-# Verify installation
-ls -la /var/lib/beacon/bin/cloud-hypervisor
+# Option 2: copy the built artifacts from `task build:qemu`
+sudo mkdir -p /usr/share/beacon/bin
+sudo cp _output/bin/qemu-system-x86_64 /usr/share/beacon/bin/
+sudo cp _output/bin/qemu-img /usr/share/beacon/bin/
 ```
 
 ### Current Limitations
@@ -672,7 +670,7 @@ ls -la /var/lib/beacon/bin/cloud-hypervisor
 
 ### VM-based container runtimes
 
- - **Kata Containers** - Mature containerd runtime with VM isolation supporting multiple hypervisors. beaconbox is similar in approach but focuses on simplicity with a single VMM backend (Cloud Hypervisor) and tight integration with modern containerd features like EROFS.
+ - **Kata Containers** - Mature containerd runtime with VM isolation supporting multiple hypervisors. beaconbox is similar in approach but focuses on simplicity with a single VMM backend (QEMU) and tight integration with modern containerd features like EROFS.
 
  - **gVisor** - Provides container isolation using a user-space kernel. More lightweight than beaconbox but with different security trade-offs and compatibility considerations.
 
@@ -685,7 +683,7 @@ ls -la /var/lib/beacon/bin/cloud-hypervisor
 ### Why beaconbox?
 
 **Simplicity:**
-- Uses standard upstream components (Cloud Hypervisor, crun, containerd)
+- Uses standard upstream components (QEMU, crun, containerd)
 - No custom patches or forks
 - Straightforward architecture with clear separation of concerns
 - Easy to understand and debug
@@ -705,7 +703,7 @@ ls -la /var/lib/beacon/bin/cloud-hypervisor
 
 ## Key Technologies
 
-- [**Cloud Hypervisor**](https://github.com/cloud-hypervisor/cloud-hypervisor) - Modern, lightweight VMM built for cloud workloads
+- [**QEMU**](https://www.qemu.org/) - Mature, widely supported KVM-based VMM
 - [**EROFS**](https://erofs.docs.kernel.org/) - Efficient read-only filesystem for container images
 - [**containerd**](https://github.com/containerd/containerd) - Industry-standard container runtime
 - [**vsock**](https://wiki.qemu.org/Features/VirtioVsock) - Efficient host-VM communication channel

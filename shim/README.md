@@ -18,7 +18,7 @@ The shim implements the containerd Shim v2 API (TTRPC).
     - `Delete`: Cleans up resources (VM, network, etc.).
     - Event forwarding: Proxies events from the VM to containerd.
 
-- **VM Management**: The shim uses the `vm` package to interact with the VMM (Cloud Hypervisor).
+- **VM Management**: The shim uses the `vm` package to interact with the VMM (QEMU).
 
 - **Networking**: The shim integrates with the `network` package to allocate IPs and create TAP devices before booting the VM.
 
