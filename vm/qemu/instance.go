@@ -24,6 +24,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 
+	"github.com/aledbf/beacon/containerd/paths"
 	"github.com/aledbf/beacon/containerd/vm"
 )
 
@@ -656,7 +657,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 
 	args := []string{
 		// BIOS/firmware path
-		"-L", "/usr/share/qemu",
+		"-L", paths.QemuSharePath(),
 
 		"-machine", "q35,accel=kvm,kernel-irqchip=on,hpet=off,acpi=on", // Optimize: use kernel IRQ chip, disable HPET
 		"-cpu", "host,migratable=on",

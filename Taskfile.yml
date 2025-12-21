@@ -101,7 +101,7 @@ tasks:
         echo "🐳 Building QEMU..."
         {{.BUILDX}} bake qemu
         echo "✓ QEMU built: _output/bin/qemu-system-x86_64, _output/bin/qemu-img"
-        echo "✓ QEMU firmware: _output/share/qemu/"
+        echo "✓ QEMU firmware: _output/share/beacon/qemu/"
 
   # ==========================================================================
   # Development Tasks
@@ -466,9 +466,9 @@ tasks:
         fi
 
         # Copy QEMU BIOS/firmware files
-        if [ -d "_output/share/qemu" ]; then
-          mkdir -p "${RELEASE_DIR}/usr/share/beacon/share/qemu"
-          cp -r _output/share/qemu/* "${RELEASE_DIR}/usr/share/beacon/share/qemu/"
+        if [ -d "_output/share/beacon/qemu" ]; then
+          mkdir -p "${RELEASE_DIR}/usr/share/beacon/qemu"
+          cp -r _output/share/beacon/qemu/* "${RELEASE_DIR}/usr/share/beacon/qemu/"
           echo "  ✓ QEMU firmware files"
         else
           echo "  ⚠ QEMU firmware files not found - skipping"

@@ -83,7 +83,7 @@ func QemuSharePath() string {
 	}
 
 	// Check beacon share directory
-	customPath := filepath.Join(GetShareDir(), "share", "qemu")
+	customPath := filepath.Join(GetShareDir(), "qemu")
 	if _, err := os.Stat(customPath); err == nil {
 		return customPath
 	}

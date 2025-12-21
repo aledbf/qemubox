@@ -38,6 +38,10 @@ RUN apt-get update && apt-get upgrade -y && \
         libseccomp-dev \
         libseccomp2 \
         # Additional useful dependencies
+        librdmacm-dev \
+        acpica-tools \
+        libbpf-dev \
+        libpmem-dev \
         libaio-dev \
         liburing-dev \
         git \
@@ -65,7 +69,6 @@ WORKDIR /build/qemu-src
 # Focused on microvm use case with virtio devices
 # Note: Using dynamic linking with glibc (not fully static like Alpine/musl)
 # Building both system emulator (qemu-system-x86_64) and disk utilities (qemu-img)
-RUN ./configure --help
 RUN ./configure \
     --prefix=/opt/qemu \
     --target-list=x86_64-softmmu \
@@ -137,7 +140,7 @@ COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-
 COPY --from=builder /opt/qemu/bin/qemu-img /usr/local/bin/qemu-img
 
 # Copy BIOS/firmware files needed for boot
-COPY --from=builder /opt/qemu/share/qemu/pvh.bin /usr/local/share/qemu/pvh.bin
+COPY --from=builder /opt/qemu/share/qemu/pvh.bin /usr/share/beacon/qemu/pvh.bin
 
 ENTRYPOINT ["/usr/local/bin/qemu-system-x86_64"]
 
@@ -151,16 +154,4 @@ COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu/bin/qemu-img /bin/qemu-img
 
 # Copy BIOS/firmware files needed for boot
-COPY --from=builder /opt/qemu/share/qemu/pvh.bin /share/qemu/pvh.bin
-
-# ============================================
-# Alternative: Full QEMU installation tarball
-# ============================================
-FROM ubuntu:25.10 AS tarball
-
-COPY --from=builder /opt/qemu /opt/qemu
-
-# Create a tarball for easy extraction
-RUN tar -czvf /qemu.tar.gz -C /opt/qemu .
-
-CMD ["cat", "/qemu.tar.gz"]
+COPY --from=builder /opt/qemu/share/qemu/pvh.bin /share/beacon/qemu/pvh.bin
