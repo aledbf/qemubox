@@ -26,13 +26,13 @@ graph TB
         qemu[QEMU/KVM]
 
         containerd -->|shim v2 ttrpc| shim
-        shim -->|CNI setup| cni
-        cni --> tap
-        shim -->|spawn/config| qemu
-        store -->|virtio-blk| qemu
-        kernel --> qemu
-        initrd --> qemu
-        qemu -.->|virtio-net| tap
+        shim -->|CNI setup (netns/tap/IPAM)| cni
+        cni -->|create/attach| tap
+        shim -->|spawn/config (kernel args, vsock CID)| qemu
+        store -->|rootfs via virtio-blk| qemu
+        kernel -->|bzImage| qemu
+        initrd -->|initrd| qemu
+        qemu -.->|virtio-net to TAP| tap
     end
 
     subgraph "Linux VM"
