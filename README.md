@@ -19,23 +19,36 @@ graph TB
         containerd[containerd]
         shim[containerd-shim-qemubox-v1]
         cni[CNI Plugins<br/>bridge, firewall, IPAM]
+        tap[TAP device]
+        store[EROFS snapshots]
+        kernel[VM kernel]
+        initrd[VM initrd]
         qemu[QEMU/KVM]
 
-        containerd --> shim
-        shim --> cni
-        shim --> qemu
+        containerd -->|shim v2 ttrpc| shim
+        shim -->|CNI setup| cni
+        cni --> tap
+        shim -->|spawn/config| qemu
+        store -->|virtio-blk| qemu
+        kernel --> qemu
+        initrd --> qemu
+        qemu -.->|virtio-net| tap
     end
 
     subgraph "Linux VM"
-        vminitd[vminitd<br/>PID 1]
+        vminitd[vminitd<br/>PID 1 / TTRPC]
+        systemsvc[system service]
+        bundlesvc[bundle service]
         crun[crun<br/>OCI Runtime]
         container[Container Process]
 
+        vminitd --> systemsvc
+        vminitd --> bundlesvc
         vminitd --> crun
         crun --> container
     end
 
-    qemu -.->|virtio-vsock| vminitd
+    shim -.->|vsock ttrpc + stdio| vminitd
 
     style containerd fill:#e1f5ff
     style shim fill:#fff4e1
@@ -45,6 +58,10 @@ graph TB
     style crun fill:#fff9c4
     style container fill:#ffebee
 ```
+
+Legend:
+- Solid arrows: control plane (lifecycle, config, setup)
+- Dotted arrows: data plane (vsock I/O, virtio)
 
 **Key components:**
 - **Shim**: Manages VM lifecycle and proxies I/O via vsock
