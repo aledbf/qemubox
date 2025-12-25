@@ -25,7 +25,7 @@ import (
 	"github.com/vishvananda/netns"
 
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
-	"github.com/aledbf/qemubox/containerd/pkg/paths"
+	"github.com/aledbf/qemubox/containerd/internal/paths"
 )
 
 // newInstance creates a new QEMU microvm instance

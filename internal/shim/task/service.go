@@ -27,7 +27,6 @@ import (
 	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/containerd/v2/pkg/shutdown"
 
-	"github.com/aledbf/qemubox/containerd/pkg/paths"
 	"github.com/containerd/containerd/v2/pkg/stdio"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/errdefs/pkg/errgrpc"
@@ -41,11 +40,9 @@ import (
 	systemAPI "github.com/aledbf/qemubox/containerd/api/services/system/v1"
 	"github.com/aledbf/qemubox/containerd/api/services/vmevents/v1"
 	"github.com/aledbf/qemubox/containerd/internal/host/network"
-	boltstore "github.com/aledbf/qemubox/containerd/internal/host/store"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
-	"github.com/aledbf/qemubox/containerd/internal/shim/bundle"
-
 	"github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
+	"github.com/aledbf/qemubox/containerd/internal/shim/bundle"
 	"github.com/aledbf/qemubox/containerd/internal/shim/cpuhotplug"
 	"github.com/aledbf/qemubox/containerd/internal/shim/memhotplug"
 )
@@ -166,38 +163,6 @@ func checkKVM() error {
 	}
 
 	return nil
-}
-
-// initNetworkManager creates and initializes a new NetworkManager instance.
-// Qemubox uses CNI (Container Network Interface) for all network management.
-// This store persists CNI network configuration metadata; IP allocation
-// is delegated to CNI IPAM plugins (state stored in /var/lib/cni/networks/).
-func initNetworkManager(ctx context.Context) (network.NetworkManagerInterface, error) {
-	// Create BoltDB store for CNI network configuration metadata
-	dbPath := paths.CNIConfigDBPath()
-
-	networkConfigStore, err := boltstore.NewBoltStore[network.NetworkConfig](
-		dbPath, "network_configs",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create CNI network config store: %w", err)
-	}
-
-	// Load CNI network configuration from environment
-	netCfg := network.LoadNetworkConfig()
-
-	// Create CNI-based NetworkManager
-	nm, err := network.NewNetworkManager(
-		netCfg,
-		networkConfigStore,
-	)
-	if err != nil {
-		_ = networkConfigStore.Close()
-		return nil, fmt.Errorf("create CNI network manager: %w", err)
-	}
-
-	log.G(ctx).WithField("mode", netCfg.Mode).Info("NetworkManager initialized")
-	return nm, nil
 }
 
 func (s *service) shutdown(ctx context.Context) error {

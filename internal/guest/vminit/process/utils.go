@@ -21,7 +21,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
-	"github.com/aledbf/qemubox/containerd/pkg/iobuf"
+	"github.com/aledbf/qemubox/containerd/internal/iobuf"
 )
 
 const (

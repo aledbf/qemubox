@@ -43,16 +43,7 @@ func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
 func withTempCwd(t *testing.T, fn func(tmp string)) {
 	t.Helper()
 	tmp := t.TempDir()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(tmp); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chdir(wd)
-	})
+	t.Chdir(tmp)
 	fn(tmp)
 }
 

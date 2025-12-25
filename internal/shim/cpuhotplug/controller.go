@@ -302,7 +302,7 @@ func (c *Controller) calculateTargetCPUs(ctx context.Context) int {
 	return c.currentCPUs
 }
 
-func (c *Controller) sampleCPU(ctx context.Context) (usagePct, throttledPct float64, ok bool, err error) {
+func (c *Controller) sampleCPU(ctx context.Context) (float64, float64, bool, error) {
 	if c.stats == nil {
 		return 0, 0, false, nil
 	}
@@ -347,12 +347,12 @@ func (c *Controller) sampleCPU(ctx context.Context) (usagePct, throttledPct floa
 		return 0, 0, false, nil
 	}
 
-	usagePct = (float64(deltaUsage) / (elapsedUsec * float64(c.currentCPUs))) * 100.0
+	usagePct := (float64(deltaUsage) / (elapsedUsec * float64(c.currentCPUs))) * 100.0
 	if usagePct < 0 {
 		usagePct = 0
 	}
 
-	throttledPct = (float64(deltaThrottled) / elapsedUsec) * 100.0
+	throttledPct := (float64(deltaThrottled) / elapsedUsec) * 100.0
 	if throttledPct < 0 {
 		throttledPct = 0
 	}

@@ -85,7 +85,7 @@ func (s *systemService) OfflineCPU(ctx context.Context, req *api.OfflineCPUReque
 		return &emptypb.Empty{}, nil
 	}
 
-	if err := os.WriteFile(path, []byte("0"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("0"), 0600); err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -105,7 +105,7 @@ func (s *systemService) OnlineCPU(ctx context.Context, req *api.OnlineCPURequest
 	// Wait up to 1 second with exponential backoff
 	maxRetries := 10
 	var lastErr error
-	for retry := 0; retry < maxRetries; retry++ {
+	for retry := range maxRetries {
 		if retry > 0 {
 			// Exponential backoff: 10ms, 20ms, 40ms, 80ms, 160ms, 320ms (total ~1s)
 			delay := time.Duration(10<<uint(retry-1)) * time.Millisecond
@@ -136,7 +136,7 @@ func (s *systemService) OnlineCPU(ctx context.Context, req *api.OnlineCPURequest
 		}
 
 		// Write "1" to online the CPU
-		if err := os.WriteFile(path, []byte("1"), 0644); err != nil {
+		if err := os.WriteFile(path, []byte("1"), 0600); err != nil {
 			return nil, errgrpc.ToGRPC(err)
 		}
 
@@ -195,7 +195,7 @@ func (s *systemService) OfflineMemory(ctx context.Context, req *api.OfflineMemor
 	}
 
 	// Offline the block
-	if err := os.WriteFile(path, []byte("0"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("0"), 0600); err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -231,7 +231,7 @@ func (s *systemService) OnlineMemory(ctx context.Context, req *api.OnlineMemoryR
 	// Wait up to 1 second with exponential backoff
 	maxRetries := 10
 	var lastErr error
-	for retry := 0; retry < maxRetries; retry++ {
+	for retry := range maxRetries {
 		if retry > 0 {
 			// Exponential backoff: 10ms, 20ms, 40ms, 80ms, 160ms, 320ms (total ~1s)
 			delay := time.Duration(10<<uint(retry-1)) * time.Millisecond
@@ -262,7 +262,7 @@ func (s *systemService) OnlineMemory(ctx context.Context, req *api.OnlineMemoryR
 		}
 
 		// Write "1" to online the memory
-		if err := os.WriteFile(path, []byte("1"), 0644); err != nil {
+		if err := os.WriteFile(path, []byte("1"), 0600); err != nil {
 			return nil, errgrpc.ToGRPC(err)
 		}
 

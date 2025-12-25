@@ -240,8 +240,9 @@ func (c *Controller) calculateTargetMemory(ctx context.Context) (int64, error) {
 	freeMemory := c.currentMemory - usedMemory
 	safetyMargin := c.config.OOMSafetyMarginMB * 1024 * 1024
 
+	switch {
 	// Scale up: usage > threshold AND free memory < safety margin
-	if usagePct >= c.config.ScaleUpThreshold && freeMemory < safetyMargin {
+	case usagePct >= c.config.ScaleUpThreshold && freeMemory < safetyMargin:
 		// Check cooldown
 		if time.Since(c.lastScaleUp) < c.config.ScaleUpCooldown {
 			return c.currentMemory, nil
@@ -259,7 +260,7 @@ func (c *Controller) calculateTargetMemory(ctx context.Context) (int64, error) {
 				return newMemory, nil
 			}
 		}
-	} else if usagePct < c.config.ScaleDownThreshold {
+	case usagePct < c.config.ScaleDownThreshold:
 		// Scale down: usage < threshold
 		// Check cooldown
 		if time.Since(c.lastScaleDown) < c.config.ScaleDownCooldown {
@@ -282,7 +283,7 @@ func (c *Controller) calculateTargetMemory(ctx context.Context) (int64, error) {
 				return newMemory, nil
 			}
 		}
-	} else {
+	default:
 		// Reset counters
 		c.consecutiveHighUsage = 0
 		c.consecutiveLowUsage = 0
@@ -421,7 +422,7 @@ func (c *Controller) scaleDown(ctx context.Context, targetMemory int64) error {
 // findFreeSlot finds the first available memory slot (0-7)
 func (c *Controller) findFreeSlot() int {
 	const maxSlots = 8 // QEMU configured with slots=8
-	for i := 0; i < maxSlots; i++ {
+	for i := range maxSlots {
 		if !c.usedSlots[i] {
 			return i
 		}

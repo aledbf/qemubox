@@ -1,0 +1,200 @@
+version: "2"
+run:
+  concurrency: 8
+  allow-parallel-runners: true
+output:
+  formats:
+    text:
+      path: stdout
+linters:
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - decorder
+    - dogsled
+    - durationcheck
+    - errchkjson
+    - exptostd
+    - ginkgolinter
+    - gocheckcompilerdirectives
+    - gochecksumtype
+    - gocritic
+    - goheader
+    - goprintffuncname
+    - gosmopolitan
+    - grouper
+    - iface
+    - importas
+    - intrange
+    - loggercheck
+    - makezero
+    - mirror
+    - nilnesserr
+    - nosprintfhostport
+    - reassign
+    - recvcheck
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - testableexamples
+    - testifylint
+    - unconvert
+    - usetesting
+    - wastedassign
+    - zerologlint
+    - canonicalheader
+    - containedctx
+    - contextcheck
+    - copyloopvar
+    - cyclop
+    - dupl
+    - dupword
+    - errcheck
+    - errname
+    - errorlint
+    - exhaustive
+    - forcetypeassert
+    - funlen
+    - gochecknoglobals
+    - gochecknoinits
+    - gocognit
+    - goconst
+    - godot
+    - godox
+    - gomoddirectives
+    - gomodguard
+    - gosec
+    - inamedparam
+    - interfacebloat
+    - ireturn
+    - lll
+    - misspell
+    - mnd
+    - musttag
+    - nakedret
+    - nilerr
+    - nilnil
+    - nlreturn
+    - noctx
+    - nolintlint
+    - nonamedreturns
+    - paralleltest
+    - predeclared
+    - promlinter
+    - protogetter
+    - spancheck
+    - tagalign
+    - tagliatelle
+    - thelper
+    - tparallel
+    - unparam
+    - usestdlibvars
+    - varnamelen
+    - whitespace
+  disable:
+    - depguard
+    - err113
+    - sloglint
+    - wsl
+    - exhaustruct
+    - forbidigo
+    - testpackage
+    - wrapcheck
+    # CLI-specific exclusions - these are too pedantic for command-line tools
+    - gochecknoglobals  # Cobra commands require package-level vars
+    - gochecknoinits    # Cobra flag setup uses init()
+    - nlreturn          # Excessive whitespace requirements
+    - varnamelen        # Short names like 'c' for cobra.Command are idiomatic
+    - mnd               # Magic numbers in CLI flags are fine
+    - paralleltest      # Not all tests benefit from parallelization
+    - tagliatelle       # snake_case in YAML config is conventional
+    - funlen            # Command handlers are naturally longer
+    - lll               # Long lines in help text are acceptable
+    - godot             # Comment punctuation is pedantic
+    - ireturn           # Returning interfaces is fine for formatters
+    - gomoddirectives   # go.mod directives are intentional
+    - protogetter       # Direct proto field access is fine for CLI output
+    - exhaustive        # Not all switch statements need all cases
+  settings:
+    cyclop:
+      max-complexity: 17
+    dupl:
+      threshold: 250
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+    sloglint:
+      context: all
+    staticcheck:
+      checks:
+        - all
+    usetesting:
+      # The context checks are disabled by default since usetesting v0.5.0, CI is still using an older version,
+      # so disabling them explicitly for now. These checks have caused some churn for us in CI as well, not all
+      # occurrences of them are valid.
+      context-background: false
+      context-todo: false
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - ineffassign
+        path: conversion\.go
+      - linters:
+          - ineffassign
+        text: ineffectual assignment to ctx
+      - linters:
+          - staticcheck
+        text: this value of `ctx` is never used
+      - linters:
+          - wastedassign
+        text: assigned to ctx, but never used afterwards
+      - linters:
+          - forbidigo
+        path: _test.go$
+        text: should not be used because managedFields was removed
+      # CLI-specific errcheck exclusions
+      - linters:
+          - errcheck
+        text: MarkFlagRequired
+      - linters:
+          - errcheck
+        text: fmt\.(Fprint|Print|Scan)
+      - linters:
+          - errcheck
+        text: \.Flush\(\)
+      - linters:
+          - errcheck
+        text: \.Close\(\)
+      - linters:
+          - errcheck
+        path: _test\.go$
+      - linters:
+          - gosec
+        text: G115  # Integer overflow conversion is acceptable for CLI flags
+      - linters:
+          - gosec
+        text: G104  # Unhandled errors covered by errcheck exclusions
+      - linters:
+          - gosec
+        text: G304  # File inclusion via variable is intentional for CLI
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$

@@ -76,12 +76,6 @@ func (m *mockStatsProvider) getStats(ctx context.Context) (int64, error) {
 	return m.usageBytes, nil
 }
 
-func (m *mockStatsProvider) setUsage(bytes int64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.usageBytes = bytes
-}
-
 // mockMemoryManager simulates guest memory online/offline
 type mockMemoryManager struct {
 	mu           sync.Mutex
@@ -501,7 +495,7 @@ func TestFindFreeSlot(t *testing.T) {
 	}
 
 	// Fill all slots
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		controller.usedSlots[i] = true
 	}
 	slot = controller.findFreeSlot()

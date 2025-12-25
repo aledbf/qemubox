@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/aledbf/qemubox/containerd/pkg/paths"
+	"github.com/aledbf/qemubox/containerd/internal/paths"
 )
 
 // findQemu returns the path to the qemu-system-x86_64 binary

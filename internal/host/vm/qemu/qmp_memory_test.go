@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+const qmpTestSocketPath = "/tmp/test-qemu-qmp.sock"
+
 // TestQMPMemoryHotplug tests the memory hotplug functionality via QMP
 // This is an integration test that requires a running QEMU VM
 func TestQMPMemoryHotplug(t *testing.T) {
@@ -19,8 +21,7 @@ func TestQMPMemoryHotplug(t *testing.T) {
 	ctx := context.Background()
 
 	// Connect to QMP (socket path from running VM)
-	qmpSocketPath := "/tmp/test-qemu-qmp.sock"
-	qmp, err := NewQMPClient(ctx, qmpSocketPath)
+	qmp, err := NewQMPClient(ctx, qmpTestSocketPath)
 	if err != nil {
 		t.Fatalf("failed to connect to QMP: %v", err)
 	}
@@ -107,8 +108,7 @@ func TestQueryMemorySizeSummary(t *testing.T) {
 
 	ctx := context.Background()
 
-	qmpSocketPath := "/tmp/test-qemu-qmp.sock"
-	qmp, err := NewQMPClient(ctx, qmpSocketPath)
+	qmp, err := NewQMPClient(ctx, qmpTestSocketPath)
 	if err != nil {
 		t.Fatalf("failed to connect to QMP: %v", err)
 	}
@@ -141,8 +141,7 @@ func TestQueryMemoryDevices(t *testing.T) {
 
 	ctx := context.Background()
 
-	qmpSocketPath := "/tmp/test-qemu-qmp.sock"
-	qmp, err := NewQMPClient(ctx, qmpSocketPath)
+	qmp, err := NewQMPClient(ctx, qmpTestSocketPath)
 	if err != nil {
 		t.Fatalf("failed to connect to QMP: %v", err)
 	}
@@ -171,8 +170,7 @@ func TestMemoryHotplugAlignment(t *testing.T) {
 
 	ctx := context.Background()
 
-	qmpSocketPath := "/tmp/test-qemu-qmp.sock"
-	qmp, err := NewQMPClient(ctx, qmpSocketPath)
+	qmp, err := NewQMPClient(ctx, qmpTestSocketPath)
 	if err != nil {
 		t.Fatalf("failed to connect to QMP: %v", err)
 	}

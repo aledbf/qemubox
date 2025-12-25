@@ -132,8 +132,13 @@ func NewQMPClient(ctx context.Context, socketPath string) (*QMPClient, error) {
 
 // execute sends a QMP command and waits for response
 func (q *QMPClient) execute(ctx context.Context, command string, args map[string]interface{}) error {
+	_, err := q.sendCommand(ctx, command, args)
+	return err
+}
+
+func (q *QMPClient) sendCommand(ctx context.Context, command string, args map[string]interface{}) (*qmpResponse, error) {
 	if q.closed.Load() {
-		return fmt.Errorf("QMP client closed")
+		return nil, fmt.Errorf("QMP client closed")
 	}
 
 	id := q.nextID.Add(1)
@@ -142,7 +147,7 @@ func (q *QMPClient) execute(ctx context.Context, command string, args map[string
 	q.mu.Lock()
 	if q.pending == nil {
 		q.mu.Unlock()
-		return fmt.Errorf("QMP client closed")
+		return nil, fmt.Errorf("QMP client closed")
 	}
 	q.pending[id] = respChan
 	q.mu.Unlock()
@@ -157,7 +162,7 @@ func (q *QMPClient) execute(ctx context.Context, command string, args map[string
 		q.mu.Lock()
 		delete(q.pending, id)
 		q.mu.Unlock()
-		return fmt.Errorf("failed to send QMP command %s: %w", command, err)
+		return nil, fmt.Errorf("failed to send QMP command %s: %w", command, err)
 	}
 
 	// Use configured timeout (default: 5 seconds)
@@ -170,22 +175,22 @@ func (q *QMPClient) execute(ctx context.Context, command string, args map[string
 	select {
 	case resp := <-respChan:
 		if resp == nil {
-			return fmt.Errorf("QMP response channel closed for %s", command)
+			return nil, fmt.Errorf("QMP response channel closed for %s", command)
 		}
 		if resp.Error != nil {
-			return fmt.Errorf("QMP error for %s: %s: %s", command, resp.Error.Class, resp.Error.Desc)
+			return nil, fmt.Errorf("QMP error for %s: %s: %s", command, resp.Error.Class, resp.Error.Desc)
 		}
-		return nil
+		return resp, nil
 	case <-ctx.Done():
 		q.mu.Lock()
 		delete(q.pending, id)
 		q.mu.Unlock()
-		return ctx.Err()
+		return nil, ctx.Err()
 	case <-time.After(timeout):
 		q.mu.Lock()
 		delete(q.pending, id)
 		q.mu.Unlock()
-		return fmt.Errorf("timeout (%v) waiting for QMP response to %s", timeout, command)
+		return nil, fmt.Errorf("timeout (%v) waiting for QMP response to %s", timeout, command)
 	}
 }
 
@@ -416,118 +421,43 @@ type HotpluggableCPU struct {
 // QueryCPUs returns information about all vCPUs in the VM
 // Uses query-cpus-fast which is more efficient than query-cpus
 func (q *QMPClient) QueryCPUs(ctx context.Context) ([]CPUInfo, error) {
-	if q.closed.Load() {
-		return nil, fmt.Errorf("QMP client closed")
+	resp, err := q.sendCommand(ctx, "query-cpus-fast", nil)
+	if err != nil {
+		return nil, err
 	}
 
-	id := q.nextID.Add(1)
-	respChan := make(chan *qmpResponse, 1)
-
-	q.mu.Lock()
-	q.pending[id] = respChan
-	q.mu.Unlock()
-
-	cmd := qmpCommand{
-		Execute: "query-cpus-fast",
-		ID:      id,
+	// Parse the return value as array of CPUInfo
+	var cpus []CPUInfo
+	returnBytes, err := json.Marshal(resp.Return)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal CPU info: %w", err)
 	}
 
-	if err := q.encoder.Encode(cmd); err != nil {
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, fmt.Errorf("failed to send query-cpus-fast: %w", err)
+	if err := json.Unmarshal(returnBytes, &cpus); err != nil {
+		return nil, fmt.Errorf("failed to parse CPU info: %w", err)
 	}
 
-	// Wait for response with timeout
-	select {
-	case resp := <-respChan:
-		if resp.Error != nil {
-			return nil, fmt.Errorf("QMP error for query-cpus-fast: %s: %s", resp.Error.Class, resp.Error.Desc)
-		}
-
-		// Parse the return value as array of CPUInfo
-		var cpus []CPUInfo
-		returnBytes, err := json.Marshal(resp.Return)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal CPU info: %w", err)
-		}
-
-		if err := json.Unmarshal(returnBytes, &cpus); err != nil {
-			return nil, fmt.Errorf("failed to parse CPU info: %w", err)
-		}
-
-		return cpus, nil
-
-	case <-ctx.Done():
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, ctx.Err()
-
-	case <-time.After(5 * time.Second):
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, fmt.Errorf("timeout waiting for query-cpus-fast response")
-	}
+	return cpus, nil
 }
 
 // QueryHotpluggableCPUs returns available CPU hotplug slots.
 func (q *QMPClient) QueryHotpluggableCPUs(ctx context.Context) ([]HotpluggableCPU, error) {
-	if q.closed.Load() {
-		return nil, fmt.Errorf("QMP client closed")
+	resp, err := q.sendCommand(ctx, "query-hotpluggable-cpus", nil)
+	if err != nil {
+		return nil, err
 	}
 
-	id := q.nextID.Add(1)
-	respChan := make(chan *qmpResponse, 1)
-
-	q.mu.Lock()
-	q.pending[id] = respChan
-	q.mu.Unlock()
-
-	cmd := qmpCommand{
-		Execute: "query-hotpluggable-cpus",
-		ID:      id,
+	var cpus []HotpluggableCPU
+	returnBytes, err := json.Marshal(resp.Return)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal hotpluggable CPU info: %w", err)
 	}
 
-	if err := q.encoder.Encode(cmd); err != nil {
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, fmt.Errorf("failed to send query-hotpluggable-cpus: %w", err)
+	if err := json.Unmarshal(returnBytes, &cpus); err != nil {
+		return nil, fmt.Errorf("failed to parse hotpluggable CPU info: %w", err)
 	}
 
-	select {
-	case resp := <-respChan:
-		if resp.Error != nil {
-			return nil, fmt.Errorf("QMP error for query-hotpluggable-cpus: %s: %s", resp.Error.Class, resp.Error.Desc)
-		}
-
-		var cpus []HotpluggableCPU
-		returnBytes, err := json.Marshal(resp.Return)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal hotpluggable CPU info: %w", err)
-		}
-
-		if err := json.Unmarshal(returnBytes, &cpus); err != nil {
-			return nil, fmt.Errorf("failed to parse hotpluggable CPU info: %w", err)
-		}
-
-		return cpus, nil
-
-	case <-ctx.Done():
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, ctx.Err()
-
-	case <-time.After(5 * time.Second):
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, fmt.Errorf("timeout waiting for query-hotpluggable-cpus response")
-	}
+	return cpus, nil
 }
 
 // HotplugCPU adds a new vCPU to the running VM
