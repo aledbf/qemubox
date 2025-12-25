@@ -661,6 +661,269 @@ func (q *QMPClient) UnplugCPU(ctx context.Context, cpuID int) error {
 	return q.DeviceDelete(ctx, deviceID)
 }
 
+// MemoryDeviceInfo represents a hotplugged memory device
+type MemoryDeviceInfo struct {
+	Type string                 `json:"type"` // "dimm" or "virtio-mem"
+	Data map[string]interface{} `json:"data"`
+}
+
+// MemorySizeSummary from query-memory-size-summary
+type MemorySizeSummary struct {
+	BaseMemory    int64 `json:"base-memory"`    // Boot memory in bytes
+	PluggedMemory int64 `json:"plugged-memory"` // Hotplugged memory in bytes
+}
+
+// QueryMemoryDevices returns all hotplugged memory devices
+func (q *QMPClient) QueryMemoryDevices(ctx context.Context) ([]MemoryDeviceInfo, error) {
+	if q.closed.Load() {
+		return nil, fmt.Errorf("QMP client closed")
+	}
+
+	id := q.nextID.Add(1)
+	respChan := make(chan *qmpResponse, 1)
+
+	q.mu.Lock()
+	q.pending[id] = respChan
+	q.mu.Unlock()
+
+	cmd := qmpCommand{
+		Execute: "query-memory-devices",
+		ID:      id,
+	}
+
+	if err := q.encoder.Encode(cmd); err != nil {
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, fmt.Errorf("failed to send query-memory-devices: %w", err)
+	}
+
+	select {
+	case resp := <-respChan:
+		if resp.Error != nil {
+			return nil, fmt.Errorf("QMP error for query-memory-devices: %s: %s", resp.Error.Class, resp.Error.Desc)
+		}
+
+		var devices []MemoryDeviceInfo
+		if resp.Return == nil {
+			return devices, nil
+		}
+
+		returnBytes, err := json.Marshal(resp.Return)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal memory devices: %w", err)
+		}
+
+		if err := json.Unmarshal(returnBytes, &devices); err != nil {
+			return nil, fmt.Errorf("failed to parse memory devices: %w", err)
+		}
+
+		return devices, nil
+
+	case <-ctx.Done():
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, ctx.Err()
+
+	case <-time.After(5 * time.Second):
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, fmt.Errorf("timeout waiting for query-memory-devices response")
+	}
+}
+
+// QueryMemorySizeSummary returns memory usage summary
+func (q *QMPClient) QueryMemorySizeSummary(ctx context.Context) (*MemorySizeSummary, error) {
+	if q.closed.Load() {
+		return nil, fmt.Errorf("QMP client closed")
+	}
+
+	id := q.nextID.Add(1)
+	respChan := make(chan *qmpResponse, 1)
+
+	q.mu.Lock()
+	q.pending[id] = respChan
+	q.mu.Unlock()
+
+	cmd := qmpCommand{
+		Execute: "query-memory-size-summary",
+		ID:      id,
+	}
+
+	if err := q.encoder.Encode(cmd); err != nil {
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, fmt.Errorf("failed to send query-memory-size-summary: %w", err)
+	}
+
+	select {
+	case resp := <-respChan:
+		if resp.Error != nil {
+			return nil, fmt.Errorf("QMP error for query-memory-size-summary: %s: %s", resp.Error.Class, resp.Error.Desc)
+		}
+
+		var summary MemorySizeSummary
+		if resp.Return == nil {
+			return &summary, nil
+		}
+
+		returnBytes, err := json.Marshal(resp.Return)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal memory summary: %w", err)
+		}
+
+		if err := json.Unmarshal(returnBytes, &summary); err != nil {
+			return nil, fmt.Errorf("failed to parse memory summary: %w", err)
+		}
+
+		return &summary, nil
+
+	case <-ctx.Done():
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, ctx.Err()
+
+	case <-time.After(5 * time.Second):
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+		return nil, fmt.Errorf("timeout waiting for query-memory-size-summary response")
+	}
+}
+
+// ObjectAdd adds a QEMU object (e.g., memory backend)
+func (q *QMPClient) ObjectAdd(ctx context.Context, qomType, objID string, args map[string]interface{}) error {
+	arguments := map[string]interface{}{
+		"qom-type": qomType,
+		"id":       objID,
+	}
+	for k, v := range args {
+		arguments[k] = v
+	}
+
+	return q.execute(ctx, "object-add", arguments)
+}
+
+// ObjectDel removes a QEMU object
+func (q *QMPClient) ObjectDel(ctx context.Context, objID string) error {
+	return q.execute(ctx, "object-del", map[string]interface{}{
+		"id": objID,
+	})
+}
+
+// HotplugMemory adds memory to the VM using pc-dimm
+// slotID: memory slot index (0-7 based on -m slots=8)
+// sizeBytes: memory size in bytes (must be 128MB aligned)
+func (q *QMPClient) HotplugMemory(ctx context.Context, slotID int, sizeBytes int64) error {
+	// Validate 128MB alignment
+	const alignmentMB = 128
+	const alignmentBytes = alignmentMB * 1024 * 1024
+	if sizeBytes%alignmentBytes != 0 {
+		return fmt.Errorf("memory size must be %dMB aligned, got %d bytes", alignmentMB, sizeBytes)
+	}
+
+	backendID := fmt.Sprintf("mem%d", slotID)
+	dimmID := fmt.Sprintf("dimm%d", slotID)
+
+	// Query current state before adding
+	beforeSummary, err := q.QueryMemorySizeSummary(ctx)
+	if err != nil {
+		log.G(ctx).WithError(err).Warn("qemu: failed to query memory before hotplug")
+	}
+
+	// Step 1: Create memory backend object
+	backendArgs := map[string]interface{}{
+		"size": sizeBytes,
+	}
+
+	log.G(ctx).WithFields(log.Fields{
+		"slot_id":    slotID,
+		"size_bytes": sizeBytes,
+		"size_mb":    sizeBytes / (1024 * 1024),
+		"backend_id": backendID,
+	}).Debug("qemu: creating memory backend")
+
+	if err := q.ObjectAdd(ctx, "memory-backend-ram", backendID, backendArgs); err != nil {
+		return fmt.Errorf("failed to create memory backend: %w", err)
+	}
+
+	// Step 2: Hotplug pc-dimm device
+	dimmArgs := map[string]interface{}{
+		"id":     dimmID,
+		"memdev": backendID,
+	}
+
+	log.G(ctx).WithFields(log.Fields{
+		"slot_id": slotID,
+		"dimm_id": dimmID,
+	}).Debug("qemu: hotplugging memory device")
+
+	if err := q.DeviceAdd(ctx, "pc-dimm", dimmArgs); err != nil {
+		// Cleanup backend on failure
+		if delErr := q.ObjectDel(ctx, backendID); delErr != nil {
+			log.G(ctx).WithError(delErr).Warn("qemu: failed to cleanup memory backend after device_add failure")
+		}
+		return fmt.Errorf("failed to hotplug memory device: %w", err)
+	}
+
+	// Verify memory was added
+	if beforeSummary != nil {
+		afterSummary, err := q.QueryMemorySizeSummary(ctx)
+		if err == nil {
+			if afterSummary.BaseMemory+afterSummary.PluggedMemory <= beforeSummary.BaseMemory+beforeSummary.PluggedMemory {
+				log.G(ctx).WithFields(log.Fields{
+					"slot_id":       slotID,
+					"before_total":  beforeSummary.BaseMemory + beforeSummary.PluggedMemory,
+					"after_total":   afterSummary.BaseMemory + afterSummary.PluggedMemory,
+					"expected_size": sizeBytes,
+				}).Warn("qemu: device_add did not increase memory size")
+				return fmt.Errorf("device_add did not increase memory size")
+			}
+			log.G(ctx).WithFields(log.Fields{
+				"slot_id":        slotID,
+				"added_mb":       sizeBytes / (1024 * 1024),
+				"total_mb":       (afterSummary.BaseMemory + afterSummary.PluggedMemory) / (1024 * 1024),
+				"plugged_mb":     afterSummary.PluggedMemory / (1024 * 1024),
+			}).Info("qemu: memory hotplug successful")
+		}
+	}
+
+	return nil
+}
+
+// UnplugMemory removes memory from the VM
+// slotID: memory slot to remove
+// Note: Memory hot-unplug requires guest kernel support (CONFIG_MEMORY_HOTREMOVE=y)
+// and the memory must be offline in the guest before removal
+func (q *QMPClient) UnplugMemory(ctx context.Context, slotID int) error {
+	dimmID := fmt.Sprintf("dimm%d", slotID)
+	backendID := fmt.Sprintf("mem%d", slotID)
+
+	log.G(ctx).WithFields(log.Fields{
+		"slot_id": slotID,
+		"dimm_id": dimmID,
+	}).Debug("qemu: unplugging memory device")
+
+	// Step 1: Remove device
+	if err := q.DeviceDelete(ctx, dimmID); err != nil {
+		return fmt.Errorf("failed to unplug memory device: %w", err)
+	}
+
+	// Step 2: Remove backend object
+	// Note: QEMU may need time to complete device removal before backend deletion
+	// We'll attempt to delete the backend, but it's not critical if it fails
+	if err := q.ObjectDel(ctx, backendID); err != nil {
+		log.G(ctx).WithError(err).WithField("backend_id", backendID).
+			Warn("qemu: failed to delete memory backend (non-fatal)")
+	}
+
+	return nil
+}
+
 // Close closes the QMP connection
 func (q *QMPClient) Close() error {
 	if !q.closed.CompareAndSwap(false, true) {

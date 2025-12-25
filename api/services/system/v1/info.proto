@@ -12,6 +12,8 @@ service System {
 	rpc Info(google.protobuf.Empty) returns (InfoResponse);
 	rpc OfflineCPU(OfflineCPURequest) returns (google.protobuf.Empty);
 	rpc OnlineCPU(OnlineCPURequest) returns (google.protobuf.Empty);
+	rpc OfflineMemory(OfflineMemoryRequest) returns (google.protobuf.Empty);
+	rpc OnlineMemory(OnlineMemoryRequest) returns (google.protobuf.Empty);
 }
 
 message InfoResponse {
@@ -25,4 +27,12 @@ message OfflineCPURequest {
 
 message OnlineCPURequest {
 	uint32 cpu_id = 1;
+}
+
+message OfflineMemoryRequest {
+	uint32 memory_id = 1;
+}
+
+message OnlineMemoryRequest {
+	uint32 memory_id = 1;
 }

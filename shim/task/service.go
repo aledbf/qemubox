@@ -46,6 +46,7 @@ import (
 	"github.com/aledbf/qemubox/containerd/vm"
 
 	"github.com/aledbf/qemubox/containerd/shim/cpuhotplug"
+	"github.com/aledbf/qemubox/containerd/shim/memhotplug"
 	"github.com/aledbf/qemubox/containerd/vm/qemu"
 )
 
@@ -106,6 +107,9 @@ type service struct {
 	// cpuHotplugController manages dynamic vCPU allocation (QEMU only)
 	cpuHotplugController *cpuhotplug.Controller
 
+	// memoryHotplugController manages dynamic memory allocation (QEMU only)
+	memoryHotplugController *memhotplug.Controller
+
 	// Service lifetime context - valid exception to "no context in struct" rule
 	// because it represents the entire service lifecycle and is managed by the service itself.
 	context context.Context //nolint:containedctx // Manages service lifetime
@@ -125,6 +129,7 @@ type deleteCleanupPlan struct {
 	needShutdown     bool
 	vmInst           vm.Instance
 	cpuController    *cpuhotplug.Controller
+	memController    *memhotplug.Controller
 	needNetworkClean bool
 }
 
@@ -586,6 +591,9 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	// Start CPU hotplug controller if conditions are met
 	s.startCPUHotplugController(ctx, r.ID, vmi, resourceCfg)
 
+	// Start memory hotplug controller if conditions are met
+	s.startMemoryHotplugController(ctx, r.ID, vmi, resourceCfg)
+
 	return &taskAPI.CreateTaskResponse{
 		Pid: resp.Pid,
 	}, nil
@@ -626,6 +634,8 @@ func (s *service) collectDeleteCleanup(r *taskAPI.DeleteRequest) deleteCleanupPl
 			plan.needNetworkClean = true
 			plan.cpuController = s.cpuHotplugController
 			s.cpuHotplugController = nil
+			plan.memController = s.memoryHotplugController
+			s.memoryHotplugController = nil
 			delete(s.containers, r.ID)
 		}
 	}
@@ -663,6 +673,12 @@ func (s *service) runDeleteCleanup(ctx context.Context, r *taskAPI.DeleteRequest
 	if plan.cpuController != nil {
 		plan.cpuController.Stop()
 		log.G(ctx).Info("cpu-hotplug: controller stopped")
+	}
+
+	// Stop memory hotplug controller
+	if plan.memController != nil {
+		plan.memController.Stop()
+		log.G(ctx).Info("memory-hotplug: controller stopped")
 	}
 
 	log.G(ctx).WithFields(log.Fields{
@@ -1248,4 +1264,130 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 		"boot_cpus":    resourceCfg.BootCPUs,
 		"max_cpus":     resourceCfg.MaxCPUs,
 	}).Info("cpu-hotplug: controller started")
+}
+
+func (s *service) startMemoryHotplugController(ctx context.Context, containerID string, vmi vm.Instance, resourceCfg *vm.VMResourceConfig) {
+	// Only enable for VMs that support hotplug (MemoryHotplugSize > MemorySize)
+	if resourceCfg.MemoryHotplugSize <= resourceCfg.MemorySize {
+		log.G(ctx).WithFields(log.Fields{
+			"boot_memory_mb": resourceCfg.MemorySize / (1024 * 1024),
+			"max_memory_mb":  resourceCfg.MemoryHotplugSize / (1024 * 1024),
+		}).Debug("memory-hotplug: not enabled (MaxMemory == BootMemory, no room for scaling)")
+		return
+	}
+
+	// Type assert to check if this is a QEMU instance (only QEMU supports memory hotplug currently)
+	type qemuInstance interface {
+		QMPClient() *qemu.QMPClient
+	}
+
+	qemuVM, ok := vmi.(qemuInstance)
+	if !ok {
+		return
+	}
+
+	// Get QMP client
+	qmpClient := qemuVM.QMPClient()
+	if qmpClient == nil {
+		log.G(ctx).Warn("memory-hotplug: QMP client not available")
+		return
+	}
+
+	// Query current memory configuration
+	if summary, err := qmpClient.QueryMemorySizeSummary(ctx); err != nil {
+		log.G(ctx).WithError(err).Warn("memory-hotplug: failed to query memory size")
+	} else {
+		log.G(ctx).WithFields(log.Fields{
+			"base_memory_mb":    summary.BaseMemory / (1024 * 1024),
+			"plugged_memory_mb": summary.PluggedMemory / (1024 * 1024),
+		}).Debug("memory-hotplug: initial memory state")
+	}
+
+	// Create controller configuration
+	config := memhotplug.DefaultConfig()
+
+	// Allow environment variable overrides
+	if interval := os.Getenv("QEMUBOX_MEMORY_HOTPLUG_INTERVAL"); interval != "" {
+		if d, err := time.ParseDuration(interval); err == nil {
+			config.MonitorInterval = d
+		}
+	}
+	if scaleDown := os.Getenv("QEMUBOX_MEMORY_HOTPLUG_SCALE_DOWN"); scaleDown == "true" {
+		config.EnableScaleDown = true
+		log.G(ctx).Warn("memory-hotplug: scale-down enabled (EXPERIMENTAL)")
+	}
+
+	// Create stats provider (reads cgroup v2 memory.current)
+	statsProvider := func(ctx context.Context) (int64, error) {
+		vmc, err := s.client()
+		if err != nil {
+			return 0, err
+		}
+		tc := taskAPI.NewTTRPCTaskClient(vmc)
+		resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
+		if err != nil {
+			return 0, err
+		}
+		if resp.GetStats() == nil {
+			return 0, fmt.Errorf("missing stats payload")
+		}
+
+		var metrics cgroup2stats.Metrics
+		if err := typeurl.UnmarshalTo(resp.Stats, &metrics); err != nil {
+			return 0, err
+		}
+
+		mem := metrics.GetMemory()
+		if mem == nil {
+			return 0, fmt.Errorf("missing memory stats")
+		}
+
+		// Return current memory usage in bytes
+		return int64(mem.GetUsage()), nil
+	}
+
+	offlineMemory := func(ctx context.Context, memoryID int) error {
+		vmc, err := s.client()
+		if err != nil {
+			return err
+		}
+		client := systemAPI.NewTTRPCSystemClient(vmc)
+		_, err = client.OfflineMemory(ctx, &systemAPI.OfflineMemoryRequest{MemoryID: uint32(memoryID)})
+		return err
+	}
+
+	onlineMemory := func(ctx context.Context, memoryID int) error {
+		vmc, err := s.client()
+		if err != nil {
+			return err
+		}
+		client := systemAPI.NewTTRPCSystemClient(vmc)
+		_, err = client.OnlineMemory(ctx, &systemAPI.OnlineMemoryRequest{MemoryID: uint32(memoryID)})
+		return err
+	}
+
+	controller := memhotplug.NewController(
+		containerID,
+		qmpClient,
+		statsProvider,
+		offlineMemory,
+		onlineMemory,
+		resourceCfg.MemorySize,
+		resourceCfg.MemoryHotplugSize,
+		config,
+	)
+
+	// Store controller in service
+	s.mu.Lock()
+	s.memoryHotplugController = controller
+	s.mu.Unlock()
+
+	// Start monitoring loop
+	controller.Start(ctx)
+
+	log.G(ctx).WithFields(log.Fields{
+		"container_id": containerID,
+		"boot_memory_mb": resourceCfg.MemorySize / (1024 * 1024),
+		"max_memory_mb":  resourceCfg.MemoryHotplugSize / (1024 * 1024),
+	}).Info("memory-hotplug: controller started")
 }
