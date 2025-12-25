@@ -56,8 +56,8 @@ type Instance struct {
 	// Runtime paths
 	qmpSocketPath   string   // QMP control socket
 	vsockPath       string   // Vsock socket
-	consolePath     string   // Console log file
-	consoleFifoPath string   // Console FIFO pipe
+	consolePath     string   // Persistent console log file (logDir) - receives console output from FIFO reader
+	consoleFifoPath string   // Ephemeral FIFO pipe (stateDir) - QEMU writes here, prevents blocking on slow disk I/O
 	qemuLogPath     string   // QEMU stderr log
 	consoleFile     *os.File // Console log file handle
 

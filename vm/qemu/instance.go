@@ -226,18 +226,28 @@ func (q *Instance) VMInfo() vm.VMInfo {
 	}
 }
 
-// setupConsoleFIFO creates a FIFO pipe for console output and starts streaming to log file
-// This provides real-time console monitoring without blocking QEMU
+// setupConsoleFIFO creates a producer-consumer pipeline for VM console output:
+//
+// Data flow: VM serial console → QEMU → FIFO pipe → goroutine → persistent log file
+//
+// Why two files instead of QEMU writing directly to console.log?
+//   1. Non-blocking writes: QEMU writes to FIFO never block (kernel buffering)
+//   2. Async I/O: Slow disk writes don't stall VM console output
+//   3. Separation: FIFO (ephemeral, deleted on cleanup) vs log (persistent for debugging)
+//
+// Files created:
+//   - consoleFifoPath (stateDir/console.fifo): Named pipe, QEMU writes here via -serial file:
+//   - consolePath (logDir/console.log): Regular file, goroutine streams FIFO data here
 func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
 	// Remove old FIFO if it exists (ignore errors)
 	_ = os.Remove(q.consoleFifoPath)
 
-	// Create FIFO pipe
+	// Create FIFO pipe for QEMU to write to
 	if err := syscall.Mkfifo(q.consoleFifoPath, 0600); err != nil {
 		return fmt.Errorf("failed to create console FIFO: %w", err)
 	}
 
-	// Create console log file
+	// Create persistent console log file
 	consoleFile, err := os.Create(q.consolePath)
 	if err != nil {
 		_ = os.Remove(q.consoleFifoPath)
@@ -245,14 +255,15 @@ func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
 	}
 	q.consoleFile = consoleFile
 
-	// Open FIFO in non-blocking mode to avoid blocking QEMU startup
-	// We'll read from this FIFO and write to the log file in a goroutine
+	// Start background goroutine to stream FIFO → log file
+	// This prevents QEMU from blocking on slow disk I/O
 	go func() {
 		defer func() {
 			_ = consoleFile.Close()
 		}()
 
-		// Open FIFO for reading (this will block until QEMU opens it for writing)
+		// Consumer side: Open FIFO for reading
+		// This blocks until QEMU opens the other end for writing (producer side)
 		fifo, err := os.OpenFile(q.consoleFifoPath, os.O_RDONLY, 0)
 		if err != nil {
 			log.G(ctx).WithError(err).Error("qemu: failed to open console FIFO for reading")
@@ -262,7 +273,8 @@ func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
 			_ = fifo.Close()
 		}()
 
-		// Stream console output from FIFO to log file
+		// Continuously stream: FIFO (fast, kernel-buffered) → log file (persistent, may be slow)
+		// This decouples QEMU's write speed from disk I/O performance
 		buf := make([]byte, 8192)
 		for {
 			n, err := fifo.Read(buf)
@@ -680,7 +692,9 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 		"-initrd", q.initrdPath,
 		"-append", cmdlineArgs,
 		"-nographic",
-		// Serial console - redirect to FIFO pipe for real-time streaming
+		// Serial console → FIFO pipe (producer side)
+		// QEMU writes VM console output here; background goroutine reads and streams to log file
+		// See setupConsoleFIFO() for the producer-consumer pipeline details
 		"-serial", fmt.Sprintf("file:%s", q.consoleFifoPath),
 
 		// Vsock for guest communication (using vhost-vsock kernel module)
