@@ -5,18 +5,12 @@ package network
 import (
 	"context"
 	"net"
-	"os"
 	"sync"
 
 	"github.com/containerd/log"
 
 	"github.com/aledbf/qemubox/containerd/network/cni"
 	"github.com/aledbf/qemubox/containerd/store"
-)
-
-const (
-	// Bridge name used by CNI (for compatibility)
-	bridgeName = "qemubox0"
 )
 
 // NetworkMode represents the network management mode.
@@ -38,54 +32,31 @@ type NetworkConfig struct {
 	// CNIBinDir is the directory containing CNI plugin binaries.
 	// Default: /opt/cni/bin
 	CNIBinDir string
-
-	// CNINetworkName is the name of the CNI network to use.
-	// Default: qemubox-net
-	CNINetworkName string
 }
 
-// LoadNetworkConfig loads network configuration from environment variables.
+// LoadNetworkConfig returns the standard CNI network configuration.
 //
-// Environment variables:
-//   - QEMUBOX_CNI_CONF_DIR: CNI configuration directory (default: /etc/cni/net.d)
-//   - QEMUBOX_CNI_BIN_DIR: CNI plugin binary directory (default: /opt/cni/bin)
-//   - QEMUBOX_CNI_NETWORK: CNI network name (default: qemubox-net)
+// Uses standard CNI paths:
+//   - CNI config directory: /etc/cni/net.d (configs loaded lexicographically)
+//   - CNI plugin binary directory: /opt/cni/bin
 //
-// The subnet is determined by the CNI IPAM plugin configuration.
+// Network configuration is auto-discovered from the first .conflist file
+// in the CNI config directory (sorted alphabetically by filename).
 func LoadNetworkConfig() NetworkConfig {
-	cfg := NetworkConfig{
-		Mode:           NetworkModeCNI,
-		CNIConfDir:     "/etc/cni/net.d",
-		CNIBinDir:      "/opt/cni/bin",
-		CNINetworkName: "qemubox-net",
+	return NetworkConfig{
+		Mode:       NetworkModeCNI,
+		CNIConfDir: "/etc/cni/net.d",
+		CNIBinDir:  "/opt/cni/bin",
 	}
-
-	// Override CNI config directory if specified
-	if confDir := os.Getenv("QEMUBOX_CNI_CONF_DIR"); confDir != "" {
-		cfg.CNIConfDir = confDir
-	}
-
-	// Override CNI bin directory if specified
-	if binDir := os.Getenv("QEMUBOX_CNI_BIN_DIR"); binDir != "" {
-		cfg.CNIBinDir = binDir
-	}
-
-	// Override CNI network name if specified
-	if networkName := os.Getenv("QEMUBOX_CNI_NETWORK"); networkName != "" {
-		cfg.CNINetworkName = networkName
-	}
-
-	return cfg
 }
 
 // NetworkInfo holds internal network configuration
 type NetworkInfo struct {
-	TapName    string `json:"tap_name"`
-	BridgeName string `json:"bridge_name"`
-	MAC        string `json:"mac"`
-	IP         net.IP `json:"ip"`
-	Netmask    string `json:"netmask"`
-	Gateway    net.IP `json:"gateway"`
+	TapName string `json:"tap_name"`
+	MAC     string `json:"mac"`
+	IP      net.IP `json:"ip"`
+	Netmask string `json:"netmask"`
+	Gateway net.IP `json:"gateway"`
 }
 
 // Environment represents a VM/container network environment

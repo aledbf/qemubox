@@ -12,31 +12,27 @@ import (
 
 // CNIManager manages CNI plugin execution for VM networking.
 type CNIManager struct {
-	confDir     string
-	binDir      string
-	networkName string
+	confDir string
+	binDir  string
 
 	// CNI library instance
 	cniConfig libcni.CNI
 }
 
 // NewCNIManager creates a new CNI manager.
-func NewCNIManager(confDir, binDir, networkName string) (*CNIManager, error) {
+// It will auto-discover CNI network configuration from confDir.
+func NewCNIManager(confDir, binDir string) (*CNIManager, error) {
 	if confDir == "" {
 		return nil, fmt.Errorf("CNI conf directory cannot be empty")
 	}
 	if binDir == "" {
 		return nil, fmt.Errorf("CNI bin directory cannot be empty")
 	}
-	if networkName == "" {
-		return nil, fmt.Errorf("CNI network name cannot be empty")
-	}
 
 	return &CNIManager{
-		confDir:     confDir,
-		binDir:      binDir,
-		networkName: networkName,
-		cniConfig:   libcni.NewCNIConfig([]string{binDir}, nil),
+		confDir:   confDir,
+		binDir:    binDir,
+		cniConfig: libcni.NewCNIConfig([]string{binDir}, nil),
 	}, nil
 }
 
@@ -90,11 +86,27 @@ func (m *CNIManager) Teardown(ctx context.Context, vmID string, netns string) er
 }
 
 // loadNetworkConfig loads the CNI network configuration from the conf directory.
+// It auto-discovers the first available .conflist file (sorted lexicographically).
 func (m *CNIManager) loadNetworkConfig() (*libcni.NetworkConfigList, error) {
-	// Load network config list by name
-	netConfList, err := libcni.LoadConfList(m.confDir, m.networkName)
+	// Get all CNI config files from the directory
+	files, err := libcni.ConfFiles(m.confDir, []string{".conflist", ".conf"})
 	if err != nil {
-		return nil, fmt.Errorf("failed to load network config %s from %s: %w", m.networkName, m.confDir, err)
+		return nil, fmt.Errorf("failed to read CNI config files from %s: %w", m.confDir, err)
+	}
+
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no CNI configuration files found in %s", m.confDir)
+	}
+
+	// Files are returned sorted lexicographically, use the first one
+	// This follows standard CNI practice where files are named like:
+	// 10-mynet.conflist, 20-othernet.conflist, etc.
+	confFile := files[0]
+
+	// Load the network configuration
+	netConfList, err := libcni.ConfListFromFile(confFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load CNI config from %s: %w", confFile, err)
 	}
 
 	return netConfList, nil

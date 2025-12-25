@@ -29,7 +29,6 @@ func newCNINetworkManager(
 	cniMgr, err := cni.NewCNIManager(
 		config.CNIConfDir,
 		config.CNIBinDir,
-		config.CNINetworkName,
 	)
 	if err != nil {
 		cancel()
@@ -39,8 +38,7 @@ func newCNINetworkManager(
 	log.G(ctx).WithFields(log.Fields{
 		"confDir": config.CNIConfDir,
 		"binDir":  config.CNIBinDir,
-		"network": config.CNINetworkName,
-	}).Info("CNI mode enabled")
+	}).Info("CNI mode enabled - auto-discovering network config")
 
 	nm := &NetworkManager{
 		config:             config,
@@ -113,18 +111,12 @@ func (nm *NetworkManager) ensureNetworkResourcesCNI(env *Environment) error {
 
 	// Update environment with network info
 	env.NetworkInfo = &NetworkInfo{
-		TapName:    result.TAPDevice,
-		BridgeName: bridgeName, // CNI may use different bridge, but keep for compatibility
-		MAC:        result.TAPMAC,
-		IP:         result.IPAddress,
-		Netmask:    "255.255.0.0", // TODO: Extract from CNI result
-		Gateway:    result.Gateway,
+		TapName: result.TAPDevice,
+		MAC:     result.TAPMAC,
+		IP:      result.IPAddress,
+		Netmask: "255.255.0.0", // TODO: Extract from CNI result
+		Gateway: result.Gateway,
 	}
-
-	// NOTE: We do NOT delete the netns here!
-	// The netns must persist for the lifetime of the VM so that CNI DEL operations
-	// can properly clean up network resources. The netns will be deleted during
-	// releaseNetworkResourcesCNI().
 
 	return nil
 }

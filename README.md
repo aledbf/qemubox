@@ -84,7 +84,7 @@ graph TB
 
 **Network Manager**
 - **CNI-based networking**: Executes standard CNI plugin chains (bridge, firewall, tc-redirect-tap, IPAM)
-- Manages the `qemubox0` bridge (10.88.0.0/16 subnet) via CNI bridge plugin
+- Bridge name and subnet configured in CNI config file (default example: `qemubox0` with 10.88.0.0/16)
 - Allocates unique IP addresses using CNI IPAM plugins (host-local, static, or dhcp)
 - Creates TAP devices for each VM via CNI plugins (tc-redirect-tap for Firecracker compatibility)
 - Configures firewall rules via CNI firewall plugin (iptables/nftables)
@@ -218,16 +218,10 @@ qemubox0 bridge (CNI-managed, 10.88.0.1/16)
 
 **CNI Configuration:**
 
-Set environment variables to customize (all optional, defaults shown):
-
-```bash
-export QEMUBOX_CNI_CONF_DIR=/etc/cni/net.d     # CNI config directory
-export QEMUBOX_CNI_BIN_DIR=/opt/cni/bin        # CNI plugin binaries
-export QEMUBOX_CNI_NETWORK=qemubox-net          # CNI network name
-
-# Restart containerd
-systemctl restart beacon-containerd
-```
+Qemubox uses standard CNI paths following containerd conventions:
+- CNI config directory: `/etc/cni/net.d` (auto-discovers first `.conflist` file)
+- CNI plugin binaries: `/opt/cni/bin`
+- Network name and subnet: Configured in your CNI config file
 
 **Setup:**
 
@@ -487,16 +481,17 @@ ss -x | grep vsock
 3. **"Permission denied on /dev/kvm"**
    - Add user to `kvm` group: `sudo usermod -aG kvm $USER`
 
-4. **"Network device qemubox0 not found"**
-   - Network manager creates bridge on first container
+4. **"Network device not found"**
+   - CNI bridge plugin creates bridge automatically based on config (default example: qemubox0)
    - Check logs for initialization errors
+   - Verify CNI configuration in `/etc/cni/net.d/`
 
 5. **"IP allocation failed"**
    - Check CNI IPAM state: `ls /var/lib/cni/networks/qemubox-net/`; clear stale allocations: `sudo rm -rf /var/lib/cni/networks/qemubox-net/*`
 
 6. **"CNI plugin not found"** (CNI mode only)
    - Install CNI plugins: See CNI Mode setup section above
-   - Verify `QEMUBOX_CNI_BIN_DIR` points to `/opt/cni/bin`
+   - Verify plugins exist in `/opt/cni/bin`: `ls -la /opt/cni/bin/`
    - Check permissions: `sudo chmod +x /opt/cni/bin/*`
 
 7. **"No TAP device found in CNI result"** (CNI mode only)

@@ -65,7 +65,7 @@ Override with environment variables:
 - **CNI-based networking**: Uses standard CNI plugin chains exclusively
 - Creates TAP devices per VM using CNI
 - IP allocation managed by CNI IPAM plugins (host-local, static, dhcp)
-- Creates `qemubox0` bridge (10.88.0.0/16) via CNI bridge plugin
+- Bridge name and subnet configured in CNI config file (default example: `qemubox0` with 10.88.0.0/16)
 - Firewall rules managed by CNI firewall plugin
 - **Key files**:
   - `network/network.go` - Network manager interface
@@ -134,12 +134,12 @@ go test -v -timeout 10m ./integration/...
 ### Debugging VM Networking
 
 ```bash
-# Check bridge
+# Check bridge (name from CNI config, default example: qemubox0)
 ip link show qemubox0
 ip addr show qemubox0
 
 # Check TAP devices
-ip link show | grep -E "tap|beacon"
+ip link show | grep tap
 
 # Verify CNI configuration
 ls /etc/cni/net.d/
@@ -270,8 +270,9 @@ sudo usermod -aG kvm $USER
 # Log out and log back in
 ```
 
-### "Network device qemubox0 not found"
-- Bridge is created automatically on first container
+### "Network device not found"
+- Bridge is created automatically by CNI bridge plugin based on configuration
+- Bridge name is defined in CNI config file (default example: qemubox0)
 - Check logs for initialization errors
 - Verify nftables is installed
 
@@ -300,9 +301,8 @@ mkdir -p /opt/cni/bin
 wget https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz
 tar -xzf cni-plugins-linux-amd64-v1.4.0.tgz -C /opt/cni/bin
 
-# Solution 2: Verify QEMUBOX_CNI_BIN_DIR points to correct directory
-echo $QEMUBOX_CNI_BIN_DIR
-ls $QEMUBOX_CNI_BIN_DIR
+# Solution 2: Verify standard CNI plugin directory
+ls -la /opt/cni/bin/
 
 # Solution 3: Check permissions
 sudo chmod +x /opt/cni/bin/*
@@ -345,12 +345,12 @@ chmod +x /opt/cni/bin/tc-redirect-tap
 ### Network Setup Flow
 
 1. **Network manager init**: `network/network.go:New()`
-2. **Create qemubox0 bridge**: If not exists
-3. **Allocate IP from pool**: 10.88.0.2 - 10.88.255.254
-4. **Create TAP device**: `qemubox-<hash>`
-5. **Attach TAP to bridge**: Link TAP to qemubox0
-6. **Configure nftables**: NAT and forwarding rules
-7. **Pass to QEMU**: TAP device and IP as kernel params
+2. **Execute CNI plugin chain**: CNI plugins create bridge (if needed), allocate IP, create TAP device
+3. **CNI bridge plugin**: Creates bridge based on CNI config (e.g., qemubox0)
+4. **CNI IPAM plugin**: Allocates IP from configured subnet (e.g., 10.88.0.2 - 10.88.255.254)
+5. **CNI tc-redirect-tap plugin**: Creates TAP device and attaches to bridge
+6. **CNI firewall plugin**: Configures nftables rules
+7. **Pass to QEMU**: TAP device name and IP configuration as kernel params
 
 ### VM Lifecycle
 
@@ -408,17 +408,12 @@ Beacon uses **CNI (Container Network Interface)** exclusively for all network ma
 
 ### CNI Configuration
 
-Set environment variables to customize CNI settings:
+Qemubox uses standard CNI paths for all network configuration:
+- **CNI config directory**: `/etc/cni/net.d`
+- **CNI plugin binaries**: `/opt/cni/bin`
+- **Network config auto-discovery**: Loads the first `.conflist` file alphabetically (e.g., `10-qemubox.conflist`)
 
-```bash
-# Optional: Override default paths
-export QEMUBOX_CNI_CONF_DIR=/etc/cni/net.d      # Default
-export QEMUBOX_CNI_BIN_DIR=/opt/cni/bin         # Default
-export QEMUBOX_CNI_NETWORK=qemubox-net           # Default
-
-# Restart containerd shim
-systemctl restart qemubox-containerd
-```
+This follows standard containerd and CNI conventions. The network name and configuration are determined entirely by your CNI config files.
 
 **CNI Plugin Installation**:
 ```bash

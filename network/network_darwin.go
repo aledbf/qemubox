@@ -24,30 +24,27 @@ type NetworkConfig struct {
 	Mode NetworkMode
 
 	// CNI fields (not used on Darwin)
-	CNIConfDir     string
-	CNIBinDir      string
-	CNINetworkName string
+	CNIConfDir string
+	CNIBinDir  string
 }
 
 // LoadNetworkConfig loads network configuration.
 // On Darwin, returns CNI mode config (though CNI is not supported).
 func LoadNetworkConfig() NetworkConfig {
 	return NetworkConfig{
-		Mode:           NetworkModeCNI,
-		CNIConfDir:     "/etc/cni/net.d",
-		CNIBinDir:      "/opt/cni/bin",
-		CNINetworkName: "qemubox-net",
+		Mode:       NetworkModeCNI,
+		CNIConfDir: "/etc/cni/net.d",
+		CNIBinDir:  "/opt/cni/bin",
 	}
 }
 
 // NetworkInfo holds internal network configuration
 type NetworkInfo struct {
-	TapName    string `json:"tap_name"`
-	BridgeName string `json:"bridge_name"`
-	MAC        string `json:"mac"`
-	IP         net.IP `json:"ip"`
-	Netmask    string `json:"netmask"`
-	Gateway    net.IP `json:"gateway"`
+	TapName string `json:"tap_name"`
+	MAC     string `json:"mac"`
+	IP      net.IP `json:"ip"`
+	Netmask string `json:"netmask"`
+	Gateway net.IP `json:"gateway"`
 }
 
 // Environment represents a VM/container network environment
