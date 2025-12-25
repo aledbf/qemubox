@@ -52,6 +52,16 @@ graph TB
 - **QEMU**: Boots lightweight VMs with virtio devices
 - **vminitd**: Init daemon inside VM that runs crun to start containers
 
+## Repository Layout
+
+- `cmd/`: entrypoints for shim and guest init binaries
+- `internal/host/`: host-side VM, network, storage, and mount plumbing
+- `internal/shim/`: containerd shim implementation and task service
+- `internal/guest/`: vminitd logic, guest services, and stream handling
+- `api/`: protobuf/TTRPC definitions and generated stubs
+- `pkg/`: small shared utilities (`iobuf`, `paths`)
+- `assets/`: kernel config and other build-time inputs
+
 ## Quick Start
 
 ### Prerequisites

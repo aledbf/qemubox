@@ -884,10 +884,10 @@ func (q *QMPClient) HotplugMemory(ctx context.Context, slotID int, sizeBytes int
 				return fmt.Errorf("device_add did not increase memory size")
 			}
 			log.G(ctx).WithFields(log.Fields{
-				"slot_id":        slotID,
-				"added_mb":       sizeBytes / (1024 * 1024),
-				"total_mb":       (afterSummary.BaseMemory + afterSummary.PluggedMemory) / (1024 * 1024),
-				"plugged_mb":     afterSummary.PluggedMemory / (1024 * 1024),
+				"slot_id":    slotID,
+				"added_mb":   sizeBytes / (1024 * 1024),
+				"total_mb":   (afterSummary.BaseMemory + afterSummary.PluggedMemory) / (1024 * 1024),
+				"plugged_mb": afterSummary.PluggedMemory / (1024 * 1024),
 			}).Info("qemu: memory hotplug successful")
 		}
 	}

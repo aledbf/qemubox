@@ -41,13 +41,13 @@ import (
 	systemAPI "github.com/aledbf/qemubox/containerd/api/services/system/v1"
 	"github.com/aledbf/qemubox/containerd/api/services/vmevents/v1"
 	"github.com/aledbf/qemubox/containerd/internal/host/network"
-	"github.com/aledbf/qemubox/containerd/internal/shim/bundle"
 	boltstore "github.com/aledbf/qemubox/containerd/internal/host/store"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/aledbf/qemubox/containerd/internal/shim/bundle"
 
+	"github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
 	"github.com/aledbf/qemubox/containerd/internal/shim/cpuhotplug"
 	"github.com/aledbf/qemubox/containerd/internal/shim/memhotplug"
-	"github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
 )
 
 const (
@@ -1386,7 +1386,7 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 	controller.Start(ctx)
 
 	log.G(ctx).WithFields(log.Fields{
-		"container_id": containerID,
+		"container_id":   containerID,
 		"boot_memory_mb": resourceCfg.MemorySize / (1024 * 1024),
 		"max_memory_mb":  resourceCfg.MemoryHotplugSize / (1024 * 1024),
 	}).Info("memory-hotplug: controller started")

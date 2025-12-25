@@ -84,13 +84,13 @@ func (m *mockStatsProvider) setUsage(bytes int64) {
 
 // mockMemoryManager simulates guest memory online/offline
 type mockMemoryManager struct {
-	mu            sync.Mutex
-	offlineErr    error
-	onlineErr     error
-	offlineCalls  int
-	onlineCalls   int
-	offlineIDs    []int
-	onlineIDs     []int
+	mu           sync.Mutex
+	offlineErr   error
+	onlineErr    error
+	offlineCalls int
+	onlineCalls  int
+	offlineIDs   []int
+	onlineIDs    []int
 }
 
 func (m *mockMemoryManager) offline(ctx context.Context, memoryID int) error {

@@ -2,8 +2,12 @@ package task
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,7 +31,7 @@ type mockConn struct {
 	closed bool
 }
 
-func (m *mockConn) Read(b []byte) (int, error)         { return 0, nil }
+func (m *mockConn) Read(b []byte) (int, error)         { return 0, io.EOF }
 func (m *mockConn) Write(b []byte) (int, error)        { return len(b), nil }
 func (m *mockConn) Close() error                       { m.closed = true; return nil }
 func (m *mockConn) LocalAddr() net.Addr                { return nil }
@@ -35,6 +39,22 @@ func (m *mockConn) RemoteAddr() net.Addr               { return nil }
 func (m *mockConn) SetDeadline(t time.Time) error      { return nil }
 func (m *mockConn) SetReadDeadline(t time.Time) error  { return nil }
 func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
+
+func withTempCwd(t *testing.T, fn func(tmp string)) {
+	t.Helper()
+	tmp := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(wd)
+	})
+	fn(tmp)
+}
 
 // TestParseStdioURI tests URI parsing for different I/O schemes
 func TestParseStdioURI(t *testing.T) {
@@ -108,56 +128,83 @@ func TestParseStdioURI(t *testing.T) {
 
 // TestBinarySchemeSupport tests that binary scheme is recognized
 func TestBinarySchemeSupport(t *testing.T) {
-	svc := &service{}
-	ss := &mockStreamCreator{}
+	withTempCwd(t, func(tmp string) {
+		binaryDir := filepath.Join(tmp, "binary:")
+		if err := os.MkdirAll(binaryDir, 0750); err != nil {
+			t.Fatalf("mkdir binary dir: %v", err)
+		}
+		binaryPath := filepath.Join(binaryDir, "logger")
+		if err := os.WriteFile(binaryPath, []byte{}, 0600); err != nil {
+			t.Fatalf("write binary: %v", err)
+		}
 
-	sio := stdio.Stdio{
-		Stdin:  "",
-		Stdout: "binary:///usr/bin/logger",
-		Stderr: "binary:///usr/bin/logger",
-	}
+		svc := &service{}
+		ss := &mockStreamCreator{}
 
-	ctx := context.Background()
-	pio, cleanup, err := svc.forwardIO(ctx, ss, sio)
+		sio := stdio.Stdio{
+			Stdin:  "",
+			Stdout: "binary://logger",
+			Stderr: "binary://logger",
+		}
 
-	if err != nil {
-		t.Fatalf("binary scheme should be supported, got error: %v", err)
-	}
+		ctx := context.Background()
+		pio, cleanup, err := svc.forwardIO(ctx, ss, sio)
 
-	if pio.Stdout == "" {
-		t.Error("expected stdout to be set for binary scheme")
-	}
+		if err != nil {
+			t.Fatalf("binary scheme should be supported, got error: %v", err)
+		}
 
-	if cleanup != nil {
-		defer cleanup(ctx)
-	}
+		if pio.Stdout == "" {
+			t.Error("expected stdout to be set for binary scheme")
+		}
+
+		if cleanup != nil {
+			defer cleanup(ctx)
+		}
+	})
 }
 
 // TestPipeSchemeSupport tests that pipe scheme is recognized
 func TestPipeSchemeSupport(t *testing.T) {
-	svc := &service{}
-	ss := &mockStreamCreator{}
+	withTempCwd(t, func(tmp string) {
+		pipeDir := filepath.Join(tmp, "pipe:")
+		if err := os.MkdirAll(pipeDir, 0750); err != nil {
+			t.Fatalf("mkdir pipe dir: %v", err)
+		}
+		pipePath := filepath.Join(pipeDir, "stdout")
+		if err := syscall.Mkfifo(pipePath, 0600); err != nil {
+			t.Fatalf("mkfifo: %v", err)
+		}
+		reader, err := os.OpenFile(pipePath, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			t.Fatalf("open fifo reader: %v", err)
+		}
+		defer reader.Close()
 
-	sio := stdio.Stdio{
-		Stdin:  "",
-		Stdout: "pipe://",
-		Stderr: "pipe://",
-	}
+		svc := &service{}
+		ss := &mockStreamCreator{}
 
-	ctx := context.Background()
-	pio, cleanup, err := svc.forwardIO(ctx, ss, sio)
+		sio := stdio.Stdio{
+			Stdin:  "",
+			Stdout: "pipe://stdout",
+			Stderr: "pipe://stdout",
+		}
 
-	if err != nil {
-		t.Fatalf("pipe scheme should be supported, got error: %v", err)
-	}
+		ctx := context.Background()
+		pio, cleanup, err := svc.forwardIO(ctx, ss, sio)
 
-	if pio.Stdout == "" {
-		t.Error("expected stdout to be set for pipe scheme")
-	}
+		if err != nil {
+			t.Fatalf("pipe scheme should be supported, got error: %v", err)
+		}
 
-	if cleanup != nil {
-		defer cleanup(ctx)
-	}
+		if pio.Stdout == "" {
+			t.Error("expected stdout to be set for pipe scheme")
+		}
+
+		if cleanup != nil {
+			defer cleanup(ctx)
+		}
+	})
 }
 
 // TestStreamSchemePassthrough tests that stream scheme passes through

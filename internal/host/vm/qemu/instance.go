@@ -24,8 +24,8 @@ import (
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 
-	"github.com/aledbf/qemubox/containerd/pkg/paths"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/aledbf/qemubox/containerd/pkg/paths"
 )
 
 // newInstance creates a new QEMU microvm instance
@@ -231,9 +231,9 @@ func (q *Instance) VMInfo() vm.VMInfo {
 // Data flow: VM serial console → QEMU → FIFO pipe → goroutine → persistent log file
 //
 // Why two files instead of QEMU writing directly to console.log?
-//   1. Non-blocking writes: QEMU writes to FIFO never block (kernel buffering)
-//   2. Async I/O: Slow disk writes don't stall VM console output
-//   3. Separation: FIFO (ephemeral, deleted on cleanup) vs log (persistent for debugging)
+//  1. Non-blocking writes: QEMU writes to FIFO never block (kernel buffering)
+//  2. Async I/O: Slow disk writes don't stall VM console output
+//  3. Separation: FIFO (ephemeral, deleted on cleanup) vs log (persistent for debugging)
 //
 // Files created:
 //   - consoleFifoPath (stateDir/console.fifo): Named pipe, QEMU writes here via -serial file:

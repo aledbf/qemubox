@@ -45,36 +45,36 @@ Override with environment variables:
 
 ## Key Modules
 
-### `shim/` - Runtime Shim
+### `internal/shim/` - Runtime Shim
 - Implements containerd Shim API
 - Manages VM lifecycle via QEMU
 - Proxies I/O between containerd and VM (vsock)
-- **Key file**: `shim/task/service.go:CreateTask()` - Container creation entry point
+- **Key file**: `internal/shim/task/service.go:CreateTask()` - Container creation entry point
 
-### `vminit/` - VM Init Daemon
+### `internal/guest/vminit/` - VM Init Daemon
 - PID 1 inside VM
 - Implements Task API via TTRPC over vsock
 - Manages crun to execute containers
-- **Key file**: `vminit/task/service.go:Create()` - OCI bundle creation
+- **Key file**: `internal/guest/vminit/task/service.go:Create()` - OCI bundle creation
 
-### `vm/` - VMM Integration
-- **`vm/qemu/instance.go`** - QEMU VM management
+### `internal/host/vm/` - VMM Integration
+- **`internal/host/vm/qemu/instance.go`** - QEMU VM management
 - **VM RESOURCES**: Configurable CPU and memory via `vm.VMResourceConfig`
 
-### `network/` - Network Management
+### `internal/host/network/` - Network Management
 - **CNI-based networking**: Uses standard CNI plugin chains exclusively
 - Creates TAP devices per VM using CNI
 - IP allocation managed by CNI IPAM plugins (host-local, static, dhcp)
 - Bridge name and subnet configured in CNI config file (default example: `qemubox0` with 10.88.0.0/16)
 - Firewall rules managed by CNI firewall plugin
 - **Key files**:
-  - `network/network.go` - Network manager interface
-  - `network/manager_cni.go` - CNI implementation
-  - `network/cni/` - CNI plugin execution package
+  - `internal/host/network/network.go` - Network manager interface
+  - `internal/host/network/manager_cni.go` - CNI implementation
+  - `internal/host/network/cni/` - CNI plugin execution package
 
-### `services/` - VM Services
-- `services/bundle.go` - OCI bundle creation
-- `services/system.go` - System service management
+### `internal/guest/services/` - VM Services
+- `internal/guest/services/bundle.go` - OCI bundle creation
+- `internal/guest/services/system.go` - System service management
 
 ---
 
@@ -89,7 +89,7 @@ Override with environment variables:
 
 ### Network Namespace Removal
 ⚠️ **IMPORTANT**: Network namespace is explicitly removed from OCI spec:
-- See `shim/task/service.go:CreateTask()` - removes `network` from namespaces
+- See `internal/shim/task/service.go:CreateTask()` - removes `network` from namespaces
 - Containers share VM's `eth0` interface
 - Isolation provided by VM boundary, not network namespace
 
@@ -212,12 +212,12 @@ ps aux | grep qemu-system-x86_64
 
 ## Key Files to Study
 
-1. `shim/task/service.go` - Shim service implementation
-2. `vminit/task/service.go` - VM init service
-3. `vm/qemu/instance.go` - QEMU integration
-4. `network/network.go` - CNI-based network manager interface
-5. `network/manager_cni.go` - CNI mode implementation
-6. `network/cni/cni.go` - CNI plugin executor
+1. `internal/shim/task/service.go` - Shim service implementation
+2. `internal/guest/vminit/task/service.go` - VM init service
+3. `internal/host/vm/qemu/instance.go` - QEMU integration
+4. `internal/host/network/network.go` - CNI-based network manager interface
+5. `internal/host/network/manager_cni.go` - CNI mode implementation
+6. `internal/host/network/cni/cni.go` - CNI plugin executor
 7. `integration/vm_test.go` - Integration test examples
 
 **Documentation**:
@@ -241,7 +241,7 @@ ps aux | grep qemu-system-x86_64
 ### Testing Without KVM
 
 If you don't have KVM access (e.g., macOS development):
-- Unit tests will run: `go test ./shim/... ./vminit/...`
+- Unit tests will run: `go test ./internal/shim/... ./internal/guest/...`
 - Integration tests will be skipped
 - Use Linux VM or CI for full integration testing
 
@@ -332,19 +332,19 @@ chmod +x /opt/cni/bin/tc-redirect-tap
 
 ### Container Creation Flow
 
-1. **containerd calls shim**: `shim/task/service.go:CreateTask()`
-2. **Shim allocates network**: `network/network.go:AllocateIP()`
-3. **Shim creates VM**: `vm/qemu/instance.go:Start()`
+1. **containerd calls shim**: `internal/shim/task/service.go:CreateTask()`
+2. **Shim allocates network**: `internal/host/network/network.go:AllocateIP()`
+3. **Shim creates VM**: `internal/host/vm/qemu/instance.go:Start()`
 4. **VM boots Linux kernel**: Kernel loads with network config
-5. **vminitd starts**: `vminit/task/service.go:main()` (PID 1)
+5. **vminitd starts**: `internal/guest/vminit/task/service.go:main()` (PID 1)
 6. **vminitd connects to shim**: TTRPC over vsock
-7. **Shim calls vminitd.Create()**: `vminit/task/service.go:Create()`
+7. **Shim calls vminitd.Create()**: `internal/guest/vminit/task/service.go:Create()`
 8. **vminitd calls crun**: OCI runtime creates container
 9. **Container process starts**: Inside VM with resource limits
 
 ### Network Setup Flow
 
-1. **Network manager init**: `network/network.go:New()`
+1. **Network manager init**: `internal/host/network/network.go:New()`
 2. **Execute CNI plugin chain**: CNI plugins create bridge (if needed), allocate IP, create TAP device
 3. **CNI bridge plugin**: Creates bridge based on CNI config (e.g., qemubox0)
 4. **CNI IPAM plugin**: Allocates IP from configured subnet (e.g., 10.88.0.2 - 10.88.255.254)
@@ -385,7 +385,7 @@ type VMResourceConfig struct {
 
 ### Container Resource Limits (cgroups v2)
 
-From `vminit/task/service.go`:
+From `internal/guest/vminit/task/service.go`:
 ```go
 // crun applies OCI spec resource limits via cgroups v2
 // Example: Container requests 512MB memory
@@ -524,7 +524,7 @@ task build:vminitd
 task build:initrd
 
 # Run unit tests
-go test ./shim/... ./vminit/... ./vm/... ./network/...
+go test ./internal/shim/... ./internal/guest/... ./internal/host/...
 
 # Run integration tests (if KVM available)
 cd containerd && go test -v ./integration/...

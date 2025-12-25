@@ -21,9 +21,9 @@ type QMPMemoryClient interface {
 
 // Controller manages dynamic memory allocation for a VM based on memory usage
 type Controller struct {
-	containerID string
-	qmpClient   QMPMemoryClient
-	stats       StatsProvider
+	containerID   string
+	qmpClient     QMPMemoryClient
+	stats         StatsProvider
 	offlineMemory MemoryOffliner
 	onlineMemory  MemoryOnliner
 
@@ -32,7 +32,7 @@ type Controller struct {
 	maxMemory  int64 // Maximum memory (ceiling)
 
 	// Current state
-	currentMemory int64 // Current online memory in bytes
+	currentMemory int64        // Current online memory in bytes
 	usedSlots     map[int]bool // Track which memory slots are used
 
 	// Configuration
@@ -45,7 +45,7 @@ type Controller struct {
 	consecutiveLowUsage  int // Track sustained low usage
 
 	// Memory usage sampling
-	lastSampleTime time.Time
+	lastSampleTime  time.Time
 	lastMemoryUsage int64
 
 	// State management
@@ -93,16 +93,16 @@ type Config struct {
 // DefaultConfig returns sensible defaults for memory hotplug
 func DefaultConfig() Config {
 	return Config{
-		MonitorInterval:    10 * time.Second, // Slower than CPU (memory changes less frequently)
-		ScaleUpCooldown:    30 * time.Second, // Longer cooldown (memory ops are expensive)
-		ScaleDownCooldown:  60 * time.Second, // Very conservative scale-down
-		ScaleUpThreshold:   85.0,             // Add memory at 85% usage
-		ScaleDownThreshold: 60.0,             // Remove memory below 60% usage
-		OOMSafetyMarginMB:  128,              // Always keep 128MB free
+		MonitorInterval:    10 * time.Second,  // Slower than CPU (memory changes less frequently)
+		ScaleUpCooldown:    30 * time.Second,  // Longer cooldown (memory ops are expensive)
+		ScaleDownCooldown:  60 * time.Second,  // Very conservative scale-down
+		ScaleUpThreshold:   85.0,              // Add memory at 85% usage
+		ScaleDownThreshold: 60.0,              // Remove memory below 60% usage
+		OOMSafetyMarginMB:  128,               // Always keep 128MB free
 		IncrementSize:      128 * 1024 * 1024, // 128MB (DIMM slot size)
-		ScaleUpStability:   3,                // Need 3 consecutive high readings (30s)
-		ScaleDownStability: 6,                // Need 6 consecutive low readings (60s)
-		EnableScaleDown:    false,            // Disabled by default (memory unplug is risky)
+		ScaleUpStability:   3,                 // Need 3 consecutive high readings (30s)
+		ScaleDownStability: 6,                 // Need 6 consecutive low readings (60s)
+		EnableScaleDown:    false,             // Disabled by default (memory unplug is risky)
 	}
 }
 
@@ -138,12 +138,12 @@ func (c *Controller) Start(ctx context.Context) {
 		defer close(c.stoppedCh)
 
 		log.G(ctx).WithFields(log.Fields{
-			"container_id":        c.containerID,
-			"boot_memory_mb":      c.bootMemory / (1024 * 1024),
-			"max_memory_mb":       c.maxMemory / (1024 * 1024),
-			"monitor_interval":    c.config.MonitorInterval,
-			"scale_up_threshold":  c.config.ScaleUpThreshold,
-			"scale_down_enabled":  c.config.EnableScaleDown,
+			"container_id":       c.containerID,
+			"boot_memory_mb":     c.bootMemory / (1024 * 1024),
+			"max_memory_mb":      c.maxMemory / (1024 * 1024),
+			"monitor_interval":   c.config.MonitorInterval,
+			"scale_up_threshold": c.config.ScaleUpThreshold,
+			"scale_down_enabled": c.config.EnableScaleDown,
 		}).Info("memory-hotplug: controller started")
 
 		c.monitorLoop(ctx)
