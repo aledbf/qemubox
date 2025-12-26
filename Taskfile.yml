@@ -248,6 +248,7 @@ tasks:
         ${SUDO} systemctl stop qemubox-buildkit || true
         ${SUDO} "${WORKDIR}/${RELEASE_NAME}/install.sh"
         ${SUDO} systemctl enable --now qemubox-containerd
+        ${SUDO} systemctl reset-failed qemubox-containerd || true
 
         SOCKET="/var/run/qemubox/containerd.sock"
 
@@ -269,7 +270,11 @@ tasks:
           QEMUBOX_IMAGE="{{.INTEGRATION_IMAGE}}" \
           QEMUBOX_RUNTIME="{{.INTEGRATION_RUNTIME}}" \
           QEMUBOX_SNAPSHOTTER="{{.INTEGRATION_SNAPSHOTTER}}" \
-          go test ./integration -run TestContainerdRunQemubox -count=1
+          go test ./integration -run TestContainerdRunQemubox -count=1 || {
+            echo "---- qemubox-containerd logs ----"
+            ${SUDO} journalctl -u qemubox-containerd --no-pager -n 200 || true
+            exit 1
+          }
 
         if [ "${CLEANUP:-0}" = "1" ]; then
           ${SUDO} systemctl stop qemubox-containerd || true

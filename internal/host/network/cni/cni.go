@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/containerd/log"
 	"github.com/containernetworking/cni/libcni"
 	current "github.com/containernetworking/cni/pkg/types/100"
 )
@@ -50,6 +51,11 @@ func (m *CNIManager) Setup(ctx context.Context, vmID string, netns string) (*CNI
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute CNI plugin chain: %w", err)
 	}
+	log.L.WithFields(log.Fields{
+		"net":        netConfList.Name,
+		"plugins":    len(netConfList.Plugins),
+		"interfaces": len(result.Interfaces),
+	}).Debug("CNI plugin chain completed")
 
 	// Parse the result
 	cniResult, err := ParseCNIResultWithNetNS(result, netns)
@@ -108,6 +114,10 @@ func (m *CNIManager) loadNetworkConfig() (*libcni.NetworkConfigList, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load CNI config from %s: %w", confFile, err)
 	}
+	log.L.WithFields(log.Fields{
+		"config": confFile,
+		"name":   netConfList.Name,
+	}).Info("CNI configuration loaded")
 
 	return netConfList, nil
 }
