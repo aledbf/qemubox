@@ -82,6 +82,8 @@ RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/buil
     --prefix=/opt/qemu \
     --target-list=x86_64-softmmu \
     --enable-tools \
+    --enable-lto \
+    --enable-strip \
     # Disable unnecessary features for minimal build
     --disable-containers \
     --disable-docs \
@@ -118,9 +120,6 @@ RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/buil
     fi && \
     test -f /opt/qemu/share/qemu/bios-256k.bin && \
     ls -la /opt/qemu/share/qemu
-
-# Strip the binary to reduce size
-RUN strip /opt/qemu/bin/qemu-system-x86_64
 
 # Verify binary type and show dynamic library dependencies
 RUN file /opt/qemu/bin/qemu-system-x86_64 && \
