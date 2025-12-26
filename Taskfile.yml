@@ -216,6 +216,64 @@ tasks:
           MESSAGE: "Running linters"
           DONE_MESSAGE: "Linting passed"
 
+  integration:
+    desc: Build release tarball and run containerd integration test
+    vars:
+      VERSION: '{{.VERSION | default "ci"}}'
+      INTEGRATION_IMAGE: '{{.INTEGRATION_IMAGE | default "docker.io/aledbf/beacon-workspace:test"}}'
+      INTEGRATION_RUNTIME: '{{.INTEGRATION_RUNTIME | default "io.containerd.qemubox.v1"}}'
+      INTEGRATION_SNAPSHOTTER: '{{.INTEGRATION_SNAPSHOTTER | default "erofs"}}'
+    cmds:
+      - task: release
+        vars:
+          VERSION: "{{.VERSION}}"
+      - |
+        set -eou pipefail
+        VERSION="{{.VERSION}}"
+        RELEASE_NAME="qemubox-${VERSION}-linux-x86_64"
+        TARBALL="{{.OUTPUT_DIR}}/release/${RELEASE_NAME}.tar.gz"
+
+        if [ ! -f "${TARBALL}" ]; then
+          echo "👹 Error: release tarball not found: ${TARBALL}"
+          exit 1
+        fi
+
+        WORKDIR="$(mktemp -d)"
+        trap 'rm -rf "${WORKDIR}"' EXIT
+
+        tar -xzf "${TARBALL}" -C "${WORKDIR}"
+
+        SUDO="${SUDO:-sudo}"
+        ${SUDO} "${WORKDIR}/${RELEASE_NAME}/install.sh"
+        ${SUDO} systemctl enable --now qemubox-containerd
+
+        SOCKET="/var/run/qemubox/containerd.sock"
+
+        for _ in $(seq 1 30); do
+          if [ -S "${SOCKET}" ]; then
+            break
+          fi
+          sleep 1
+        done
+
+        if [ ! -S "${SOCKET}" ]; then
+          echo "👹 Error: containerd socket not ready"
+          ${SUDO} systemctl status qemubox-containerd || true
+          exit 1
+        fi
+
+        ${SUDO} env \
+          QEMUBOX_CONTAINERD_SOCKET="${SOCKET}" \
+          QEMUBOX_IMAGE="{{.INTEGRATION_IMAGE}}" \
+          QEMUBOX_RUNTIME="{{.INTEGRATION_RUNTIME}}" \
+          QEMUBOX_SNAPSHOTTER="{{.INTEGRATION_SNAPSHOTTER}}" \
+          go test ./integration -run TestContainerdRunQemubox -count=1
+
+        if [ "${CLEANUP:-0}" = "1" ]; then
+          ${SUDO} systemctl stop qemubox-containerd || true
+          ${SUDO} "${WORKDIR}/${RELEASE_NAME}/uninstall.sh" || true
+        fi
+
   # ==========================================================================
   # Setup and Tool Installation
   # ==========================================================================

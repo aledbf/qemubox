@@ -42,3 +42,30 @@ jobs:
 
       - name: Validate
         run: task validate
+
+  integration:
+    runs-on: self-hosted
+    needs: ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Task
+        uses: go-task/setup-task@v1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=moby/buildkit:latest
+
+      - name: Run integration test
+        env:
+          VERSION: ci-${{ github.run_id }}
+          CLEANUP: "1"
+        run: task integration
