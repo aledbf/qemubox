@@ -17,7 +17,7 @@ variable "KERNEL_NPROC" {
 
 # QEMU configuration
 variable "QEMU_VERSION" {
-  default = "10.1.2"
+  default = "10.2.0"
 }
 
 variable "QEMU_JOBS" {

@@ -1,5 +1,4 @@
 # Dockerfile for building a static qemu-system-x86_64 binary (libc-compatible)
-# QEMU Version: 10.1.2
 # Target: microvm development environments
 
 FROM ubuntu:25.10 AS builder
@@ -54,6 +53,9 @@ RUN --mount=type=cache,sharing=locked,id=qemu-aptlib,target=/var/lib/apt \
         libtool \
         libffi-dev \
         libelf-dev \
+        libdw-dev \
+        valgrind \
+        linux-libc-dev \
         patch && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -145,8 +147,7 @@ COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-
 COPY --from=builder /opt/qemu/bin/qemu-img /usr/local/bin/qemu-img
 
 # Copy BIOS/firmware files needed for boot
-COPY --from=builder /opt/qemu/share/qemu/bios-256k.bin /usr/share/qemubox/qemu/bios-256k.bin
-COPY --from=builder /opt/qemu/share/qemu/pvh.bin /usr/share/qemubox/qemu/pvh.bin
+COPY --from=builder /opt/qemu/share/qemu/ /usr/share/qemubox/qemu/
 
 ENTRYPOINT ["/usr/local/bin/qemu-system-x86_64"]
 
@@ -160,5 +161,4 @@ COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu/bin/qemu-img /bin/qemu-img
 
 # Copy BIOS/firmware files needed for boot
-COPY --from=builder /opt/qemu/share/qemu/bios-256k.bin /share/qemubox/qemu/bios-256k.bin
-COPY --from=builder /opt/qemu/share/qemu/pvh.bin /share/qemubox/qemu/pvh.bin
+COPY --from=builder /opt/qemu/share/qemu/ /share/qemubox/qemu/
