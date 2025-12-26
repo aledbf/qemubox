@@ -1,0 +1,33 @@
+{
+  "cniVersion": "1.0.0",
+  "name": "qemubox-net",
+  "plugins": [
+    {
+      "type": "bridge",
+      "bridge": "qemubox0",
+      "isGateway": true,
+      "ipMasq": true,
+      "hairpinMode": true,
+      "ipam": {
+        "type": "host-local",
+        "ranges": [
+          [{
+            "subnet": "10.88.0.0/16",
+            "rangeStart": "10.88.0.10",
+            "rangeEnd": "10.88.255.254",
+            "gateway": "10.88.0.1"
+          }]
+        ],
+        "routes": [
+          { "dst": "0.0.0.0/0" }
+        ]
+      }
+    },
+    {
+      "type": "firewall"
+    },
+    {
+      "type": "tc-redirect-tap"
+    }
+  ]
+}
