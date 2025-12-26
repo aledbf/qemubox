@@ -51,8 +51,11 @@ func TestContainerdRunQemubox(t *testing.T) {
 		containerd.WithNewSnapshot(containerName+"-snapshot", img),
 		containerd.WithNewSpec(
 			oci.WithImageConfig(img),
-			// Keep the process running until the test explicitly stops it.
-			oci.WithProcessArgs("/bin/sh", "-c", "while true; do sleep 60; done"),
+			oci.WithProcessArgs("/sbin/init"),
+			oci.WithTTY,
+			oci.WithPrivileged,
+			oci.WithAllDevicesAllowed,
+			oci.WithHostDevices,
 		),
 		containerd.WithRuntime(runtime, nil),
 	)
@@ -65,8 +68,12 @@ func TestContainerdRunQemubox(t *testing.T) {
 		}
 	}()
 
-	task, err := container.NewTask(ctx, cio.NullIO)
+	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithTerminal))
 	if err != nil {
+		if existing, loadErr := container.Task(ctx, cio.NewAttach(cio.WithTerminal)); loadErr == nil {
+			_ = existing.Kill(ctx, syscall.SIGKILL)
+			_, _ = existing.Delete(ctx)
+		}
 		t.Fatalf("create task: %v", err)
 	}
 	defer func() {
