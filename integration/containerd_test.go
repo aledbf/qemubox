@@ -4,6 +4,8 @@ package integration
 
 import (
 	"context"
+	"bytes"
+	"io"
 	"os"
 	"strings"
 	"syscall"
@@ -21,6 +23,7 @@ func TestContainerdRunQemubox(t *testing.T) {
 	imageRef := getenvDefault("QEMUBOX_IMAGE", "docker.io/aledbf/beacon-workspace:test")
 	runtime := getenvDefault("QEMUBOX_RUNTIME", "io.containerd.qemubox.v1")
 	snapshotter := getenvDefault("QEMUBOX_SNAPSHOTTER", "erofs")
+	fifoDir := getenvDefault("QEMUBOX_FIFO_DIR", "/run/qemubox/containerd/fifo")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -68,7 +71,11 @@ func TestContainerdRunQemubox(t *testing.T) {
 		}
 	}()
 
-	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithTerminal))
+	task, err := container.NewTask(ctx, cio.NewCreator(
+		cio.WithStreams(bytes.NewReader(nil), io.Discard, io.Discard),
+		cio.WithTerminal,
+		cio.WithFIFODir(fifoDir),
+	))
 	if err != nil {
 		if existing, loadErr := container.Task(ctx, cio.NewAttach(cio.WithTerminal)); loadErr == nil {
 			_ = existing.Kill(ctx, syscall.SIGKILL)

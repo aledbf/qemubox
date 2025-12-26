@@ -71,6 +71,7 @@ echo -e "    ${GREEN}✓${NC} Scripts installed"
 echo "  → Creating state directories..."
 mkdir -p /var/lib/qemubox/containerd
 mkdir -p /run/qemubox/containerd
+mkdir -p /run/qemubox/containerd/fifo
 mkdir -p /run/qemubox/vm
 mkdir -p /var/run/qemubox
 mkdir -p /var/log/qemubox
