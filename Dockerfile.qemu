@@ -62,7 +62,7 @@ RUN --mount=type=cache,sharing=locked,id=qemu-aptlib,target=/var/lib/apt \
 WORKDIR /build
 
 # Download QEMU source (cached across builds)
-RUN --mount=type=cache,sharing=locked,id=qemu-src,target=/var/cache/qemu \
+RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
     if [ ! -f "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz" ]; then \
         curl -fsSL "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" -o "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz"; \
     fi && \
@@ -77,7 +77,7 @@ WORKDIR /build/qemu-build
 # Focused on VMs use case with virtio devices
 # Note: Using dynamic linking with glibc (not fully static like Alpine/musl)
 # Building both system emulator (qemu-system-x86_64) and disk utilities (qemu-img)
-RUN --mount=type=cache,sharing=locked,id=qemu-build,target=/build/qemu-build \
+RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
     ../qemu-src/configure \
     --prefix=/opt/qemu \
     --target-list=x86_64-softmmu \
@@ -111,7 +111,12 @@ RUN --mount=type=cache,sharing=locked,id=qemu-build,target=/build/qemu-build \
     --disable-slirp \
     --disable-gio && \
     make -j${JOBS} && \
-    make install
+    make install && \
+    if [ ! -f /opt/qemu/share/qemu/bios-256k.bin ]; then \
+        install -m 0644 ../qemu-src/pc-bios/bios-256k.bin /opt/qemu/share/qemu/bios-256k.bin; \
+    fi && \
+    test -f /opt/qemu/share/qemu/bios-256k.bin && \
+    ls -la /opt/qemu/share/qemu
 
 # Strip the binary to reduce size
 RUN strip /opt/qemu/bin/qemu-system-x86_64
@@ -161,4 +166,6 @@ COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
 COPY --from=builder /opt/qemu/bin/qemu-img /bin/qemu-img
 
 # Copy BIOS/firmware files needed for boot
-COPY --from=builder /opt/qemu/share/qemu/ /share/qemubox/qemu/
+COPY --from=builder /opt/qemu/share/qemu/bios.bin /share/qemubox/qemu/bios.bin
+COPY --from=builder /opt/qemu/share/qemu/bios-256k.bin /share/qemubox/qemu/bios-256k.bin
+COPY --from=builder /opt/qemu/share/qemu/pvh.bin /share/qemubox/qemu/pvh.bin
