@@ -58,8 +58,8 @@ target "_common" {
     GO_DEBUG_GCFLAGS = GO_DEBUG_GCFLAGS
     GO_LDFLAGS = GO_LDFLAGS
   }
-  cache-from = ["type=gha"]
-  cache-to = ["type=gha,mode=max"]
+  cache-from = ["type=local,src=/var/lib/qemubox-buildkit-cache"]
+  cache-to = ["type=local,dest=/var/lib/qemubox-buildkit-cache,mode=max"]
 }
 
 # Output directory for build artifacts
