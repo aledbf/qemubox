@@ -481,8 +481,8 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
-	// Start forwarding events
-	if err := s.startEventForwarder(ctx, vmc); err != nil {
+	// Start forwarding events using service lifetime context (not request-scoped)
+	if err := s.startEventForwarder(s.context, vmc); err != nil {
 		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}

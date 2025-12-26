@@ -80,6 +80,11 @@ func TestContainerdRunQemubox(t *testing.T) {
 	if err := task.Start(ctx); err != nil {
 		t.Fatalf("start task: %v", err)
 	}
+	if st, err := task.Status(ctx); err == nil {
+		t.Logf("task status after start: %s (pid=%d)", st.Status.String(), st.Pid)
+	} else {
+		t.Logf("task status after start failed: %v", err)
+	}
 
 	select {
 	case status := <-statusCh:
@@ -88,6 +93,11 @@ func TestContainerdRunQemubox(t *testing.T) {
 			t.Fatalf("task result: %v", err)
 		}
 		if code != 0 {
+			if st, err := task.Status(ctx); err == nil {
+				t.Logf("task status on non-zero exit: %s (pid=%d)", st.Status.String(), st.Pid)
+			} else {
+				t.Logf("task status on non-zero exit failed: %v", err)
+			}
 			t.Fatalf("unexpected exit code: %d", code)
 		}
 	case <-ctx.Done():
