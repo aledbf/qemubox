@@ -32,7 +32,12 @@ func TestContainerdRunQemubox(t *testing.T) {
 	}
 	defer client.Close()
 
-	img, err := client.Pull(ctx, imageRef, containerd.WithPullSnapshotter(snapshotter))
+	img, err := client.Pull(
+		ctx,
+		imageRef,
+		containerd.WithPullSnapshotter(snapshotter),
+		containerd.WithPullUnpack,
+	)
 	if err != nil {
 		t.Fatalf("pull image: %v", err)
 	}
