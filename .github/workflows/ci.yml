@@ -32,6 +32,16 @@ jobs:
         uses: docker/setup-buildx-action@v3
         with:
           driver-opts: image=moby/buildkit:latest
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 4
+            [worker.containerd]
+              gc = true
+              gckeepstorage = 30000000000
+              [[worker.containerd.gcpolicy]]
+                keepBytes = 30000000000
+                keepDuration = 604800
+                filters = [ "type==source.local", "type==exec.cachemount", "type==source.git.checkout"]
 
       - name: Verify go.mod/go.sum
         run: task verify:vendor
@@ -47,6 +57,12 @@ jobs:
 
       - name: Validate
         run: task validate
+
+      - name: Cleanup BuildKit cache
+        if: always()
+        run: |
+          docker buildx prune --filter until=168h --force || true
+          find /var/lib/qemubox-buildkit-cache -type f -mtime +7 -delete || true
 
   integration:
     runs-on: self-hosted
@@ -73,9 +89,25 @@ jobs:
         uses: docker/setup-buildx-action@v3
         with:
           driver-opts: image=moby/buildkit:latest
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 4
+            [worker.containerd]
+              gc = true
+              gckeepstorage = 30000000000
+              [[worker.containerd.gcpolicy]]
+                keepBytes = 30000000000
+                keepDuration = 604800
+                filters = [ "type==source.local", "type==exec.cachemount", "type==source.git.checkout"]
 
       - name: Run integration test
         env:
           VERSION: ci-${{ github.run_id }}
           CLEANUP: "1"
         run: task integration
+
+      - name: Cleanup BuildKit cache
+        if: always()
+        run: |
+          docker buildx prune --filter until=168h --force || true
+          find /var/lib/qemubox-buildkit-cache -type f -mtime +7 -delete || true

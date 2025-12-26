@@ -59,7 +59,7 @@ target "_common" {
     GO_LDFLAGS = GO_LDFLAGS
   }
   cache-from = ["type=local,src=/var/lib/qemubox-buildkit-cache"]
-  cache-to = ["type=local,dest=/var/lib/qemubox-buildkit-cache,mode=max"]
+  cache-to = ["type=local,dest=/var/lib/qemubox-buildkit-cache,mode=min,compression=zstd"]
 }
 
 # Output directory for build artifacts

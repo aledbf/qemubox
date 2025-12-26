@@ -40,6 +40,16 @@ jobs:
         uses: docker/setup-buildx-action@v3
         with:
           driver-opts: image=moby/buildkit:latest
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 4
+            [worker.containerd]
+              gc = true
+              gckeepstorage = 30000000000
+              [[worker.containerd.gcpolicy]]
+                keepBytes = 30000000000
+                keepDuration = 604800
+                filters = [ "type==source.local", "type==exec.cachemount", "type==source.git.checkout"]
 
       - name: Build release tarball
         env:
@@ -50,3 +60,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: _output/release/*.tar.gz
+
+      - name: Cleanup BuildKit cache
+        if: always()
+        run: |
+          docker buildx prune --filter until=168h --force || true
+          find /var/lib/qemubox-buildkit-cache -type f -mtime +7 -delete || true
