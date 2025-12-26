@@ -31,6 +31,11 @@ jobs:
       - name: Set up Task
         uses: go-task/setup-task@v1
 
+      - name: Prepare buildx cache
+        run: |
+          sudo mkdir -p /var/lib/qemubox-buildkit-cache
+          sudo chown -R "$USER":"$USER" /var/lib/qemubox-buildkit-cache
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
