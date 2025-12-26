@@ -300,6 +300,13 @@ tasks:
             else
               echo "No qemu.log found under /var/log/qemubox/"
             fi
+            echo "---- qemubox console.log (latest) ----"
+            CONSOLE_LOG=$(ls -1t /var/log/qemubox/*/console.log 2>/dev/null | head -n 1 || true)
+            if [ -n "${CONSOLE_LOG:-}" ]; then
+              ${SUDO} tail -n 200 "${CONSOLE_LOG}" || true
+            else
+              echo "No console.log found under /var/log/qemubox/"
+            fi
             exit 1
           }
 
