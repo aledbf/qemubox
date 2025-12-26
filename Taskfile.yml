@@ -294,31 +294,62 @@ tasks:
           exit 1
         fi
 
-        ${SUDO} env \
-          QEMUBOX_CONTAINERD_SOCKET="${SOCKET}" \
-          QEMUBOX_IMAGE="{{.INTEGRATION_IMAGE}}" \
-          QEMUBOX_RUNTIME="{{.INTEGRATION_RUNTIME}}" \
-          QEMUBOX_SNAPSHOTTER="{{.INTEGRATION_SNAPSHOTTER}}" \
-          QEMUBOX_FIFO_DIR="/run/qemubox/containerd/fifo" \
-          go test ./integration -run TestContainerdRunQemubox -count=1 || {
-            echo "---- qemubox-containerd logs ----"
-            ${SUDO} journalctl -u qemubox-containerd --no-pager -n 200 || true
-            echo "---- qemubox qemu.log (latest) ----"
-            QEMU_LOG=$(ls -1t /var/log/qemubox/*/qemu.log 2>/dev/null | head -n 1 || true)
-            if [ -n "${QEMU_LOG:-}" ]; then
-              ${SUDO} tail -n 200 "${QEMU_LOG}" || true
-            else
-              echo "No qemu.log found under /var/log/qemubox/"
-            fi
-            echo "---- qemubox console.log (latest) ----"
-            CONSOLE_LOG=$(ls -1t /var/log/qemubox/*/console.log 2>/dev/null | head -n 1 || true)
-            if [ -n "${CONSOLE_LOG:-}" ]; then
-              ${SUDO} tail -n 200 "${CONSOLE_LOG}" || true
-            else
-              echo "No console.log found under /var/log/qemubox/"
-            fi
-            exit 1
-          }
+        CTR_BIN="/usr/share/qemubox/bin/ctr"
+        CTR_NAMESPACE="qemubox-ci"
+        CTR_ID="qbx-ci-$(date +%s)"
+
+        ${SUDO} "${CTR_BIN}" \
+          --address "${SOCKET}" \
+          --namespace "${CTR_NAMESPACE}" \
+          images pull \
+          --snapshotter "{{.INTEGRATION_SNAPSHOTTER}}" \
+          "{{.INTEGRATION_IMAGE}}"
+
+        ${SUDO} "${CTR_BIN}" \
+          --address "${SOCKET}" \
+          --namespace "${CTR_NAMESPACE}" \
+          run --privileged --detach \
+          --snapshotter "{{.INTEGRATION_SNAPSHOTTER}}" \
+          --runtime "{{.INTEGRATION_RUNTIME}}" \
+          "{{.INTEGRATION_IMAGE}}" \
+          "${CTR_ID}" \
+          /sbin/init
+
+        STATUS=""
+        for _ in $(seq 1 30); do
+          STATUS=$(${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks list 2>/dev/null | awk -v id="${CTR_ID}" 'NR>1 && $1==id {print $3}')
+          if [ "${STATUS}" = "RUNNING" ]; then
+            break
+          fi
+          sleep 1
+        done
+
+        if [ "${STATUS}" != "RUNNING" ]; then
+          echo "👹 Error: task did not reach RUNNING state (status=${STATUS:-unknown})"
+          ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks info "${CTR_ID}" || true
+          ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks list || true
+          echo "---- qemubox-containerd logs ----"
+          ${SUDO} journalctl -u qemubox-containerd --no-pager -n 200 || true
+          echo "---- qemubox qemu.log (latest) ----"
+          QEMU_LOG=$(ls -1t /var/log/qemubox/*/qemu.log 2>/dev/null | head -n 1 || true)
+          if [ -n "${QEMU_LOG:-}" ]; then
+            ${SUDO} tail -n 200 "${QEMU_LOG}" || true
+          else
+            echo "No qemu.log found under /var/log/qemubox/"
+          fi
+          echo "---- qemubox console.log (latest) ----"
+          CONSOLE_LOG=$(ls -1t /var/log/qemubox/*/console.log 2>/dev/null | head -n 1 || true)
+          if [ -n "${CONSOLE_LOG:-}" ]; then
+            ${SUDO} tail -n 200 "${CONSOLE_LOG}" || true
+          else
+            echo "No console.log found under /var/log/qemubox/"
+          fi
+          exit 1
+        fi
+
+        ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks kill --signal SIGKILL "${CTR_ID}" || true
+        ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks delete "${CTR_ID}" || true
+        ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" containers delete "${CTR_ID}" || true
 
         if [ "${CLEANUP:-0}" = "1" ]; then
           ${SUDO} systemctl stop qemubox-containerd || true
