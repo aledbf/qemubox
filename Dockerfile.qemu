@@ -112,6 +112,7 @@ RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/buil
     --disable-gio && \
     make -j${JOBS} && \
     make install && \
+    cp -a ../qemu-src/pc-bios/* /opt/qemu/share/qemu/ && \
     if [ ! -f /opt/qemu/share/qemu/bios-256k.bin ]; then \
         install -m 0644 ../qemu-src/pc-bios/bios-256k.bin /opt/qemu/share/qemu/bios-256k.bin; \
     fi && \
