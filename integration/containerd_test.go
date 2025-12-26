@@ -51,8 +51,8 @@ func TestContainerdRunQemubox(t *testing.T) {
 		containerd.WithNewSnapshot(containerName+"-snapshot", img),
 		containerd.WithNewSpec(
 			oci.WithImageConfig(img),
-			// Give the shim time to stabilize event forwarding before the process exits.
-			oci.WithProcessArgs("/bin/sh", "-c", "sleep 2"),
+			// Keep the process running until the test explicitly stops it.
+			oci.WithProcessArgs("/bin/sh", "-c", "while true; do sleep 60; done"),
 		),
 		containerd.WithRuntime(runtime, nil),
 	)
@@ -81,10 +81,20 @@ func TestContainerdRunQemubox(t *testing.T) {
 	if err := task.Start(ctx); err != nil {
 		t.Fatalf("start task: %v", err)
 	}
-	if st, err := task.Status(ctx); err == nil {
-		t.Logf("task status after start: %s (pid=%d)", st.Status, task.Pid())
-	} else {
-		t.Logf("task status after start failed: %v", err)
+
+	select {
+	case status := <-statusCh:
+		code, _, err := status.Result()
+		if err != nil {
+			t.Fatalf("task exited early: %v", err)
+		}
+		t.Fatalf("task exited early with code %d", code)
+	case <-time.After(2 * time.Second):
+		// Task stayed running; proceed with controlled shutdown.
+	}
+
+	if err := task.Kill(ctx, syscall.SIGKILL); err != nil {
+		t.Fatalf("kill task: %v", err)
 	}
 
 	select {
@@ -94,11 +104,6 @@ func TestContainerdRunQemubox(t *testing.T) {
 			t.Fatalf("task result: %v", err)
 		}
 		if code != 0 {
-			if st, err := task.Status(ctx); err == nil {
-				t.Logf("task status on non-zero exit: %s (pid=%d)", st.Status, task.Pid())
-			} else {
-				t.Logf("task status on non-zero exit failed: %v", err)
-			}
 			t.Fatalf("unexpected exit code: %d", code)
 		}
 	case <-ctx.Done():
