@@ -246,9 +246,15 @@ tasks:
           exit 1
         fi
 
-        if ! tar -tzf "${TARBALL}" | grep -q "usr/share/qemubox/qemu/bios-256k.bin"; then
+        TARBALL_LIST="${WORKDIR}/tar.list"
+        if ! tar -tzf "${TARBALL}" > "${TARBALL_LIST}"; then
+          echo "👹 Error: failed to read tarball contents"
+          exit 1
+        fi
+
+        if ! grep -q "usr/share/qemubox/qemu/bios-256k.bin" "${TARBALL_LIST}"; then
           echo "👹 Error: bios-256k.bin missing from release tarball"
-          tar -tzf "${TARBALL}" | grep "usr/share/qemubox/qemu" || true
+          grep "usr/share/qemubox/qemu" "${TARBALL_LIST}" || true
           exit 1
         fi
 
