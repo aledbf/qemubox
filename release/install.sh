@@ -42,6 +42,14 @@ mkdir -p /usr/share/qemubox/config
 cp -r "${SCRIPT_DIR}/usr/share/qemubox/config/"* /usr/share/qemubox/config/
 echo -e "    ${GREEN}✓${NC} Configuration files installed"
 
+# Install QEMU firmware files
+if [ -d "${SCRIPT_DIR}/usr/share/qemubox/qemu" ]; then
+    echo "  → Installing QEMU firmware to /usr/share/qemubox/qemu..."
+    mkdir -p /usr/share/qemubox/qemu
+    cp -r "${SCRIPT_DIR}/usr/share/qemubox/qemu/"* /usr/share/qemubox/qemu/
+    echo -e "    ${GREEN}✓${NC} QEMU firmware installed"
+fi
+
 # Install CNI plugins
 if [ -d "${SCRIPT_DIR}/usr/share/qemubox/libexec/cni" ]; then
     echo "  → Installing CNI plugins to /usr/share/qemubox/libexec/cni..."
