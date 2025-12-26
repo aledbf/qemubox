@@ -4,6 +4,7 @@ Documentation=https://containerd.io
 After=network.target dbus.service
 
 [Service]
+Environment=QEMUBOX_VM_STATE_DIR=/run/qemubox/vm
 ExecSearchPath=/usr/share/qemubox/bin
 ExecSearchPath=/usr/local/sbin
 ExecSearchPath=/usr/local/bin

@@ -42,7 +42,7 @@ func TestContainerdRunQemubox(t *testing.T) {
 		t.Fatalf("pull image: %v", err)
 	}
 
-	containerName := "qemubox-ci-" + strings.ReplaceAll(t.Name(), "/", "-")
+	containerName := "qbx-ci-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
 	container, err := client.NewContainer(
 		ctx,
 		containerName,

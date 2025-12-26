@@ -284,7 +284,15 @@ func loadBundleForCreate(ctx context.Context, bundlePath string) (*bundle.Bundle
 }
 
 func (s *service) initVMInstance(ctx context.Context, r *taskAPI.CreateTaskRequest, resourceCfg *vm.VMResourceConfig) (vm.Instance, error) {
+	vmStateRoot := os.Getenv("QEMUBOX_VM_STATE_DIR")
 	vmState := filepath.Join(r.Bundle, "vm")
+	if vmStateRoot != "" {
+		namespace, ok := namespaces.Namespace(ctx)
+		if !ok || namespace == "" {
+			namespace = "default"
+		}
+		vmState = filepath.Join(vmStateRoot, namespace, r.ID)
+	}
 	if err := os.Mkdir(vmState, 0700); err != nil {
 		return nil, errgrpc.ToGRPCf(err, "failed to create vm state directory %q", vmState)
 	}
