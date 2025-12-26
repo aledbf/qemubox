@@ -63,8 +63,15 @@ else
   echo "  warn: QEMU firmware files not found - skipping"
 fi
 
-if [ ! -f "${RELEASE_DIR}/usr/share/qemubox/qemu/bios-256k.bin" ]; then
-  echo "👹 Error: missing QEMU BIOS file bios-256k.bin in release"
+missing_qemu_firmware=0
+for firmware in bios-256k.bin kvmvapic.bin vgabios-stdvga.bin; do
+  if [ ! -f "${RELEASE_DIR}/usr/share/qemubox/qemu/${firmware}" ]; then
+    echo "👹 Error: missing QEMU firmware file ${firmware} in release"
+    missing_qemu_firmware=1
+  fi
+done
+
+if [ "${missing_qemu_firmware}" -ne 0 ]; then
   if [ -d "${OUTPUT_DIR}/share/qemubox/qemu" ]; then
     echo "Contents of ${OUTPUT_DIR}/share/qemubox/qemu:"
     ls -la "${OUTPUT_DIR}/share/qemubox/qemu" || true
