@@ -58,6 +58,8 @@ target "_common" {
     GO_DEBUG_GCFLAGS = GO_DEBUG_GCFLAGS
     GO_LDFLAGS = GO_LDFLAGS
   }
+  cache-from = ["type=gha"]
+  cache-to = ["type=gha,mode=max"]
 }
 
 # Output directory for build artifacts
