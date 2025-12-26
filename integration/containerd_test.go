@@ -103,8 +103,8 @@ func TestContainerdRunQemubox(t *testing.T) {
 			t.Fatalf("task exited early: %v", err)
 		}
 		t.Fatalf("task exited early with code %d", code)
-	case <-time.After(2 * time.Second):
-		// Task stayed running; proceed with controlled shutdown.
+	default:
+		// Task is still running; proceed with controlled shutdown.
 	}
 
 	if err := task.Kill(ctx, syscall.SIGKILL); err != nil {

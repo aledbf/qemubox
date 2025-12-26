@@ -89,6 +89,7 @@ type container struct {
 	ioShutdown func(context.Context) error
 
 	execShutdowns map[string]func(context.Context) error
+	pid           uint32
 }
 
 // service is the shim implementation of a remote shim over GRPC
@@ -557,6 +558,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		"t_create": time.Since(preCreate),
 	}).Info("task successfully created")
 
+	c.pid = resp.Pid
 	s.mu.Lock()
 	s.containers[r.ID] = c
 	s.mu.Unlock()
@@ -897,6 +899,16 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.Wa
 // Connect returns shim information such as the shim's pid
 func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*taskAPI.ConnectResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("connect")
+	s.mu.Lock()
+	c, ok := s.containers[r.ID]
+	s.mu.Unlock()
+	if ok && c.pid != 0 {
+		return &taskAPI.ConnectResponse{
+			ShimPid: uint32(os.Getpid()),
+			TaskPid: c.pid,
+		}, nil
+	}
+
 	vmc, err := s.client()
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
