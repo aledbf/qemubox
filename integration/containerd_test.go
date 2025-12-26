@@ -51,7 +51,8 @@ func TestContainerdRunQemubox(t *testing.T) {
 		containerd.WithNewSnapshot(containerName+"-snapshot", img),
 		containerd.WithNewSpec(
 			oci.WithImageConfig(img),
-			oci.WithProcessArgs("/bin/sh", "-c", "echo qemubox-ok"),
+			// Give the shim time to stabilize event forwarding before the process exits.
+			oci.WithProcessArgs("/bin/sh", "-c", "sleep 2"),
 		),
 		containerd.WithRuntime(runtime, nil),
 	)
