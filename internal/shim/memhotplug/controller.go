@@ -22,8 +22,8 @@ type qmpMemoryClient interface {
 
 // Controller manages dynamic memory allocation for a VM based on memory usage
 type Controller struct {
-	containerID string
-	qmpClient   qmpMemoryClient
+	containerID   string
+	qmpClient     qmpMemoryClient
 	stats         StatsProvider
 	offlineMemory MemoryOffliner
 	onlineMemory  MemoryOnliner

@@ -50,6 +50,13 @@ jobs:
       - name: Build vminitd
         run: task build:vminitd
 
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --version
+          skip-cache: false
+
       - name: Lint
         run: task lint
 

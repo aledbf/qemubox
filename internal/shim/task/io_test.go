@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/url"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 )
+
+var errNotImplemented = errors.New("not implemented")
 
 // mockVMInstance implements vm.Instance for testing
 type mockVMInstance struct {
@@ -52,7 +55,7 @@ func (m *mockVMInstance) Client() *ttrpc.Client {
 }
 
 func (m *mockVMInstance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
-	return nil, nil
+	return nil, errNotImplemented
 }
 
 func (m *mockVMInstance) StartStream(ctx context.Context) (uint32, net.Conn, error) {

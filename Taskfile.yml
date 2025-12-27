@@ -201,20 +201,17 @@ tasks:
   validate:
     desc: Run all validation checks
     cmds:
-      - task: bake
-        vars:
-          TARGET: validate
-          MESSAGE: "Running validation"
-          DONE_MESSAGE: "Validation passed"
+      - task: lint
+      - task: verify:vendor
 
   lint:
     desc: Lint code
     cmds:
-      - task: bake
-        vars:
-          TARGET: lint
-          MESSAGE: "Running linters"
-          DONE_MESSAGE: "Linting passed"
+      - |
+        set -eou pipefail
+        echo "🔍 Running golangci-lint..."
+        golangci-lint run ./...
+        echo "✓ Linting passed"
 
   integration:
     desc: Build release tarball and run containerd integration test

@@ -671,7 +671,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	// Event forwarding must continue for the service lifetime, not tied to this RPC.
 	// Cleanup happens in shutdown() callback, not via context cancellation.
 	ns, _ := namespaces.Namespace(ctx)
-	eventCtx := namespaces.WithNamespace(context.Background(), ns)
+	eventCtx := namespaces.WithNamespace(context.WithoutCancel(ctx), ns)
 	if err := s.startEventForwarder(eventCtx, vmc); err != nil {
 		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
@@ -1541,7 +1541,7 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 	// Cleanup happens via controller.Stop() in shutdown/delete, not via context cancellation.
 	// Note: controller.Start() is non-blocking and launches its own goroutine internally.
 	// The controller manages its own lifecycle and will log any errors in its monitor loop.
-	controller.Start(context.Background())
+	controller.Start(context.WithoutCancel(ctx))
 
 	log.G(ctx).WithFields(log.Fields{
 		"container_id": containerID,
@@ -1636,7 +1636,7 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 	// Cleanup happens via controller.Stop() in shutdown/delete, not via context cancellation.
 	// Note: controller.Start() is non-blocking and launches its own goroutine internally.
 	// The controller manages its own lifecycle and will log any errors in its monitor loop.
-	controller.Start(context.Background())
+	controller.Start(context.WithoutCancel(ctx))
 
 	log.G(ctx).WithFields(log.Fields{
 		"container_id":   containerID,

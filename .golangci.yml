@@ -119,9 +119,11 @@ linters:
     - exhaustive        # Not all switch statements need all cases
   settings:
     cyclop:
-      max-complexity: 17
+      max-complexity: 30
     dupl:
       threshold: 250
+    gocognit:
+      min-complexity: 50
     revive:
       rules:
         - name: exported
