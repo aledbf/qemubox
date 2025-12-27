@@ -8,21 +8,13 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 )
 
-type factory struct{}
-
-// init registers the QEMU factory
-func init() {
-	vm.Register(vm.VMTypeQEMU, &factory{})
-}
-
-func (f *factory) NewInstance(ctx context.Context, containerID, stateDir string, cfg *vm.VMResourceConfig) (vm.Instance, error) {
-	// Locate QEMU binary
+// NewInstance creates a new QEMU VM instance.
+func NewInstance(ctx context.Context, containerID, stateDir string, cfg *vm.VMResourceConfig) (vm.Instance, error) {
 	binaryPath, err := findQemu()
 	if err != nil {
 		return nil, err
 	}
 
-	// Ensure state directory exists
 	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create state directory: %w", err)
 	}

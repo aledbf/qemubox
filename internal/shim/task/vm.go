@@ -8,6 +8,7 @@ import (
 	"github.com/containerd/ttrpc"
 
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
 )
 
 func (s *service) client() (*ttrpc.Client, error) {
@@ -38,17 +39,9 @@ func (s *service) vmInstance(ctx context.Context, containerID, state string, res
 	if s.vm != nil {
 		return nil, fmt.Errorf("vm already exists; shim requires one VM per container: %w", errdefs.ErrAlreadyExists)
 	}
-	// Get VMM type from environment or default
-	vmmType := vm.GetVMType()
-
-	// Create factory for selected VMM
-	factory, err := vm.NewFactory(ctx, vmmType)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create instance
-	s.vm, err = factory.NewInstance(ctx, containerID, state, resourceCfg)
+	// Create instance (QEMU only).
+	var err error
+	s.vm, err = qemu.NewInstance(ctx, containerID, state, resourceCfg)
 	if err != nil {
 		return nil, err
 	}
