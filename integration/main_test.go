@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
-	_ "github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
+	"github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
 )
 
 func TestMain(m *testing.M) {
@@ -31,12 +31,18 @@ func TestMain(m *testing.M) {
 func runWithVM(t *testing.T, runTest func(*testing.T, vm.Instance)) {
 	t.Helper()
 
-	factory, err := vm.NewFactory(t.Context(), vm.GetVMType())
-	if err != nil {
-		t.Fatal("Failed to create VM factory:", err)
+	// Create VM instance directly (qemubox only supports QEMU)
+	stateDir := filepath.Join(t.TempDir(), "vm-state")
+
+	// Use default resource config for testing
+	resourceCfg := &vm.VMResourceConfig{
+		BootCPUs:          1,
+		MaxCPUs:           2,
+		MemorySize:        512 * 1024 * 1024,  // 512 MiB
+		MemoryHotplugSize: 1024 * 1024 * 1024, // 1 GiB
 	}
 
-	instance, err := factory.NewInstance(t.Context(), t.Name(), t.TempDir(), nil)
+	instance, err := qemu.NewInstance(t.Context(), t.Name(), stateDir, resourceCfg)
 	if err != nil {
 		t.Fatal("Failed to create VM instance:", err)
 	}
