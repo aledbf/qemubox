@@ -52,7 +52,6 @@ func TestContainerdRunQemubox(t *testing.T) {
 		containerd.WithNewSpec(
 			oci.WithImageConfig(img),
 			oci.WithProcessArgs("/sbin/init"),
-			oci.WithTTY,
 			oci.WithPrivileged,
 			oci.WithAllDevicesAllowed,
 			oci.WithHostDevices,
