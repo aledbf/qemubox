@@ -201,7 +201,8 @@ func execInTask(ctx context.Context, task containerd.Task, argv []string, timeou
 	}
 	defer func() {
 		// Ensure the exec process is cleaned up. Ignore errors: it may already be gone.
-		_, _ = proc.Delete(context.Background())
+		// Use WithoutCancel to allow cleanup even if parent context is cancelled.
+		_, _ = proc.Delete(context.WithoutCancel(execCtx))
 	}()
 
 	waitCh, err := proc.Wait(execCtx)

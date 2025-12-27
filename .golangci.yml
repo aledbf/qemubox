@@ -184,6 +184,10 @@ linters:
       - linters:
           - gosec
         text: G304  # File inclusion via variable is intentional for CLI
+      # Service structs legitimately store context for service lifetime
+      - linters:
+          - containedctx
+        path: internal/(guest/vminit/task/service|host/network/network)\.go
     paths:
       - third_party$
       - builtin$
