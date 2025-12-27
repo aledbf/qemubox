@@ -210,7 +210,8 @@ tasks:
       - |
         set -eou pipefail
         echo "🔍 Running golangci-lint..."
-        golangci-lint run ./...
+        echo "   Config: $(golangci-lint config path)"
+        golangci-lint run --config .golangci.yml ./...
         echo "✓ Linting passed"
 
   integration:

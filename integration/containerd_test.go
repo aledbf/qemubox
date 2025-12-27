@@ -222,7 +222,7 @@ func execInTask(ctx context.Context, task containerd.Task, argv []string, timeou
 		}
 		return outBuf.String(), errBuf.String(), code, nil
 	case <-execCtx.Done():
-		_ = proc.Kill(context.Background(), syscall.SIGKILL)
+		_ = proc.Kill(context.WithoutCancel(execCtx), syscall.SIGKILL)
 		return outBuf.String(), errBuf.String(), 0, fmt.Errorf("task exec timeout: %w", execCtx.Err())
 	}
 }
