@@ -582,10 +582,17 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("starting container task")
 	vmc, err := s.client()
 	if err != nil {
+		log.G(ctx).WithError(err).Error("start: failed to get client")
 		return nil, errgrpc.ToGRPC(err)
 	}
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
-	return tc.Start(ctx, r)
+	resp, err := tc.Start(ctx, r)
+	if err != nil {
+		log.G(ctx).WithError(err).Error("start: guest start failed")
+		return nil, err
+	}
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "pid": resp.Pid}).Info("start: task started successfully")
+	return resp, nil
 }
 
 func (s *service) collectDeleteCleanup(r *taskAPI.DeleteRequest) deleteCleanupPlan {
@@ -800,17 +807,19 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 
 // State returns runtime state information for a process
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("state: called")
 	vmc, err := s.client()
 	if err != nil {
+		log.G(ctx).WithError(err).Error("state: failed to get client")
 		return nil, errgrpc.ToGRPC(err)
 	}
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	st, err := tc.State(ctx, r)
 	if err != nil {
-		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("state")
+		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Error("state: guest state failed")
 		return nil, errgrpc.ToGRPC(err)
 	}
-	log.G(ctx).WithFields(log.Fields{"status": st.Status, "id": r.ID, "exec": r.ExecID}).Info("state")
+	log.G(ctx).WithFields(log.Fields{"status": st.Status, "id": r.ID, "exec": r.ExecID}).Info("state: success")
 
 	return st, nil
 }
