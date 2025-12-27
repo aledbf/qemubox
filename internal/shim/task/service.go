@@ -136,15 +136,6 @@ type service struct {
 	inflight            atomic.Int64
 }
 
-type deleteCleanupPlan struct {
-	ioShutdowns      []func(context.Context) error
-	needShutdown     bool
-	vmInst           vm.Instance
-	cpuController    *cpuhotplug.Controller
-	memController    *memhotplug.Controller
-	needNetworkClean bool
-}
-
 // vmClient encapsulates VM communication for controller callbacks.
 // This eliminates closures that capture the entire service, making dependencies explicit.
 type vmClient struct {
@@ -770,101 +761,6 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	return resp, nil
 }
 
-func (s *service) collectDeleteCleanup(r *taskAPI.DeleteRequest) deleteCleanupPlan {
-	var plan deleteCleanupPlan
-
-	// Lock mutexes in consistent order: containers -> controllers -> vm
-	s.containersMu.Lock()
-	defer s.containersMu.Unlock()
-	s.controllerMu.Lock()
-	defer s.controllerMu.Unlock()
-	s.vmMu.Lock()
-	defer s.vmMu.Unlock()
-
-	if c, ok := s.containers[r.ID]; ok {
-		if r.ExecID != "" {
-			if ioShutdown, ok := c.execShutdowns[r.ExecID]; ok {
-				plan.ioShutdowns = append(plan.ioShutdowns, ioShutdown)
-				delete(c.execShutdowns, r.ExecID)
-			}
-		} else {
-			if c.ioShutdown != nil {
-				plan.ioShutdowns = append(plan.ioShutdowns, c.ioShutdown)
-			}
-			for _, ioShutdown := range c.execShutdowns {
-				plan.ioShutdowns = append(plan.ioShutdowns, ioShutdown)
-			}
-
-			plan.needNetworkClean = true
-			plan.cpuController = s.cpuHotplugController
-			s.cpuHotplugController = nil
-			plan.memController = s.memoryHotplugController
-			s.memoryHotplugController = nil
-			delete(s.containers, r.ID)
-		}
-	}
-
-	// One VM per container; if the initial process is deleted, stop the VM.
-	if r.ExecID == "" && s.vm != nil {
-		plan.needShutdown = true
-		plan.vmInst = s.vm
-	}
-
-	return plan
-}
-
-func (s *service) runDeleteCleanup(ctx context.Context, r *taskAPI.DeleteRequest, plan deleteCleanupPlan) {
-	// Execute cleanup operations WITHOUT holding the mutex
-	for i, ioShutdown := range plan.ioShutdowns {
-		if err := ioShutdown(ctx); err != nil {
-			if i == 0 && r.ExecID == "" {
-				log.G(ctx).WithError(err).Error("failed to shutdown io after delete")
-			} else {
-				log.G(ctx).WithError(err).WithField("exec", r.ExecID).Error("failed to shutdown exec io after delete")
-			}
-		}
-	}
-
-	// Release network resources
-	if plan.needNetworkClean {
-		env := &network.Environment{ID: r.ID}
-		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
-			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
-		}
-	}
-
-	// Stop CPU hotplug controller
-	if plan.cpuController != nil {
-		plan.cpuController.Stop()
-		log.G(ctx).Info("cpu-hotplug: controller stopped")
-	}
-
-	// Stop memory hotplug controller
-	if plan.memController != nil {
-		plan.memController.Stop()
-		log.G(ctx).Info("memory-hotplug: controller stopped")
-	}
-
-	log.G(ctx).WithFields(log.Fields{
-		"id":           r.ID,
-		"exec":         r.ExecID,
-		"needShutdown": plan.needShutdown,
-	}).Info("delete: shutdown decision")
-
-	// Shutdown VM if needed
-	if plan.needShutdown {
-		log.G(ctx).Info("container deleted, shutting down VM")
-		// Mark as intentional shutdown so event stream close doesn't trigger panic
-		s.intentionalShutdown.Store(true)
-		if err := plan.vmInst.Shutdown(ctx); err != nil {
-			if !isProcessAlreadyFinished(err) {
-				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
-			}
-		}
-	} else {
-		log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("container deleted, VM shutdown skipped")
-	}
-}
 
 func isProcessAlreadyFinished(err error) bool {
 	if err == nil {
@@ -885,7 +781,6 @@ func isProcessAlreadyFinished(err error) bool {
 func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAPI.DeleteResponse, error) {
 	s.inflight.Add(1)
 	defer s.inflight.Add(-1)
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("delete: entered")
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("deleting task")
 
 	vmc, err := s.dialClient(ctx)
@@ -897,28 +792,112 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 			log.G(ctx).WithError(err).Warn("failed to close client in Delete")
 		}
 	}()
+
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Delete(ctx, r)
-
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "vm_nil": s.vm == nil, "err": err}).Info("delete: rpc returned")
 	if err != nil {
 		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Warn("delete task failed")
+		// On error, attempt VM shutdown for container (not exec) deletion
 		if r.ExecID == "" && s.vm != nil {
 			log.G(ctx).Info("delete failed, attempting VM shutdown anyway")
 			s.intentionalShutdown.Store(true)
-			if err := s.vm.Shutdown(ctx); err != nil {
-				if !isProcessAlreadyFinished(err) {
-					log.G(ctx).WithError(err).Warn("failed to shutdown VM after delete error")
+			if shutdownErr := s.vm.Shutdown(ctx); shutdownErr != nil {
+				if !isProcessAlreadyFinished(shutdownErr) {
+					log.G(ctx).WithError(shutdownErr).Warn("failed to shutdown VM after delete error")
 				}
 			}
 		}
 		return resp, err
 	}
-	if err == nil {
-		plan := s.collectDeleteCleanup(r)
-		s.runDeleteCleanup(ctx, r, plan)
+
+	// Delete succeeded - clean up resources
+	// Extract cleanup targets while holding appropriate locks
+	var ioShutdowns []func(context.Context) error
+	var cpuController *cpuhotplug.Controller
+	var memController *memhotplug.Controller
+	var needNetworkClean, needVMShutdown bool
+
+	s.containersMu.Lock()
+	if c, ok := s.containers[r.ID]; ok {
+		if r.ExecID != "" {
+			// Exec process cleanup
+			if ioShutdown, ok := c.execShutdowns[r.ExecID]; ok {
+				ioShutdowns = append(ioShutdowns, ioShutdown)
+				delete(c.execShutdowns, r.ExecID)
+			}
+		} else {
+			// Container cleanup
+			if c.ioShutdown != nil {
+				ioShutdowns = append(ioShutdowns, c.ioShutdown)
+			}
+			for _, ioShutdown := range c.execShutdowns {
+				ioShutdowns = append(ioShutdowns, ioShutdown)
+			}
+			needNetworkClean = true
+			delete(s.containers, r.ID)
+		}
 	}
-	return resp, err
+	s.containersMu.Unlock()
+
+	// Get controllers and VM state (only for container, not exec)
+	if r.ExecID == "" {
+		s.controllerMu.Lock()
+		cpuController = s.cpuHotplugController
+		s.cpuHotplugController = nil
+		memController = s.memoryHotplugController
+		s.memoryHotplugController = nil
+		s.controllerMu.Unlock()
+
+		s.vmMu.Lock()
+		needVMShutdown = s.vm != nil
+		s.vmMu.Unlock()
+	}
+
+	// Execute cleanup operations (no locks held)
+	// Shutdown I/O streams
+	for i, ioShutdown := range ioShutdowns {
+		if err := ioShutdown(ctx); err != nil {
+			if i == 0 && r.ExecID == "" {
+				log.G(ctx).WithError(err).Error("failed to shutdown io after delete")
+			} else {
+				log.G(ctx).WithError(err).WithField("exec", r.ExecID).Error("failed to shutdown exec io after delete")
+			}
+		}
+	}
+
+	// Release network resources
+	if needNetworkClean {
+		env := &network.Environment{ID: r.ID}
+		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
+			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
+		}
+	}
+
+	// Stop CPU hotplug controller
+	if cpuController != nil {
+		cpuController.Stop()
+		log.G(ctx).Info("cpu-hotplug: controller stopped")
+	}
+
+	// Stop memory hotplug controller
+	if memController != nil {
+		memController.Stop()
+		log.G(ctx).Info("memory-hotplug: controller stopped")
+	}
+
+	// Shutdown VM if needed (one VM per container)
+	if needVMShutdown {
+		log.G(ctx).Info("container deleted, shutting down VM")
+		s.intentionalShutdown.Store(true)
+		if err := s.vm.Shutdown(ctx); err != nil {
+			if !isProcessAlreadyFinished(err) {
+				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
+			}
+		}
+	}
+
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("task deleted successfully")
+	return resp, nil
 }
 
 // Exec an additional process inside the container
