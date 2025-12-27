@@ -747,7 +747,8 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 	return args
 }
 
-// Client returns the TTRPC client for communicating with the guest
+// Client returns the long-lived TTRPC client for communicating with the guest.
+// This is used for the event stream and should not be shared for concurrent RPCs.
 func (q *Instance) Client() *ttrpc.Client {
 	// Return nil if VM is shutdown
 	if vmState(q.vmState.Load()) == vmStateShutdown {
@@ -757,6 +758,40 @@ func (q *Instance) Client() *ttrpc.Client {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.client
+}
+
+// DialClient creates a short-lived TTRPC client for one-off RPCs.
+// The caller must close the returned client.
+func (q *Instance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
+	if vmState(q.vmState.Load()) != vmStateRunning {
+		return nil, fmt.Errorf("vm not running: %w", errdefs.ErrFailedPrecondition)
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	conn, err := vsock.Dial(vsockCID, vsockRPCPort, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := pingTTRPC(conn); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
+	return ttrpc.NewClient(conn), nil
 }
 
 // QMPClient returns the QMP client for controlling the VM

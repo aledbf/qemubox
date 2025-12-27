@@ -490,13 +490,22 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		return nil, errgrpc.ToGRPC(err)
 	}
 
+	rpcClient, err := s.dialClient(ctx)
+	if err != nil {
+		cleanupNetwork()
+		return nil, errgrpc.ToGRPC(err)
+	}
+	defer func() {
+		_ = rpcClient.Close()
+	}()
+
 	bundleFiles, err := b.Files()
 	if err != nil {
 		cleanupNetwork()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	bundleService := bundleAPI.NewTTRPCBundleClient(vmc)
+	bundleService := bundleAPI.NewTTRPCBundleClient(rpcClient)
 	br, err := bundleService.Create(ctx, &bundleAPI.CreateRequest{
 		ID:    r.ID,
 		Files: bundleFiles,
@@ -540,7 +549,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		ioShutdown:    ioShutdown,
 		execShutdowns: make(map[string]func(context.Context) error),
 	}
-	tc := taskAPI.NewTTRPCTaskClient(vmc)
+	tc := taskAPI.NewTTRPCTaskClient(rpcClient)
 	resp, err := tc.Create(ctx, vr)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("failed to create task")
@@ -582,11 +591,14 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("starting container task")
 
 
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("start: failed to get client")
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Start(ctx, r)
 	if err != nil {
@@ -710,10 +722,13 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("delete: entered")
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("deleting task")
 
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Delete(ctx, r)
 
@@ -742,11 +757,13 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("exec container")
 
-	// Note: We get the client early but protect the RPC call later with mutex
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 
 	rio := stdio.Stdio{
 		Stdin:    r.Stdin,
@@ -808,10 +825,13 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("resize pty")
 
 
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.ResizePty(ctx, r)
 }
@@ -821,11 +841,14 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("state: called")
 
 
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("state: failed to get client")
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	st, err := tc.State(ctx, r)
 	if err != nil {
@@ -842,10 +865,13 @@ func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.E
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("pause")
 
 
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Pause(ctx, r)
 }
@@ -855,10 +881,13 @@ func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("resume")
 
 
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Resume(ctx, r)
 }
@@ -868,10 +897,13 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("kill")
 
 
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Kill(ctx, r)
 }
@@ -881,10 +913,13 @@ func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("all pids")
 
 
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Pids(ctx, r)
 }
@@ -894,10 +929,13 @@ func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptyp
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "stdin": r.Stdin}).Info("close io")
 
 
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.CloseIO(ctx, r)
 }
@@ -913,10 +951,13 @@ func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*pt
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("update")
 
 
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Update(ctx, r)
 }
@@ -926,10 +967,13 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.Wa
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("wait")
 
 
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Wait(ctx, r)
 }
@@ -947,10 +991,13 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 		}, nil
 	}
 
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	vr, err := tc.Connect(ctx, r)
@@ -991,10 +1038,13 @@ func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("stats")
 
 
-	vmc, err := s.client()
+	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	defer func() {
+		_ = vmc.Close()
+	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Stats(ctx, r)
 }
@@ -1239,16 +1289,19 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 	}
 
 	// Create and start the controller
-	statsProvider := func(ctx context.Context) (uint64, uint64, error) {
-		vmc, err := s.client()
-		if err != nil {
-			return 0, 0, err
-		}
-		tc := taskAPI.NewTTRPCTaskClient(vmc)
-		resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
-		if err != nil {
-			return 0, 0, err
-		}
+		statsProvider := func(ctx context.Context) (uint64, uint64, error) {
+			vmc, err := s.dialClient(ctx)
+			if err != nil {
+				return 0, 0, err
+			}
+			defer func() {
+				_ = vmc.Close()
+			}()
+			tc := taskAPI.NewTTRPCTaskClient(vmc)
+			resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
+			if err != nil {
+				return 0, 0, err
+			}
 		if resp.GetStats() == nil {
 			return 0, 0, fmt.Errorf("missing stats payload")
 		}
@@ -1266,25 +1319,31 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 		return cpu.GetUsageUsec(), cpu.GetThrottledUsec(), nil
 	}
 
-	offlineCPU := func(ctx context.Context, cpuID int) error {
-		vmc, err := s.client()
-		if err != nil {
+		offlineCPU := func(ctx context.Context, cpuID int) error {
+			vmc, err := s.dialClient(ctx)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				_ = vmc.Close()
+			}()
+			client := systemAPI.NewTTRPCSystemClient(vmc)
+			_, err = client.OfflineCPU(ctx, &systemAPI.OfflineCPURequest{CpuID: uint32(cpuID)})
 			return err
 		}
-		client := systemAPI.NewTTRPCSystemClient(vmc)
-		_, err = client.OfflineCPU(ctx, &systemAPI.OfflineCPURequest{CpuID: uint32(cpuID)})
-		return err
-	}
 
-	onlineCPU := func(ctx context.Context, cpuID int) error {
-		vmc, err := s.client()
-		if err != nil {
+		onlineCPU := func(ctx context.Context, cpuID int) error {
+			vmc, err := s.dialClient(ctx)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				_ = vmc.Close()
+			}()
+			client := systemAPI.NewTTRPCSystemClient(vmc)
+			_, err = client.OnlineCPU(ctx, &systemAPI.OnlineCPURequest{CpuID: uint32(cpuID)})
 			return err
 		}
-		client := systemAPI.NewTTRPCSystemClient(vmc)
-		_, err = client.OnlineCPU(ctx, &systemAPI.OnlineCPURequest{CpuID: uint32(cpuID)})
-		return err
-	}
 
 	controller := cpuhotplug.NewController(
 		containerID,
@@ -1386,16 +1445,19 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 	}
 
 	// Create stats provider (reads cgroup v2 memory.current)
-	statsProvider := func(ctx context.Context) (int64, error) {
-		vmc, err := s.client()
-		if err != nil {
-			return 0, err
-		}
-		tc := taskAPI.NewTTRPCTaskClient(vmc)
-		resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
-		if err != nil {
-			return 0, err
-		}
+		statsProvider := func(ctx context.Context) (int64, error) {
+			vmc, err := s.dialClient(ctx)
+			if err != nil {
+				return 0, err
+			}
+			defer func() {
+				_ = vmc.Close()
+			}()
+			tc := taskAPI.NewTTRPCTaskClient(vmc)
+			resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
+			if err != nil {
+				return 0, err
+			}
 		if resp.GetStats() == nil {
 			return 0, fmt.Errorf("missing stats payload")
 		}
@@ -1414,25 +1476,31 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 		return int64(mem.GetUsage()), nil
 	}
 
-	offlineMemory := func(ctx context.Context, memoryID int) error {
-		vmc, err := s.client()
-		if err != nil {
+		offlineMemory := func(ctx context.Context, memoryID int) error {
+			vmc, err := s.dialClient(ctx)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				_ = vmc.Close()
+			}()
+			client := systemAPI.NewTTRPCSystemClient(vmc)
+			_, err = client.OfflineMemory(ctx, &systemAPI.OfflineMemoryRequest{MemoryID: uint32(memoryID)})
 			return err
 		}
-		client := systemAPI.NewTTRPCSystemClient(vmc)
-		_, err = client.OfflineMemory(ctx, &systemAPI.OfflineMemoryRequest{MemoryID: uint32(memoryID)})
-		return err
-	}
 
-	onlineMemory := func(ctx context.Context, memoryID int) error {
-		vmc, err := s.client()
-		if err != nil {
+		onlineMemory := func(ctx context.Context, memoryID int) error {
+			vmc, err := s.dialClient(ctx)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				_ = vmc.Close()
+			}()
+			client := systemAPI.NewTTRPCSystemClient(vmc)
+			_, err = client.OnlineMemory(ctx, &systemAPI.OnlineMemoryRequest{MemoryID: uint32(memoryID)})
 			return err
 		}
-		client := systemAPI.NewTTRPCSystemClient(vmc)
-		_, err = client.OnlineMemory(ctx, &systemAPI.OnlineMemoryRequest{MemoryID: uint32(memoryID)})
-		return err
-	}
 
 	controller := memhotplug.NewController(
 		containerID,

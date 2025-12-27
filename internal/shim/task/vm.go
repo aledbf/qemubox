@@ -23,6 +23,15 @@ func (s *service) client() (*ttrpc.Client, error) {
 	return client, nil
 }
 
+func (s *service) dialClient(ctx context.Context) (*ttrpc.Client, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.vm == nil {
+		return nil, fmt.Errorf("vm not created: %w", errdefs.ErrFailedPrecondition)
+	}
+	return s.vm.DialClient(ctx)
+}
+
 func (s *service) vmInstance(ctx context.Context, containerID, state string, resourceCfg *vm.VMResourceConfig) (vm.Instance, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -80,6 +80,13 @@ func TestContainerdRunQemubox(t *testing.T) {
 		_, _ = task.Delete(ctx)
 	}()
 
+	// Give the task creation, event stream, and vsock connection time to stabilize.
+	// Without this delay, rapid successive RPC calls (CreateTask, Connect, Start) over
+	// the same vsock connection can cause CID corruption (0xFFFFFFFF = VMADDR_CID_ANY)
+	// leading to "no such device" errors. This mimics the natural delays that occur
+	// when using separate ctr commands.
+	time.Sleep(100 * time.Millisecond)
+
 	if err := task.Start(ctx); err != nil {
 		t.Fatalf("start task: %v", err)
 	}
