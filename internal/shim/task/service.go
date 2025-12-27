@@ -769,12 +769,13 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("starting container task")
 
-
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("start: dialing guest TTRPC")
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("start: failed to get client")
 		return nil, errgrpc.ToGRPC(err)
 	}
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("start: guest TTRPC client ready")
 	defer func() {
 		if err := vmc.Close(); err != nil {
 			log.G(ctx).WithError(err).Warn("failed to close client in Start")

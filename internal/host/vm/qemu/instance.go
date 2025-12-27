@@ -797,12 +797,14 @@ func (q *Instance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	q.logger.Debug("qemu: vsock dialed for TTRPC")
 
 	if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
 	if err := pingTTRPC(conn); err != nil {
+		q.logger.WithError(err).Debug("qemu: TTRPC ping failed")
 		_ = conn.Close()
 		return nil, err
 	}
@@ -811,6 +813,7 @@ func (q *Instance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
 		return nil, err
 	}
 
+	q.logger.Debug("qemu: TTRPC ping ok, client ready")
 	return ttrpc.NewClient(conn), nil
 }
 
