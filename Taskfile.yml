@@ -369,7 +369,7 @@ tasks:
           QEMUBOX_RUNTIME="{{.INTEGRATION_RUNTIME}}" \
           QEMUBOX_SNAPSHOTTER="{{.INTEGRATION_SNAPSHOTTER}}" \
           QEMUBOX_FIFO_DIR="/run/qemubox/containerd/fifo" \
-          go test -v ./integration -run TestContainerdRunQemubox -count=1 || {
+          go test -v -run TestContainerdRunQemubox -count=1 ./integration -test.v || {
             echo "---- qemubox-containerd logs ----"
             ${SUDO} journalctl -u qemubox-containerd --no-pager -n 200 || true
             echo "---- qemubox qemu.log (latest) ----"

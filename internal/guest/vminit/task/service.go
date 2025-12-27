@@ -280,8 +280,17 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	s.lifecycleMu.Unlock()
 	defer cleanup()
 
+	log.G(ctx).WithFields(log.Fields{
+		"container_id": r.ID,
+		"exec_id":      r.ExecID,
+	}).Info("starting container process")
+
 	p, err := container.Start(ctx, r)
 	if err != nil {
+		log.G(ctx).WithError(err).WithFields(log.Fields{
+			"container_id": r.ID,
+			"exec_id":      r.ExecID,
+		}).Error("failed to start container process")
 		// If we failed to even start the process, s.runningExecs
 		// won't get decremented in s.handleProcessExit. We still need
 		// to update it.
@@ -333,6 +342,11 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 			Pid:         uint32(p.Pid()),
 		})
 	}
+	log.G(ctx).WithFields(log.Fields{
+		"container_id": container.ID,
+		"exec_id":      r.ExecID,
+		"pid":          p.Pid(),
+	}).Info("started container process")
 	handleStarted(container, p)
 	return &taskAPI.StartResponse{
 		Pid: uint32(p.Pid()),
