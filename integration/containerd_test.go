@@ -80,6 +80,11 @@ func TestContainerdRunQemubox(t *testing.T) {
 		_, _ = task.Delete(ctx)
 	}()
 
+	// Add a small delay to allow the TTRPC connection to stabilize after CreateTask.
+	// This mimics the natural delay that occurs when using separate ctr commands.
+	// Without this, rapid Connect() + Start() calls can corrupt the vsock connection state.
+	time.Sleep(10 * time.Millisecond)
+
 	if err := task.Start(ctx); err != nil {
 		t.Fatalf("start task: %v", err)
 	}
