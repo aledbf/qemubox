@@ -67,7 +67,6 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 
 	s := &service{
 		events:                   make(chan any, eventChannelBuffer),
-		containers:               make(map[string]*container),
 		cpuHotplugControllers:    make(map[string]*cpuhotplug.Controller),
 		memoryHotplugControllers: make(map[string]*memhotplug.Controller),
 		networkManager:           nm,
@@ -110,7 +109,7 @@ type container struct {
 // service is the shim implementation of a remote shim over GRPC
 type service struct {
 	// Separate mutexes for different concerns to avoid contention
-	containersMu  sync.Mutex // Protects containers map
+	containerMu   sync.Mutex // Protects container field
 	controllerMu  sync.Mutex // Protects hotplug controllers
 	vmMu          sync.Mutex // Protects VM instance
 
@@ -120,14 +119,16 @@ type service struct {
 	// networkManager handles network resource allocation and cleanup
 	networkManager network.NetworkManagerInterface
 
+	// Single container (qemubox enforces 1 container per VM per shim)
+	container   *container
+	containerID string
+
 	// Per-container hotplug controllers (QEMU only)
 	// Using maps prevents race conditions when multiple VMs are created concurrently
 	cpuHotplugControllers    map[string]*cpuhotplug.Controller  // key: containerID
 	memoryHotplugControllers map[string]*memhotplug.Controller // key: containerID
 
 	events chan any
-
-	containers map[string]*container
 
 	initiateShutdown    func()
 	eventsClosed        atomic.Bool
@@ -314,31 +315,31 @@ func checkKVM() error {
 
 func (s *service) shutdown(ctx context.Context) error {
 	// Lock all mutexes in consistent order to prevent deadlocks
-	s.containersMu.Lock()
-	defer s.containersMu.Unlock()
+	s.containerMu.Lock()
+	defer s.containerMu.Unlock()
 	s.vmMu.Lock()
 	defer s.vmMu.Unlock()
 
 	var errs []error
 
 	// Release network resources first
-	for id := range s.containers {
-		env := &network.Environment{ID: id}
+	if s.containerID != "" {
+		env := &network.Environment{ID: s.containerID}
 		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
-			log.G(ctx).WithError(err).WithField("id", id).Warn("failed to release network resources")
+			log.G(ctx).WithError(err).WithField("id", s.containerID).Warn("failed to release network resources")
 		}
 	}
 
-	// Shutdown IO for all containers and execs
-	for id, c := range s.containers {
-		if c.ioShutdown != nil {
-			if err := c.ioShutdown(ctx); err != nil {
-				errs = append(errs, fmt.Errorf("container %q io shutdown: %w", id, err))
+	// Shutdown IO for container and execs
+	if s.container != nil {
+		if s.container.ioShutdown != nil {
+			if err := s.container.ioShutdown(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("container %q io shutdown: %w", s.containerID, err))
 			}
 		}
-		for execID, ioShutdown := range c.execShutdowns {
+		for execID, ioShutdown := range s.container.execShutdowns {
 			if err := ioShutdown(ctx); err != nil {
-				errs = append(errs, fmt.Errorf("container %q exec %q io shutdown: %w", id, execID, err))
+				errs = append(errs, fmt.Errorf("container %q exec %q io shutdown: %w", s.containerID, execID, err))
 			}
 		}
 	}
@@ -566,13 +567,13 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		return nil, errgrpc.ToGRPC(fmt.Errorf("checkpoints not supported: %w", errdefs.ErrNotImplemented))
 	}
 
-	s.containersMu.Lock()
-	existingContainers := len(s.containers)
-	s.containersMu.Unlock()
+	s.containerMu.Lock()
+	hasContainer := s.container != nil
+	s.containerMu.Unlock()
 	s.vmMu.Lock()
 	hasVM := s.vm != nil
 	s.vmMu.Unlock()
-	if existingContainers > 0 || hasVM {
+	if hasContainer || hasVM {
 		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim already running a container; requires fresh shim per container")
 	}
 
@@ -744,9 +745,10 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	}).Info("task successfully created")
 
 	c.pid = resp.Pid
-	s.containersMu.Lock()
-	s.containers[r.ID] = c
-	s.containersMu.Unlock()
+	s.containerMu.Lock()
+	s.container = c
+	s.containerID = r.ID
+	s.containerMu.Unlock()
 
 	// Start CPU hotplug controller if conditions are met
 	s.startCPUHotplugController(ctx, r.ID, vmi, resourceCfg)
@@ -844,27 +846,28 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	var memController *memhotplug.Controller
 	var needNetworkClean, needVMShutdown bool
 
-	s.containersMu.Lock()
-	if c, ok := s.containers[r.ID]; ok {
+	s.containerMu.Lock()
+	if s.container != nil && s.containerID == r.ID {
 		if r.ExecID != "" {
 			// Exec process cleanup
-			if ioShutdown, ok := c.execShutdowns[r.ExecID]; ok {
+			if ioShutdown, ok := s.container.execShutdowns[r.ExecID]; ok {
 				ioShutdowns = append(ioShutdowns, ioShutdown)
-				delete(c.execShutdowns, r.ExecID)
+				delete(s.container.execShutdowns, r.ExecID)
 			}
 		} else {
 			// Container cleanup
-			if c.ioShutdown != nil {
-				ioShutdowns = append(ioShutdowns, c.ioShutdown)
+			if s.container.ioShutdown != nil {
+				ioShutdowns = append(ioShutdowns, s.container.ioShutdown)
 			}
-			for _, ioShutdown := range c.execShutdowns {
+			for _, ioShutdown := range s.container.execShutdowns {
 				ioShutdowns = append(ioShutdowns, ioShutdown)
 			}
 			needNetworkClean = true
-			delete(s.containers, r.ID)
+			s.container = nil
+			s.containerID = ""
 		}
 	}
-	s.containersMu.Unlock()
+	s.containerMu.Unlock()
 
 	// Get controllers and VM state (only for container, not exec)
 	if r.ExecID == "" {
@@ -954,19 +957,19 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	s.containersMu.Lock()
-	if c, ok := s.containers[r.ID]; ok {
-		c.execShutdowns[r.ExecID] = ioShutdown
+	s.containerMu.Lock()
+	if s.container != nil && s.containerID == r.ID {
+		s.container.execShutdowns[r.ExecID] = ioShutdown
 	} else {
 		if ioShutdown != nil {
 			if err := ioShutdown(ctx); err != nil {
 				log.G(ctx).WithError(err).Error("failed to shutdown exec io after container not found")
 			}
 		}
-		s.containersMu.Unlock()
+		s.containerMu.Unlock()
 		return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "container %q not found", r.ID)
 	}
-	s.containersMu.Unlock()
+	s.containerMu.Unlock()
 
 	vr := &taskAPI.ExecProcessRequest{
 		ID:       r.ID,
@@ -981,16 +984,16 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 	resp, err := taskAPI.NewTTRPCTaskClient(vmc).Exec(ctx, vr)
 
 	if err != nil {
-		s.containersMu.Lock()
-		if c, ok := s.containers[r.ID]; ok {
-			if ioShutdown, ok := c.execShutdowns[r.ExecID]; ok {
+		s.containerMu.Lock()
+		if s.container != nil && s.containerID == r.ID {
+			if ioShutdown, ok := s.container.execShutdowns[r.ExecID]; ok {
 				if err := ioShutdown(ctx); err != nil {
 					log.G(ctx).WithError(err).Error("failed to shutdown exec io after exec failure")
 				}
-				delete(c.execShutdowns, r.ExecID)
+				delete(s.container.execShutdowns, r.ExecID)
 			}
 		}
-		s.containersMu.Unlock()
+		s.containerMu.Unlock()
 		return nil, errgrpc.ToGRPC(err)
 	}
 
@@ -1176,13 +1179,17 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.Wa
 // Connect returns shim information such as the shim's pid
 func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*taskAPI.ConnectResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("connect")
-	s.containersMu.Lock()
-	c, ok := s.containers[r.ID]
-	s.containersMu.Unlock()
-	if ok && c.pid != 0 {
+	s.containerMu.Lock()
+	hasContainer := s.container != nil && s.containerID == r.ID
+	pid := uint32(0)
+	if hasContainer {
+		pid = s.container.pid
+	}
+	s.containerMu.Unlock()
+	if hasContainer && pid != 0 {
 		return &taskAPI.ConnectResponse{
 			ShimPid: uint32(os.Getpid()),
-			TaskPid: c.pid,
+			TaskPid: pid,
 		}, nil
 	}
 
