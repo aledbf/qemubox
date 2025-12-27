@@ -1,5 +1,6 @@
 //go:build linux
 
+// Package task implements the vminit task service.
 package task
 
 import (
@@ -35,10 +36,10 @@ import (
 	"github.com/containerd/typeurl/v2"
 	"github.com/moby/sys/userns"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/systools"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/runc"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
+	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/systools"
 )
 
 var (
@@ -146,7 +147,7 @@ type containerProcess struct {
 // The returned cleanup closure releases resources used to handle early exits.
 // It must be called before the caller of preStart returns, otherwise severe
 // memory leaks will occur.
-func (s *service) preStart(c *runc.Container) (handleStarted func(*runc.Container, process.Process), cleanup func()) {
+func (s *service) preStart(c *runc.Container) (func(*runc.Container, process.Process), func()) {
 	exits := make(map[int][]runcC.Exit)
 	s.exitSubscribers[&exits] = struct{}{}
 
@@ -205,7 +206,7 @@ func (s *service) preStart(c *runc.Container) (handleStarted func(*runc.Containe
 }
 
 // Create a new initial process and container with the underlying OCI runtime
-func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, err error) {
+func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*taskAPI.CreateTaskResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -776,7 +777,11 @@ func (s *service) getContainerPids(ctx context.Context, container *runc.Containe
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
-	ps, err := p.(*process.Init).Runtime().Ps(ctx, container.ID)
+	initProc, ok := p.(*process.Init)
+	if !ok {
+		return nil, fmt.Errorf("expected init process, got %T", p)
+	}
+	ps, err := initProc.Runtime().Ps(ctx, container.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -789,7 +794,7 @@ func (s *service) getContainerPids(ctx context.Context, container *runc.Containe
 
 func (s *service) forward(ctx context.Context, publisher events.Publisher) {
 	ns, _ := namespaces.Namespace(ctx)
-	ctx = namespaces.WithNamespace(context.Background(), ns)
+	ctx = namespaces.WithNamespace(context.WithoutCancel(ctx), ns)
 	for e := range s.events {
 		err := publisher.Publish(ctx, runtime.GetTopic(e), e)
 		if err != nil {

@@ -14,13 +14,13 @@ func setupMntNs() error {
 
 	err = unix.Mount("", "/", "", unix.MS_REC|unix.MS_SLAVE, "")
 	if err != nil {
-		err = fmt.Errorf("failed to mount with slave: %v", err)
+		err = fmt.Errorf("failed to mount with slave: %w", err)
 		return err
 	}
 
 	err = unix.Mount("", "/", "", unix.MS_REC|unix.MS_SHARED, "")
 	if err != nil {
-		err = fmt.Errorf("failed to mount with shared: %v", err)
+		err = fmt.Errorf("failed to mount with shared: %w", err)
 		return err
 	}
 

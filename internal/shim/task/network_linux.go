@@ -33,6 +33,7 @@ func initNetworkManager(ctx context.Context) (network.NetworkManagerInterface, e
 
 	// Create CNI-based NetworkManager
 	nm, err := network.NewNetworkManager(
+		ctx,
 		netCfg,
 		networkConfigStore,
 	)

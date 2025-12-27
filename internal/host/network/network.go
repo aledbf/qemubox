@@ -12,7 +12,7 @@ import (
 	"github.com/containerd/log"
 
 	"github.com/aledbf/qemubox/containerd/internal/host/network/cni"
-	"github.com/aledbf/qemubox/containerd/internal/host/store"
+	boltstore "github.com/aledbf/qemubox/containerd/internal/host/store"
 )
 
 // NetworkMode represents the network management mode.
@@ -116,10 +116,11 @@ type NetworkManager struct {
 }
 
 func NewNetworkManager(
+	ctx context.Context,
 	config NetworkConfig,
 	networkConfigStore boltstore.Store[NetworkConfig],
 ) (NetworkManagerInterface, error) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 
 	// Log the network mode
 	log.G(ctx).Info("Initializing CNI network manager")

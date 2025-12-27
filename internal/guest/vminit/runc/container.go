@@ -21,15 +21,15 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/typeurl/v2"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/mountutil"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
+	"github.com/aledbf/qemubox/containerd/internal/host/mountutil"
 )
 
 const runtimePath = "/sbin/crun"
 
 // NewContainer returns a new runc container
-func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTaskRequest, streams stream.Manager) (_ *Container, retErr error) {
+func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTaskRequest, streams stream.Manager) (*Container, error) {
 	opts := &options.Options{}
 	if r.Options.GetValue() != nil {
 		v, err := typeurl.UnmarshalAny(r.Options)
@@ -37,7 +37,11 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 			return nil, err
 		}
 		if v != nil {
-			opts = v.(*options.Options)
+			parsed, ok := v.(*options.Options)
+			if !ok {
+				return nil, fmt.Errorf("unexpected options type %T", v)
+			}
+			opts = parsed
 		}
 	}
 
@@ -54,7 +58,7 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 	rootfs := ""
 	if len(pmounts) > 0 {
 		rootfs = filepath.Join(r.Bundle, "rootfs")
-		if err := os.Mkdir(rootfs, 0711); err != nil && !os.IsExist(err) {
+		if err := os.Mkdir(rootfs, 0750); err != nil && !os.IsExist(err) {
 			return nil, err
 		}
 	}
@@ -92,8 +96,7 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 		log.G(ctx).WithError(err).Warn("failed to inject resolv.conf, container may not have DNS")
 	}
 
-	p, err := newInit(
-		ctx,
+	p := newInit(
 		r.Bundle,
 		filepath.Join(r.Bundle, "work"),
 		platform,
@@ -102,9 +105,6 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 		rootfs,
 		streams,
 	)
-	if err != nil {
-		return nil, err
-	}
 	if err := p.Create(ctx, config); err != nil {
 		return nil, err
 	}
@@ -132,7 +132,7 @@ func ReadOptions(path string) (*options.Options, error) {
 	filePath := filepath.Join(path, optionsFilename)
 	if _, err := os.Stat(filePath); err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return &options.Options{}, nil
 		}
 		return nil, err
 	}
@@ -157,8 +157,8 @@ func WriteOptions(path string, opts *options.Options) error {
 	return os.WriteFile(filepath.Join(path, optionsFilename), data, 0600)
 }
 
-func newInit(ctx context.Context, path, workDir string, platform stdio.Platform,
-	r *process.CreateConfig, options *options.Options, rootfs string, streams stream.Manager) (*process.Init, error) {
+func newInit(path, workDir string, platform stdio.Platform,
+	r *process.CreateConfig, options *options.Options, rootfs string, streams stream.Manager) *process.Init {
 	runtime := process.NewRunc(options.Root, path, runtimePath, options.SystemdCgroup)
 
 	p := process.New(r.ID, runtime, stdio.Stdio{
@@ -180,7 +180,7 @@ func newInit(ctx context.Context, path, workDir string, platform stdio.Platform,
 		// if criu work path not set, use container WorkDir
 		p.CriuWorkPath = p.WorkDir
 	}
-	return p, nil
+	return p
 }
 
 // Container for operating on a runc container and its processes
@@ -200,10 +200,11 @@ type Container struct {
 }
 
 // All processes in the container
-func (c *Container) All() (o []process.Process) {
+func (c *Container) All() []process.Process {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	var o []process.Process
 	for _, p := range c.processes {
 		o = append(o, p)
 	}
@@ -214,9 +215,10 @@ func (c *Container) All() (o []process.Process) {
 }
 
 // ExecdProcesses added to the container
-func (c *Container) ExecdProcesses() (o []process.Process) {
+func (c *Container) ExecdProcesses() []process.Process {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	var o []process.Process
 	for _, p := range c.processes {
 		o = append(o, p)
 	}
@@ -334,7 +336,11 @@ func (c *Container) Delete(ctx context.Context, r *task.DeleteRequest) (process.
 
 // Exec an additional process
 func (c *Container) Exec(ctx context.Context, r *task.ExecProcessRequest) (process.Process, error) {
-	process, err := c.process.(*process.Init).Exec(ctx, c.Bundle, &process.ExecConfig{
+	initProc, ok := c.process.(*process.Init)
+	if !ok {
+		return nil, fmt.Errorf("expected init process, got %T", c.process)
+	}
+	proc, err := initProc.Exec(ctx, c.Bundle, &process.ExecConfig{
 		ID:       r.ExecID,
 		Terminal: r.Terminal,
 		Stdin:    r.Stdin,
@@ -345,18 +351,26 @@ func (c *Container) Exec(ctx context.Context, r *task.ExecProcessRequest) (proce
 	if err != nil {
 		return nil, err
 	}
-	c.ProcessAdd(process)
-	return process, nil
+	c.ProcessAdd(proc)
+	return proc, nil
 }
 
 // Pause the container
 func (c *Container) Pause(ctx context.Context) error {
-	return c.process.(*process.Init).Pause(ctx)
+	initProc, ok := c.process.(*process.Init)
+	if !ok {
+		return fmt.Errorf("expected init process, got %T", c.process)
+	}
+	return initProc.Pause(ctx)
 }
 
 // Resume the container
 func (c *Container) Resume(ctx context.Context) error {
-	return c.process.(*process.Init).Resume(ctx)
+	initProc, ok := c.process.(*process.Init)
+	if !ok {
+		return fmt.Errorf("expected init process, got %T", c.process)
+	}
+	return initProc.Resume(ctx)
 }
 
 // ResizePty of a process
@@ -408,7 +422,11 @@ func (c *Container) Checkpoint(ctx context.Context, r *task.CheckpointTaskReques
 			return err
 		}
 	}
-	return p.(*process.Init).Checkpoint(ctx, &process.CheckpointConfig{
+	initProc, ok := p.(*process.Init)
+	if !ok {
+		return fmt.Errorf("expected init process, got %T", p)
+	}
+	return initProc.Checkpoint(ctx, &process.CheckpointConfig{
 		Path:                     r.Path,
 		Exit:                     opts.Exit,
 		AllowOpenTCP:             opts.OpenTcp,
@@ -426,7 +444,11 @@ func (c *Container) Update(ctx context.Context, r *task.UpdateTaskRequest) error
 	if err != nil {
 		return err
 	}
-	return p.(*process.Init).Update(ctx, r.Resources)
+	initProc, ok := p.(*process.Init)
+	if !ok {
+		return fmt.Errorf("expected init process, got %T", p)
+	}
+	return initProc.Update(ctx, r.Resources)
 }
 
 // HasPid returns true if the container owns a specific pid
@@ -442,7 +464,8 @@ func (c *Container) HasPid(pid int) bool {
 	return false
 }
 
-func loadProcessCgroup(ctx context.Context, pid int) (cg interface{}, err error) {
+func loadProcessCgroup(ctx context.Context, pid int) (interface{}, error) {
+	var cg interface{}
 	if cgroups.Mode() == cgroups.Unified {
 		g, err := cgroupsv2.PidGroupPath(pid)
 		if err != nil {
@@ -455,6 +478,7 @@ func loadProcessCgroup(ctx context.Context, pid int) (cg interface{}, err error)
 			return nil, err
 		}
 	} else {
+		var err error
 		cg, err = cgroup1.Load(cgroup1.PidPath(pid))
 		if err != nil {
 			log.G(ctx).WithError(err).Errorf("loading cgroup for %d", pid)

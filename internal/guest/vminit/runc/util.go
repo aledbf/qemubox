@@ -37,7 +37,11 @@ func readSpec(p string) (*specs.Spec, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.L.WithError(err).Warn("failed to close config.json")
+		}
+	}()
 	var s specs.Spec
 	if err := json.NewDecoder(f).Decode(&s); err != nil {
 		return nil, err
@@ -51,7 +55,11 @@ func writeSpec(p string, spec *specs.Spec) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.L.WithError(err).Warn("failed to close config.json")
+		}
+	}()
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
 	return enc.Encode(spec)

@@ -62,8 +62,8 @@ func TestContainerdRunQemubox(t *testing.T) {
 			oci.WithProcessArgs("/sbin/init"),
 			oci.WithPrivileged,
 			oci.WithAllDevicesAllowed,
-		oci.WithHostDevices,
-	),
+			oci.WithHostDevices,
+		),
 		containerd.WithRuntime(runtime, nil),
 	)
 	if err != nil {

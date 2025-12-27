@@ -1,5 +1,6 @@
 //go:build linux
 
+// Package runc provides container lifecycle helpers for vminit.
 package runc
 
 import (
@@ -18,6 +19,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/stdio"
 	"github.com/containerd/fifo"
+	"github.com/containerd/log"
 
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
@@ -30,7 +32,11 @@ func NewPlatform(m stream.Manager) (stdio.Platform, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize epoller: %w", err)
 	}
-	go epoller.Wait()
+	go func() {
+		if err := epoller.Wait(); err != nil {
+			log.L.WithError(err).Error("epoller wait failed")
+		}
+	}()
 	return &linuxPlatform{
 		epoller: epoller,
 		streams: m,
@@ -42,17 +48,17 @@ type linuxPlatform struct {
 	streams stream.Manager
 }
 
-func (p *linuxPlatform) CopyConsole(ctx context.Context, console console.Console, id, stdin, stdout, stderr string, wg *sync.WaitGroup) (cons console.Console, retErr error) {
+func (p *linuxPlatform) CopyConsole(ctx context.Context, cons console.Console, id, stdin, stdout, stderr string, wg *sync.WaitGroup) (console.Console, error) {
 	if p.epoller == nil {
 		return nil, errors.New("uninitialized epoller")
 	}
 
-	epollConsole, err := p.epoller.Add(console)
+	epollConsole, err := p.epoller.Add(cons)
 	if err != nil {
 		return nil, err
 	}
 	var cstdin io.Closer
-
+	var result console.Console
 	var cwg sync.WaitGroup
 	if stdin != "" {
 		var in io.ReadCloser
@@ -76,10 +82,16 @@ func (p *linuxPlatform) CopyConsole(ctx context.Context, console console.Console
 			cwg.Done()
 			bp := iobuf.Get()
 			defer iobuf.Put(bp)
-			io.CopyBuffer(epollConsole, in, *bp)
+			if _, err := io.CopyBuffer(epollConsole, in, *bp); err != nil {
+				log.L.WithError(err).Debug("console copy error")
+			}
 			// we need to shutdown epollConsole when pipe broken
-			epollConsole.Shutdown(p.epoller.CloseConsole)
-			epollConsole.Close()
+			if err := epollConsole.Shutdown(p.epoller.CloseConsole); err != nil {
+				log.L.WithError(err).Debug("console shutdown error")
+			}
+			if err := epollConsole.Close(); err != nil {
+				log.L.WithError(err).Debug("console close error")
+			}
 		}()
 	}
 
@@ -104,9 +116,12 @@ func (p *linuxPlatform) CopyConsole(ctx context.Context, console console.Console
 			cwg.Done()
 			buf := iobuf.Get()
 			defer iobuf.Put(buf)
-			io.CopyBuffer(out, epollConsole, *buf)
-
-			out.Close()
+			if _, err := io.CopyBuffer(out, epollConsole, *buf); err != nil {
+				log.L.WithError(err).Debug("console copy error")
+			}
+			if err := out.Close(); err != nil {
+				log.L.WithError(err).Debug("console close error")
+			}
 			wg.Done()
 		}()
 		cwg.Wait()
@@ -120,9 +135,9 @@ func (p *linuxPlatform) CopyConsole(ctx context.Context, console console.Console
 
 		// In case of unexpected errors during logging binary start, close open pipes
 		var filesToClose []*os.File
-
+		success := false
 		defer func() {
-			if retErr != nil {
+			if !success {
 				process.CloseFiles(filesToClose...)
 			}
 		}()
@@ -153,8 +168,12 @@ func (p *linuxPlatform) CopyConsole(ctx context.Context, console console.Console
 		cwg.Add(1)
 		go func() {
 			cwg.Done()
-			io.Copy(outW, epollConsole)
-			outW.Close()
+			if _, err := io.Copy(outW, epollConsole); err != nil {
+				log.L.WithError(err).Debug("console copy error")
+			}
+			if err := outW.Close(); err != nil {
+				log.L.WithError(err).Debug("console close error")
+			}
 			wg.Done()
 		}()
 
@@ -173,6 +192,7 @@ func (p *linuxPlatform) CopyConsole(ctx context.Context, console console.Console
 			return nil, fmt.Errorf("failed to read from logging binary: %w", err)
 		}
 		cwg.Wait()
+		success = true
 
 	default:
 		outw, err := fifo.OpenFifo(ctx, stdout, syscall.O_WRONLY, 0)
@@ -189,24 +209,30 @@ func (p *linuxPlatform) CopyConsole(ctx context.Context, console console.Console
 			cwg.Done()
 			buf := iobuf.Get()
 			defer iobuf.Put(buf)
-			io.CopyBuffer(outw, epollConsole, *buf)
+			if _, err := io.CopyBuffer(outw, epollConsole, *buf); err != nil {
+				log.L.WithError(err).Debug("console copy error")
+			}
 
-			outw.Close()
-			outr.Close()
+			if err := outw.Close(); err != nil {
+				log.L.WithError(err).Debug("console close error")
+			}
+			if err := outr.Close(); err != nil {
+				log.L.WithError(err).Debug("console close error")
+			}
 			wg.Done()
 		}()
 		cwg.Wait()
 	}
 	if cstdin != nil {
-		cons = &closingConsole{
+		result = &closingConsole{
 			EpollConsole: epollConsole,
 			closeStdin:   cstdin,
 		}
 	} else {
-		cons = epollConsole
+		result = epollConsole
 	}
 
-	return
+	return result, nil
 }
 
 func (p *linuxPlatform) ShutdownConsole(ctx context.Context, cons console.Console) error {
@@ -214,7 +240,7 @@ func (p *linuxPlatform) ShutdownConsole(ctx context.Context, cons console.Consol
 		return errors.New("uninitialized epoller")
 	}
 	epollConsole, ok := cons.(interface {
-		Shutdown(close func(int) error) error
+		Shutdown(closeConsole func(int) error) error
 	})
 	if !ok {
 		return fmt.Errorf("expected EpollConsole, got %#v", cons)

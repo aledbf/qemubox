@@ -5,6 +5,7 @@
 package network
 
 import (
+	"context"
 	"fmt"
 	"net"
 
@@ -65,10 +66,12 @@ type NetworkManager struct{}
 
 // NewNetworkManager creates a stub network manager (Darwin only)
 func NewNetworkManager(
+	ctx context.Context,
 	config NetworkConfig,
 	networkConfigStore boltstore.Store[NetworkConfig],
 ) (NetworkManagerInterface, error) {
 	// Reference unused parameter to avoid compiler errors
+	_ = ctx
 	_ = config
 	_ = networkConfigStore
 	return nil, fmt.Errorf("network manager not supported on darwin")

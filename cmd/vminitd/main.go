@@ -105,7 +105,9 @@ func main() {
 	flag.IntVar(&config.VSockContextID, "vsock-cid", 3, "vsock context ID for vsock listen")
 	args := os.Args[1:]
 
-	flag.CommandLine.Parse(args)
+	if err := flag.CommandLine.Parse(args); err != nil {
+		log.L.WithError(err).Fatal("failed to parse flags")
+	}
 
 	// Load configuration file if provided
 	if configFile != "" {
@@ -115,10 +117,14 @@ func main() {
 	}
 
 	if config.Debug {
-		log.SetLevel("debug")
+		if err := log.SetLevel("debug"); err != nil {
+			log.L.WithError(err).Fatal("failed to set log level")
+		}
 	} else {
 		// Prefer verbose logging in the minimal VM to ease debugging boot/mount issues.
-		log.SetLevel("info")
+		if err := log.SetLevel("info"); err != nil {
+			log.L.WithError(err).Fatal("failed to set log level")
+		}
 	}
 
 	ctx := context.Background()
@@ -218,6 +224,7 @@ func systemInit(ctx context.Context, _ ServiceConfig) error {
 		return err
 	}
 
+	// #nosec G301 -- /etc must be world-readable inside the VM.
 	if err := os.Mkdir("/etc", 0755); err != nil && !os.IsExist(err) {
 		return fmt.Errorf("failed to create /etc: %w", err)
 	}
@@ -290,6 +297,7 @@ func waitForBlockDevices(ctx context.Context) {
 
 func systemMounts() error {
 	// Create /lib if it doesn't exist (needed for modules)
+	// #nosec G301 -- /lib must be world-readable inside the VM.
 	if err := os.MkdirAll("/lib", 0755); err != nil && !os.IsExist(err) {
 		return fmt.Errorf("failed to create /lib: %w", err)
 	}
@@ -334,6 +342,7 @@ func systemMounts() error {
 }
 
 func setupCgroupControl() error {
+	// #nosec G306 -- kernel-managed cgroup control file expects 0644.
 	return os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+cpu +cpuset +io +memory +pids"), 0644)
 }
 
@@ -383,6 +392,7 @@ func configureDNS(ctx context.Context) error {
 	}
 
 	// Write /etc/resolv.conf
+	// #nosec G306 -- /etc/resolv.conf must be world-readable for non-root processes.
 	if err := os.WriteFile("/etc/resolv.conf", []byte(resolvConf.String()), 0644); err != nil {
 		return fmt.Errorf("failed to write /etc/resolv.conf: %w", err)
 	}
@@ -393,7 +403,7 @@ func configureDNS(ctx context.Context) error {
 
 // ttrpcService allows TTRPC services to be registered with the underlying server
 type ttrpcService interface {
-	RegisterTTRPC(*ttrpc.Server) error
+	RegisterTTRPC(server *ttrpc.Server) error
 }
 
 type service struct {
@@ -402,7 +412,7 @@ type service struct {
 }
 
 type Runnable interface {
-	Run(context.Context) error
+	Run(ctx context.Context) error
 }
 
 type ServiceConfig struct {
@@ -480,7 +490,7 @@ func New(ctx context.Context, config ServiceConfig) (Runnable, error) {
 				}
 			}
 
-			if vc, ok := reg.Config.(interface{ SetVsock(uint32, uint32) }); ok {
+			if vc, ok := reg.Config.(interface{ SetVsock(cid uint32, port uint32) }); ok {
 				if reg.Type == vminit.StreamingPlugin {
 					vc.SetVsock(uint32(config.VSockContextID), uint32(config.StreamPort))
 				}
@@ -505,7 +515,9 @@ func New(ctx context.Context, config ServiceConfig) (Runnable, error) {
 		}
 
 		if s, ok := instance.(ttrpcService); ok {
-			s.RegisterTTRPC(ts)
+			if err := s.RegisterTTRPC(ts); err != nil {
+				return nil, fmt.Errorf("failed to register TTRPC service %s: %w", id, err)
+			}
 		}
 	}
 

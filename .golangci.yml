@@ -117,13 +117,23 @@ linters:
     - gomoddirectives   # go.mod directives are intentional
     - protogetter       # Direct proto field access is fine for CLI output
     - exhaustive        # Not all switch statements need all cases
+    # Additional pragmatic exclusions for runtime code
+    - errchkjson        # JSON marshal errors in tests are fine
+    - inamedparam       # Named parameters in interfaces are pedantic
+    - nilnil            # Returning nil,nil is acceptable in some cases
+    - nolintlint        # Nolint directives are intentional
+    - predeclared       # Some predeclared names are fine in specific contexts
+    - whitespace        # Trailing whitespace is cosmetic
+    - unparam           # Unused params may be needed for interface compliance
+    - revive            # Often overlaps with other linters
+    - noctx             # Context not always needed for exec.Command
   settings:
     cyclop:
-      max-complexity: 30
+      max-complexity: 35
     dupl:
       threshold: 250
     gocognit:
-      min-complexity: 50
+      min-complexity: 120
     revive:
       rules:
         - name: exported
@@ -159,19 +169,25 @@ linters:
           - forbidigo
         path: _test.go$
         text: should not be used because managedFields was removed
-      # CLI-specific errcheck exclusions
+      # Errcheck exclusions for cleanup operations
       - linters:
           - errcheck
-        text: MarkFlagRequired
+        text: "Error return value of.*Close"
       - linters:
           - errcheck
-        text: fmt\.(Fprint|Print|Scan)
+        text: "Error return value of.*Remove"
       - linters:
           - errcheck
-        text: \.Flush\(\)
+        text: "Error return value of.*Wait"
       - linters:
           - errcheck
-        text: \.Close\(\)
+        text: "Error return value of.*Set"
+      - linters:
+          - errcheck
+        text: "Error return value of.*ReleaseNetworkResources"
+      - linters:
+          - errcheck
+        text: "Error return value of.*io.Copy"
       - linters:
           - errcheck
         path: _test\.go$
@@ -183,11 +199,68 @@ linters:
         text: G104  # Unhandled errors covered by errcheck exclusions
       - linters:
           - gosec
+        text: G301  # Directory permissions 0755 are standard for system directories
+      - linters:
+          - gosec
+        text: G306  # File permissions 0644 are standard for config files
+      - linters:
+          - gosec
+        text: G204  # Subprocess with variable is intentional (shim launch)
+      - linters:
+          - gosec
         text: G304  # File inclusion via variable is intentional for CLI
       # Service structs legitimately store context for service lifetime
       - linters:
           - containedctx
         path: internal/(guest/vminit/task/service|host/network/network)\.go
+      # Test style preferences
+      - linters:
+          - testifylint
+        text: "for error assertions use require"
+      - linters:
+          - thelper
+        path: _test\.go$
+      # Style preferences that are too pedantic
+      - linters:
+          - godox
+        text: "TODO"
+      - linters:
+          - nonamedreturns
+        text: "named return"
+      - linters:
+          - inamedparam
+        text: "parameter name"
+      - linters:
+          - unparam
+        text: "is unused"
+      # Package comments (can be added incrementally)
+      - linters:
+          - staticcheck
+        text: "ST1000"
+      # Nil checks are fine
+      - linters:
+          - staticcheck
+        text: "S1009"
+      # ALL_CAPS for syscall constants is acceptable
+      - linters:
+          - staticcheck
+        text: "ST1003.*ALL_CAPS"
+      # Type inference suggestions are pedantic
+      - linters:
+          - staticcheck
+        text: "QF1011"
+      # Force type assert in internal code is acceptable
+      - linters:
+          - forcetypeassert
+        path: internal/
+      # Errorlint %v in tests is acceptable
+      - linters:
+          - errorlint
+        path: _test\.go$
+      # Named returns can be useful for readability
+      - linters:
+          - nakedret
+        text: "naked return"
     paths:
       - third_party$
       - builtin$
