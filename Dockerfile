@@ -51,9 +51,12 @@ RUN curl -o /usr/local/bin/check-docker-config.sh -fsSL https://raw.githubuserco
 # Set the working directory
 WORKDIR /usr/src
 
-RUN wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz && \
-    tar -xf linux-${KERNEL_VERSION}.tar.xz && \
-    rm linux-${KERNEL_VERSION}.tar.xz && \
+# Download kernel source (cached across builds)
+RUN --mount=type=cache,sharing=locked,id=kernel-src-${KERNEL_VERSION},target=/var/cache/kernel \
+    if [ ! -f "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" ]; then \
+        wget -O "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz; \
+    fi && \
+    tar -xf "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" -C /usr/src && \
     mv linux-${KERNEL_VERSION} linux
 
 # Copy kernel config from repository
@@ -93,6 +96,8 @@ ARG KERNEL_ARCH
 ARG KERNEL_NPROC
 
 # Compile the kernel and modules
+# Note: No cache mount here - Docker's layer cache is more effective
+# since kernel compilation is not incremental between builds
 RUN cd linux && make ARCH=${KERNEL_ARCH} -j${KERNEL_NPROC} all
 
 RUN <<EOT
@@ -147,8 +152,14 @@ FROM base AS crun-build
 ARG TARGETARCH
 WORKDIR /usr/src/crun
 
-RUN mkdir /build && \
-    wget -O /build/crun https://github.com/containers/crun/releases/download/1.25.1/crun-1.25.1-linux-${TARGETARCH}-disable-systemd
+# Download crun binary (cached across builds)
+RUN --mount=type=cache,sharing=locked,id=crun-download,target=/var/cache/crun \
+    mkdir -p /build && \
+    if [ ! -f "/var/cache/crun/crun-1.25.1-linux-${TARGETARCH}-disable-systemd" ]; then \
+        wget -O "/var/cache/crun/crun-1.25.1-linux-${TARGETARCH}-disable-systemd" \
+            https://github.com/containers/crun/releases/download/1.25.1/crun-1.25.1-linux-${TARGETARCH}-disable-systemd; \
+    fi && \
+    cp "/var/cache/crun/crun-1.25.1-linux-${TARGETARCH}-disable-systemd" /build/crun
 
 # ============================================================================
 # initrd Build Stage
@@ -204,11 +215,18 @@ COPY --from=shim-build /build/containerd-shim-qemubox-v1 /containerd-shim-qemubo
 FROM "${DOCKER_IMAGE}" AS docker-cli
 
 FROM "${GOLANG_IMAGE}" AS dlv
-RUN go install github.com/go-delve/delve/cmd/dlv@latest
+# Use cache mount for Go build and module cache
+RUN --mount=type=cache,target=/root/.cache/go-build,id=dlv-build \
+    --mount=type=cache,target=/go/pkg/mod,id=dlv-mod \
+    go install github.com/go-delve/delve/cmd/dlv@latest
 
 FROM ${GOLANG_IMAGE} AS dev
 ARG CONTAINERD_VERSION=2.1.4
 ARG TARGETARCH
+
+# Configure apt to keep downloaded packages for cache mounts
+RUN rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
 
 ENV PATH=/go/src/github.com/aledbf/qemubox/containerd/_output:$PATH
 WORKDIR /go/src/github.com/containerd/qemubox
@@ -217,9 +235,13 @@ RUN --mount=type=cache,sharing=locked,id=dev-aptlib,target=/var/lib/apt \
     --mount=type=cache,sharing=locked,id=dev-aptcache,target=/var/cache/apt \
         apt-get update && apt-get install -y erofs-utils git make wget
 
-RUN wget https://github.com/containerd/containerd/releases/download/v${CONTAINERD_VERSION}/containerd-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz && \
-    tar -C /usr/local/bin --strip-components=1 -xf containerd-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz && \
-    rm containerd-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz
+# Download containerd (cached across builds)
+RUN --mount=type=cache,sharing=locked,id=containerd-download,target=/var/cache/containerd \
+    if [ ! -f "/var/cache/containerd/containerd-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz" ]; then \
+        wget -O "/var/cache/containerd/containerd-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz" \
+            https://github.com/containerd/containerd/releases/download/v${CONTAINERD_VERSION}/containerd-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz; \
+    fi && \
+    tar -C /usr/local/bin --strip-components=1 -xf "/var/cache/containerd/containerd-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz"
 
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
