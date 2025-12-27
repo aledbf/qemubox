@@ -118,6 +118,7 @@ type service struct {
 
 	initiateShutdown    func()
 	eventsClosed        atomic.Bool
+	eventsCloseOnce     sync.Once // Ensures events channel is only closed once
 	intentionalShutdown atomic.Bool // Set when we intentionally close VM (not a crash)
 	shutdownSvc         shutdown.Service
 	inflight            atomic.Int64
@@ -149,7 +150,11 @@ func checkKVM() error {
 	if err != nil {
 		return fmt.Errorf("failed to open /dev/kvm: %w. Your system may lack KVM support or you may have insufficient permissions", err)
 	}
-	defer func() { _ = syscall.Close(fd) }()
+	defer func() {
+		if err := syscall.Close(fd); err != nil {
+			log.L.WithError(err).Warn("failed to close /dev/kvm fd")
+		}
+	}()
 
 	// Kernel docs says:
 	//     Applications should refuse to run if KVM_GET_API_VERSION returns a value other than 12.
@@ -210,12 +215,9 @@ func (s *service) shutdown(ctx context.Context) error {
 
 	// Stop forwarding events without blocking shutdown.
 	s.eventsClosed.Store(true)
-	func() {
-		defer func() {
-			_ = recover()
-		}()
+	s.eventsCloseOnce.Do(func() {
 		close(s.events)
-	}()
+	})
 
 	return errors.Join(errs...)
 }
@@ -496,7 +498,9 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = rpcClient.Close()
+		if err := rpcClient.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close rpc client in Create")
+		}
 	}()
 
 	bundleFiles, err := b.Files()
@@ -597,7 +601,9 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in Start")
+		}
 	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Start(ctx, r)
@@ -727,7 +733,9 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in Delete")
+		}
 	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Delete(ctx, r)
@@ -762,7 +770,9 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in Exec")
+		}
 	}()
 
 	rio := stdio.Stdio{
@@ -830,7 +840,9 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in ResizePty")
+		}
 	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.ResizePty(ctx, r)
@@ -847,7 +859,9 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in State")
+		}
 	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	st, err := tc.State(ctx, r)
@@ -870,7 +884,9 @@ func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.E
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in Pause")
+		}
 	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Pause(ctx, r)
@@ -886,7 +902,9 @@ func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in Resume")
+		}
 	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Resume(ctx, r)
@@ -902,7 +920,9 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in Kill")
+		}
 	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Kill(ctx, r)
@@ -918,7 +938,9 @@ func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in Pids")
+		}
 	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Pids(ctx, r)
@@ -934,7 +956,9 @@ func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptyp
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in CloseIO")
+		}
 	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.CloseIO(ctx, r)
@@ -956,7 +980,9 @@ func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*pt
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in Update")
+		}
 	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Update(ctx, r)
@@ -972,7 +998,9 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.Wa
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in Wait")
+		}
 	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Wait(ctx, r)
@@ -996,7 +1024,9 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in Connect")
+		}
 	}()
 
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
@@ -1043,7 +1073,9 @@ func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.
 		return nil, errgrpc.ToGRPC(err)
 	}
 	defer func() {
-		_ = vmc.Close()
+		if err := vmc.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close client in Stats")
+		}
 	}()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	return tc.Stats(ctx, r)
@@ -1053,9 +1085,6 @@ func (s *service) send(evt interface{}) {
 	if s.eventsClosed.Load() {
 		return
 	}
-	defer func() {
-		_ = recover()
-	}()
 	s.events <- evt
 }
 
@@ -1187,7 +1216,11 @@ func getHostMemoryTotal() (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to open /proc/meminfo: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.L.WithError(err).Warn("failed to close /proc/meminfo")
+		}
+	}()
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -1295,7 +1328,9 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 				return 0, 0, err
 			}
 			defer func() {
-				_ = vmc.Close()
+				if err := vmc.Close(); err != nil {
+					log.G(ctx).WithError(err).Warn("failed to close client in CPU stats provider")
+				}
 			}()
 			tc := taskAPI.NewTTRPCTaskClient(vmc)
 			resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
@@ -1325,7 +1360,9 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 				return err
 			}
 			defer func() {
-				_ = vmc.Close()
+				if err := vmc.Close(); err != nil {
+					log.G(ctx).WithError(err).Warn("failed to close client in CPU offline")
+				}
 			}()
 			client := systemAPI.NewTTRPCSystemClient(vmc)
 			_, err = client.OfflineCPU(ctx, &systemAPI.OfflineCPURequest{CpuID: uint32(cpuID)})
@@ -1338,7 +1375,9 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 				return err
 			}
 			defer func() {
-				_ = vmc.Close()
+				if err := vmc.Close(); err != nil {
+					log.G(ctx).WithError(err).Warn("failed to close client in CPU online")
+				}
 			}()
 			client := systemAPI.NewTTRPCSystemClient(vmc)
 			_, err = client.OnlineCPU(ctx, &systemAPI.OnlineCPURequest{CpuID: uint32(cpuID)})
@@ -1451,7 +1490,9 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 				return 0, err
 			}
 			defer func() {
-				_ = vmc.Close()
+				if err := vmc.Close(); err != nil {
+					log.G(ctx).WithError(err).Warn("failed to close client in memory stats provider")
+				}
 			}()
 			tc := taskAPI.NewTTRPCTaskClient(vmc)
 			resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
@@ -1482,7 +1523,9 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 				return err
 			}
 			defer func() {
-				_ = vmc.Close()
+				if err := vmc.Close(); err != nil {
+					log.G(ctx).WithError(err).Warn("failed to close client in memory offline")
+				}
 			}()
 			client := systemAPI.NewTTRPCSystemClient(vmc)
 			_, err = client.OfflineMemory(ctx, &systemAPI.OfflineMemoryRequest{MemoryID: uint32(memoryID)})
@@ -1495,7 +1538,9 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 				return err
 			}
 			defer func() {
-				_ = vmc.Close()
+				if err := vmc.Close(); err != nil {
+					log.G(ctx).WithError(err).Warn("failed to close client in memory online")
+				}
 			}()
 			client := systemAPI.NewTTRPCSystemClient(vmc)
 			_, err = client.OnlineMemory(ctx, &systemAPI.OnlineMemoryRequest{MemoryID: uint32(memoryID)})
