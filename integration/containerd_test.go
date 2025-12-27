@@ -17,6 +17,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 func TestContainerdRunQemubox(t *testing.T) {
@@ -208,7 +209,7 @@ func execInTask(ctx context.Context, task containerd.Task, argv []string, timeou
 	var outBuf, errBuf bytes.Buffer
 	creator := cio.NewCreator(cio.WithStreams(nil, &outBuf, &errBuf))
 
-	proc, err := task.Exec(execCtx, execID, &containerd.ProcessSpec{
+	proc, err := task.Exec(execCtx, execID, &specs.Process{
 		Args: argv,
 	}, creator)
 	if err != nil {
