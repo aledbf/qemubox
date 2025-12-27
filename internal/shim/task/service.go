@@ -95,7 +95,8 @@ type container struct {
 
 // service is the shim implementation of a remote shim over GRPC
 type service struct {
-	mu sync.Mutex
+	mu      sync.Mutex
+	rpcMu   sync.Mutex // Protects TTRPC client RPC calls to prevent vsock corruption
 
 	// vm is the VM instance used to run the container
 	vm vm.Instance
@@ -580,6 +581,11 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 // This forwards the Start request to the vminitd process running inside the VM via TTRPC.
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("starting container task")
+
+	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
+	s.rpcMu.Lock()
+	defer s.rpcMu.Unlock()
+
 	vmc, err := s.client()
 	if err != nil {
 		log.G(ctx).WithError(err).Error("start: failed to get client")
@@ -808,6 +814,11 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 // State returns runtime state information for a process
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("state: called")
+
+	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
+	s.rpcMu.Lock()
+	defer s.rpcMu.Unlock()
+
 	vmc, err := s.client()
 	if err != nil {
 		log.G(ctx).WithError(err).Error("state: failed to get client")
@@ -919,6 +930,10 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 			TaskPid: c.pid,
 		}, nil
 	}
+
+	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
+	s.rpcMu.Lock()
+	defer s.rpcMu.Unlock()
 
 	vmc, err := s.client()
 	if err != nil {
