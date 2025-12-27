@@ -985,14 +985,12 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 		}, nil
 	}
 
-	// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-	s.rpcMu.Lock()
-	defer s.rpcMu.Unlock()
-
 	vmc, err := s.client()
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+
+	// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	vr, err := tc.Connect(ctx, r)
 	if err != nil {
@@ -1284,10 +1282,7 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 
 	// Create and start the controller
 	statsProvider := func(ctx context.Context) (uint64, uint64, error) {
-		// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-		s.rpcMu.Lock()
-		defer s.rpcMu.Unlock()
-
+		// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 		vmc, err := s.client()
 		if err != nil {
 			return 0, 0, err
@@ -1315,10 +1310,7 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 	}
 
 	offlineCPU := func(ctx context.Context, cpuID int) error {
-		// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-		s.rpcMu.Lock()
-		defer s.rpcMu.Unlock()
-
+		// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 		vmc, err := s.client()
 		if err != nil {
 			return err
@@ -1329,10 +1321,7 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 	}
 
 	onlineCPU := func(ctx context.Context, cpuID int) error {
-		// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-		s.rpcMu.Lock()
-		defer s.rpcMu.Unlock()
-
+		// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 		vmc, err := s.client()
 		if err != nil {
 			return err
@@ -1443,10 +1432,7 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 
 	// Create stats provider (reads cgroup v2 memory.current)
 	statsProvider := func(ctx context.Context) (int64, error) {
-		// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-		s.rpcMu.Lock()
-		defer s.rpcMu.Unlock()
-
+		// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 		vmc, err := s.client()
 		if err != nil {
 			return 0, err
@@ -1475,10 +1461,7 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 	}
 
 	offlineMemory := func(ctx context.Context, memoryID int) error {
-		// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-		s.rpcMu.Lock()
-		defer s.rpcMu.Unlock()
-
+		// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 		vmc, err := s.client()
 		if err != nil {
 			return err
@@ -1489,10 +1472,7 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 	}
 
 	onlineMemory := func(ctx context.Context, memoryID int) error {
-		// Protect TTRPC RPC call with mutex to prevent concurrent vsock operations
-		s.rpcMu.Lock()
-		defer s.rpcMu.Unlock()
-
+		// NOTE: NOT protecting with rpcMu to avoid blocking the event stream
 		vmc, err := s.client()
 		if err != nil {
 			return err
