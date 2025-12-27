@@ -1423,11 +1423,7 @@ func (s *service) startCPUHotplugController(ctx context.Context, containerID str
 	}
 
 	// Type assert to check if this is a QEMU instance (only QEMU supports CPU hotplug currently)
-	type qemuInstance interface {
-		QMPClient() *qemu.QMPClient
-	}
-
-	qemuVM, ok := vmi.(qemuInstance)
+	qemuVM, ok := vmi.(*qemu.Instance)
 	if !ok {
 		return
 	}
@@ -1528,11 +1524,7 @@ func (s *service) startMemoryHotplugController(ctx context.Context, containerID 
 	}
 
 	// Type assert to check if this is a QEMU instance (only QEMU supports memory hotplug currently)
-	type qemuInstance interface {
-		QMPClient() *qemu.QMPClient
-	}
-
-	qemuVM, ok := vmi.(qemuInstance)
+	qemuVM, ok := vmi.(*qemu.Instance)
 	if !ok {
 		return
 	}

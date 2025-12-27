@@ -12,18 +12,57 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/v2/pkg/stdio"
+	"github.com/containerd/ttrpc"
+
+	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 )
 
-// mockStreamCreator implements streamCreator for testing
-type mockStreamCreator struct {
+// mockVMInstance implements vm.Instance for testing
+type mockVMInstance struct {
 	streamID uint32
 	conn     *mockConn
 }
 
-func (m *mockStreamCreator) StartStream(ctx context.Context) (uint32, net.Conn, error) {
+func (m *mockVMInstance) AddDisk(ctx context.Context, blockID, mountPath string, opts ...vm.MountOpt) error {
+	return nil
+}
+
+func (m *mockVMInstance) AddTAPNIC(ctx context.Context, tapName string, mac net.HardwareAddr) error {
+	return nil
+}
+
+func (m *mockVMInstance) AddFS(ctx context.Context, tag, mountPath string, opts ...vm.MountOpt) error {
+	return nil
+}
+
+func (m *mockVMInstance) AddNIC(ctx context.Context, endpoint string, mac net.HardwareAddr, mode vm.NetworkMode, features, flags uint32) error {
+	return nil
+}
+
+func (m *mockVMInstance) Start(ctx context.Context, opts ...vm.StartOpt) error {
+	return nil
+}
+
+func (m *mockVMInstance) Shutdown(ctx context.Context) error {
+	return nil
+}
+
+func (m *mockVMInstance) Client() *ttrpc.Client {
+	return nil
+}
+
+func (m *mockVMInstance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
+	return nil, nil
+}
+
+func (m *mockVMInstance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 	m.streamID++
 	m.conn = &mockConn{}
 	return m.streamID, m.conn, nil
+}
+
+func (m *mockVMInstance) VMInfo() vm.VMInfo {
+	return vm.VMInfo{}
 }
 
 // mockConn implements net.Conn for testing
@@ -130,7 +169,7 @@ func TestBinarySchemeSupport(t *testing.T) {
 		}
 
 		svc := &service{}
-		ss := &mockStreamCreator{}
+		ss := &mockVMInstance{}
 
 		sio := stdio.Stdio{
 			Stdin:  "",
@@ -173,7 +212,7 @@ func TestPipeSchemeSupport(t *testing.T) {
 		defer reader.Close()
 
 		svc := &service{}
-		ss := &mockStreamCreator{}
+		ss := &mockVMInstance{}
 
 		sio := stdio.Stdio{
 			Stdin:  "",
@@ -201,7 +240,7 @@ func TestPipeSchemeSupport(t *testing.T) {
 // TestStreamSchemePassthrough tests that stream scheme passes through
 func TestStreamSchemePassthrough(t *testing.T) {
 	svc := &service{}
-	ss := &mockStreamCreator{}
+	ss := &mockVMInstance{}
 
 	sio := stdio.Stdio{
 		Stdin:  "",
@@ -233,7 +272,7 @@ func TestStreamSchemePassthrough(t *testing.T) {
 // TestUnsupportedScheme tests that unsupported schemes return error
 func TestUnsupportedScheme(t *testing.T) {
 	svc := &service{}
-	ss := &mockStreamCreator{}
+	ss := &mockVMInstance{}
 
 	sio := stdio.Stdio{
 		Stdin:  "",
@@ -252,7 +291,7 @@ func TestUnsupportedScheme(t *testing.T) {
 // TestNullStdio tests that null/empty stdio is handled correctly
 func TestNullStdio(t *testing.T) {
 	svc := &service{}
-	ss := &mockStreamCreator{}
+	ss := &mockVMInstance{}
 
 	sio := stdio.Stdio{
 		Stdin:  "",

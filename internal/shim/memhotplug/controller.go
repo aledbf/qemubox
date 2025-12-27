@@ -12,8 +12,9 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
 )
 
-// QMPMemoryClient defines the interface for QMP memory operations
-type QMPMemoryClient interface {
+// qmpMemoryClient defines the interface for QMP memory operations.
+// This interface exists to enable testing with mocks.
+type qmpMemoryClient interface {
 	HotplugMemory(ctx context.Context, slotID int, sizeBytes int64) error
 	UnplugMemory(ctx context.Context, slotID int) error
 	QueryMemorySizeSummary(ctx context.Context) (*qemu.MemorySizeSummary, error)
@@ -21,8 +22,8 @@ type QMPMemoryClient interface {
 
 // Controller manages dynamic memory allocation for a VM based on memory usage
 type Controller struct {
-	containerID   string
-	qmpClient     QMPMemoryClient
+	containerID string
+	qmpClient   qmpMemoryClient
 	stats         StatsProvider
 	offlineMemory MemoryOffliner
 	onlineMemory  MemoryOnliner
@@ -106,10 +107,11 @@ func DefaultConfig() Config {
 	}
 }
 
-// NewController creates a new memory hotplug controller
+// NewController creates a new memory hotplug controller.
+// In production, qmpClient should be a *qemu.QMPClient.
 func NewController(
 	containerID string,
-	qmpClient QMPMemoryClient,
+	qmpClient qmpMemoryClient,
 	stats StatsProvider,
 	offliner MemoryOffliner,
 	onliner MemoryOnliner,

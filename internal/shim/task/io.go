@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,6 +16,7 @@ import (
 	"github.com/containerd/fifo"
 	"github.com/containerd/log"
 
+	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 	"github.com/aledbf/qemubox/containerd/internal/iobuf"
 )
 
@@ -24,17 +24,13 @@ const (
 	defaultScheme = "fifo"
 )
 
-type streamCreator interface {
-	StartStream(ctx context.Context) (uint32, net.Conn, error)
-}
-
 type forwardIOSetup struct {
 	pio         stdio.Stdio
 	streams     [3]io.ReadWriteCloser
 	passthrough bool
 }
 
-func setupForwardIO(ctx context.Context, ss streamCreator, pio stdio.Stdio) (forwardIOSetup, error) {
+func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forwardIOSetup, error) {
 	u, err := url.Parse(pio.Stdout)
 	if err != nil {
 		return forwardIOSetup{}, fmt.Errorf("unable to parse stdout uri: %w", err)
@@ -67,14 +63,14 @@ func setupForwardIO(ctx context.Context, ss streamCreator, pio stdio.Stdio) (for
 		return forwardIOSetup{}, fmt.Errorf("unsupported STDIO scheme %s: %w", u.Scheme, errdefs.ErrNotImplemented)
 	}
 
-	pio, streams, err := createStreams(ctx, ss, pio)
+	pio, streams, err := createStreams(ctx, vmi, pio)
 	if err != nil {
 		return forwardIOSetup{}, err
 	}
 	return forwardIOSetup{pio: pio, streams: streams}, nil
 }
 
-func (s *service) forwardIO(ctx context.Context, ss streamCreator, sio stdio.Stdio) (stdio.Stdio, func(ctx context.Context) error, error) {
+func (s *service) forwardIO(ctx context.Context, vmi vm.Instance, sio stdio.Stdio) (stdio.Stdio, func(ctx context.Context) error, error) {
 	// When using a terminal, stderr is not used (it's merged into stdout/pty)
 	if sio.Terminal {
 		sio.Stderr = ""
@@ -84,7 +80,7 @@ func (s *service) forwardIO(ctx context.Context, ss streamCreator, sio stdio.Std
 		return pio, nil, nil
 	}
 
-	setup, err := setupForwardIO(ctx, ss, pio)
+	setup, err := setupForwardIO(ctx, vmi, pio)
 	if err != nil {
 		return stdio.Stdio{}, nil, err
 	}
@@ -122,7 +118,7 @@ func (s *service) forwardIO(ctx context.Context, ss streamCreator, sio stdio.Std
 	}, nil
 }
 
-func createStreams(ctx context.Context, ss streamCreator, sio stdio.Stdio) (stdio.Stdio, [3]io.ReadWriteCloser, error) {
+func createStreams(ctx context.Context, vmi vm.Instance, sio stdio.Stdio) (stdio.Stdio, [3]io.ReadWriteCloser, error) {
 	var conns [3]io.ReadWriteCloser
 	var retErr error
 	defer func() {
@@ -135,7 +131,7 @@ func createStreams(ctx context.Context, ss streamCreator, sio stdio.Stdio) (stdi
 		}
 	}()
 	if sio.Stdin != "" {
-		sid, conn, err := ss.StartStream(ctx)
+		sid, conn, err := vmi.StartStream(ctx)
 		if err != nil {
 			retErr = fmt.Errorf("failed to start fifo stream: %w", err)
 			return sio, conns, retErr
@@ -146,7 +142,7 @@ func createStreams(ctx context.Context, ss streamCreator, sio stdio.Stdio) (stdi
 
 	stdout := sio.Stdout
 	if stdout != "" {
-		sid, conn, err := ss.StartStream(ctx)
+		sid, conn, err := vmi.StartStream(ctx)
 		if err != nil {
 			retErr = fmt.Errorf("failed to start fifo stream: %w", err)
 			return sio, conns, retErr
@@ -160,7 +156,7 @@ func createStreams(ctx context.Context, ss streamCreator, sio stdio.Stdio) (stdi
 			sio.Stderr = sio.Stdout
 			conns[2] = conns[1]
 		} else {
-			sid, conn, err := ss.StartStream(ctx)
+			sid, conn, err := vmi.StartStream(ctx)
 			if err != nil {
 				retErr = fmt.Errorf("failed to start fifo stream: %w", err)
 				return sio, conns, retErr
