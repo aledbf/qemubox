@@ -121,6 +121,7 @@ func runContainer(t *testing.T, client *containerd.Client, cfg testConfig, conta
 	// Create container spec
 	container, err := client.NewContainer(ctx, containerName,
 		containerd.WithImage(image),
+		containerd.WithNewSnapshot(containerName+"-snapshot", image),
 		containerd.WithSnapshotter(cfg.Snapshotter),
 		containerd.WithRuntime(cfg.Runtime, nil),
 		containerd.WithNewSpec(
@@ -294,6 +295,7 @@ func TestContainerdResourceConstraints(t *testing.T) {
 
 	container, err := client.NewContainer(ctx, containerName,
 		containerd.WithImage(image),
+		containerd.WithNewSnapshot(containerName+"-snapshot", image),
 		containerd.WithSnapshotter(cfg.Snapshotter),
 		containerd.WithRuntime(cfg.Runtime, nil),
 		containerd.WithNewSpec(
