@@ -3,7 +3,7 @@
 package integration
 
 import (
-	"context"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,10 +11,13 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/cmd/ctr/commands"
+	"github.com/containerd/containerd/v2/cmd/ctr/commands/run"
+	"github.com/containerd/containerd/v2/cmd/ctr/commands/tasks"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
-	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
+	"github.com/urfave/cli/v2"
 )
 
 func TestContainerdRunQemubox(t *testing.T) {
@@ -23,114 +26,87 @@ func TestContainerdRunQemubox(t *testing.T) {
 	runtime := getenvDefault("QEMUBOX_RUNTIME", "io.containerd.qemubox.v1")
 	snapshotter := getenvDefault("QEMUBOX_SNAPSHOTTER", "erofs")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	ctx = namespaces.WithNamespace(ctx, namespaces.Default)
-
-	client, err := containerd.New(socket)
-	if err != nil {
-		t.Fatalf("connect containerd: %v", err)
-	}
-	defer client.Close()
-
-	// Pull image
-	image, err := client.Pull(
-		ctx,
-		imageRef,
-		containerd.WithPullSnapshotter(snapshotter),
-		containerd.WithPullUnpack,
-	)
-	if err != nil {
-		t.Fatalf("pull image: %v", err)
-	}
-
 	containerName := getenvDefault("QEMUBOX_TEST_ID", "")
 	if containerName == "" {
 		containerName = "qbx-ci-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
 	}
 	t.Logf("container name: %s", containerName)
 
-	// Create container
-	container, err := client.NewContainer(
-		ctx,
-		containerName,
-		containerd.WithSnapshotter(snapshotter),
-		containerd.WithNewSnapshot(containerName+"-snapshot", image),
-		containerd.WithNewSpec(
-			oci.WithDefaultSpec(),
-			oci.WithDefaultUnixDevices,
-			oci.WithImageConfig(image),
-			oci.WithProcessArgs("/bin/echo", "OK_FROM_QEMUBOX"),
-			oci.Compose(
-				oci.WithAllCurrentCapabilities,
-				oci.WithMaskedPaths(nil),
-				oci.WithReadonlyPaths(nil),
-				oci.WithWriteableSysfs,
-				oci.WithWriteableCgroupfs,
-				oci.WithSelinuxLabel(""),
-				oci.WithApparmorProfile(""),
-				oci.WithSeccompUnconfined,
-			),
-		),
-		containerd.WithRuntime(runtime, nil),
-	)
+	// Create a CLI-like context and container using run.NewContainer.
+	fifoDir := t.TempDir()
+	cliCtx := newRunCLIContext(t, socket, namespaces.Default, snapshotter, runtime, fifoDir, imageRef, containerName, "/bin/echo", "OK_FROM_QEMUBOX")
+
+	cliClient, cliCtxWithNS, cliCancel, err := commands.NewClient(cliCtx)
 	if err != nil {
-		t.Fatalf("create container: %v", err)
+		t.Fatalf("create cli client: %v", err)
+	}
+	defer cliCancel()
+	defer cliClient.Close()
+
+	// Pull image so run.NewContainer can resolve it like the CLI.
+	if _, err := cliClient.Pull(
+		cliCtxWithNS,
+		imageRef,
+		containerd.WithPullSnapshotter(snapshotter),
+		containerd.WithPullUnpack,
+	); err != nil {
+		t.Fatalf("pull image: %v", err)
+	}
+
+	container, err := run.NewContainer(cliCtxWithNS, cliClient, cliCtx)
+	if err != nil {
+		t.Fatalf("create container via run.NewContainer: %v", err)
 	}
 
 	// Cleanup container on exit
 	defer func() {
-		if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+		if err := container.Delete(cliCtxWithNS, containerd.WithSnapshotCleanup); err != nil {
 			t.Logf("failed to cleanup container: %v", err)
 		}
 	}()
 
-	// Match ctr run's IO path: FIFO-backed streams with custom stdout/stderr sinks.
-	fifoDir := t.TempDir()
+	// Match ctr run IO: use tasks.NewTask with fifo-dir and capture stdout/stderr by swapping os.Stdout/Err.
 	stdoutFile := filepath.Join(fifoDir, "stdout.log")
 	stderrFile := filepath.Join(fifoDir, "stderr.log")
-
 	stdout, err := os.Create(stdoutFile)
 	if err != nil {
 		t.Fatalf("create stdout file: %v", err)
 	}
-	defer stdout.Close()
-
 	stderr, err := os.Create(stderrFile)
 	if err != nil {
+		stdout.Close()
 		t.Fatalf("create stderr file: %v", err)
 	}
-	defer stderr.Close()
 
-	spec, err := container.Spec(ctx)
-	if err != nil {
-		t.Fatalf("get container spec: %v", err)
-	}
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	os.Stdout = stdout
+	os.Stderr = stderr
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+		os.Stderr = oldStderr
+		_ = stdout.Close()
+		_ = stderr.Close()
+	})
 
-	taskOpts := []containerd.NewTaskOpts{}
-	if spec.Linux != nil {
-		if len(spec.Linux.UIDMappings) != 0 {
-			taskOpts = append(taskOpts, containerd.WithUIDOwner(spec.Linux.UIDMappings[0].HostID))
-		}
-		if len(spec.Linux.GIDMappings) != 0 {
-			taskOpts = append(taskOpts, containerd.WithGIDOwner(spec.Linux.GIDMappings[0].HostID))
-		}
-	}
-
-	ioCreator := cio.NewCreator(
-		cio.WithStreams(nil, stdout, stderr),
-		cio.WithFIFODir(fifoDir),
+	task, err := tasks.NewTask(
+		cliCtxWithNS,
+		cliClient,
+		container,
+		"",    // checkpoint
+		nil,   // console
+		false, // null-io
+		"",    // log-uri
+		[]cio.Opt{cio.WithFIFODir(fifoDir)},
+		tasks.GetNewTaskOpts(cliCtx)...,
 	)
-
-	task, err := container.NewTask(ctx, ioCreator, taskOpts...)
 	if err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 
 	// Cleanup task on exit
 	defer func() {
-		if _, err := task.Delete(ctx, containerd.WithProcessKill); err != nil && !errdefs.IsNotFound(err) {
+		if _, err := task.Delete(cliCtxWithNS, containerd.WithProcessKill); err != nil && !errdefs.IsNotFound(err) {
 			// Ignore "ttrpc: closed" error on cleanup
 			if !strings.Contains(err.Error(), "ttrpc: closed") {
 				t.Logf("failed to cleanup task: %v", err)
@@ -139,13 +115,13 @@ func TestContainerdRunQemubox(t *testing.T) {
 	}()
 
 	// Wait for task completion
-	statusC, err := task.Wait(ctx)
+	statusC, err := task.Wait(cliCtxWithNS)
 	if err != nil {
 		t.Fatalf("wait for task: %v", err)
 	}
 
 	// Start the task
-	if err := task.Start(ctx); err != nil {
+	if err := task.Start(cliCtxWithNS); err != nil {
 		t.Fatalf("start task: %v", err)
 	}
 
@@ -175,6 +151,65 @@ func TestContainerdRunQemubox(t *testing.T) {
 
 	t.Logf("output: %s", strings.TrimSpace(string(output)))
 	t.Log("test completed successfully")
+}
+
+func newRunCLIContext(t *testing.T, socket, namespace, snapshotter, runtime, fifoDir, imageRef, containerName string, args ...string) *cli.Context {
+	t.Helper()
+
+	app := &cli.App{
+		Name: "qemubox-ctr",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:  "address",
+				Value: socket,
+			},
+			&cli.DurationFlag{
+				Name: "timeout",
+			},
+			&cli.DurationFlag{
+				Name: "connect-timeout",
+			},
+			&cli.StringFlag{
+				Name:  "namespace",
+				Value: namespace,
+			},
+		},
+	}
+
+	set := flag.NewFlagSet("qemubox-ctr", flag.ContinueOnError)
+	for _, flg := range app.Flags {
+		if err := flg.Apply(set); err != nil {
+			t.Fatalf("apply app flag: %v", err)
+		}
+	}
+	for _, flg := range run.Command.Flags {
+		if err := flg.Apply(set); err != nil {
+			t.Fatalf("apply run flag: %v", err)
+		}
+	}
+
+	if err := set.Set("address", socket); err != nil {
+		t.Fatalf("set address: %v", err)
+	}
+	if err := set.Set("namespace", namespace); err != nil {
+		t.Fatalf("set namespace: %v", err)
+	}
+	if err := set.Set("snapshotter", snapshotter); err != nil {
+		t.Fatalf("set snapshotter: %v", err)
+	}
+	if err := set.Set("runtime", runtime); err != nil {
+		t.Fatalf("set runtime: %v", err)
+	}
+	if err := set.Set("fifo-dir", fifoDir); err != nil {
+		t.Fatalf("set fifo-dir: %v", err)
+	}
+
+	argv := append([]string{imageRef, containerName}, args...)
+	if err := set.Parse(argv); err != nil {
+		t.Fatalf("parse args: %v", err)
+	}
+
+	return cli.NewContext(app, set, nil)
 }
 
 func getenvDefault(key, def string) string {
