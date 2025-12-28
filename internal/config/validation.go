@@ -100,8 +100,6 @@ func (c *Config) validateRuntime() error {
 		return fmt.Errorf("vmm must be \"qemu\" (only supported backend), got %q", c.Runtime.VMM)
 	}
 
-	// ShimDebug is boolean, always valid
-
 	return nil
 }
 

@@ -29,9 +29,6 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Runtime.VMM != testVMM {
 		t.Errorf("expected VMM %s, got %s", testVMM, cfg.Runtime.VMM)
 	}
-	if cfg.Runtime.ShimDebug != false {
-		t.Errorf("expected ShimDebug false, got %v", cfg.Runtime.ShimDebug)
-	}
 
 	// Verify CPU hotplug
 	if cfg.CPUHotplug.MonitorInterval != "5s" {
@@ -120,8 +117,7 @@ func TestLoadFrom_ValidConfig(t *testing.T) {
 			LogDir:   logDir,
 		},
 		Runtime: RuntimeConfig{
-			VMM:       testVMM,
-			ShimDebug: true,
+			VMM: testVMM,
 		},
 		CPUHotplug: CPUHotplugConfig{
 			MonitorInterval:      "10s",
@@ -160,10 +156,6 @@ func TestLoadFrom_ValidConfig(t *testing.T) {
 	loaded, err := LoadFrom(configPath)
 	if err != nil {
 		t.Fatalf("failed to load valid config: %v", err)
-	}
-
-	if loaded.Runtime.ShimDebug != true {
-		t.Errorf("expected ShimDebug true, got %v", loaded.Runtime.ShimDebug)
 	}
 
 	if loaded.CPUHotplug.ScaleUpThreshold != 85.0 {

@@ -91,8 +91,7 @@ Controls qemubox runtime behavior.
 ```json
 {
   "runtime": {
-    "vmm": "qemu",
-    "shim_debug": false
+    "vmm": "qemu"
   }
 }
 ```
@@ -105,11 +104,7 @@ Controls qemubox runtime behavior.
 - **Description**: Virtual Machine Monitor backend to use
 - **Validation**: Must be exactly `"qemu"`
 
-### `runtime.shim_debug`
-- **Type**: boolean
-- **Default**: `false`
-- **Description**: Enable debug-level logging in the containerd shim
-- **Effect**: Sets log level to "debug" (default is "info")
+**Note**: Log level is controlled by containerd's configuration, not the shim. Configure logging in containerd's config file (`/etc/containerd/config.toml`).
 
 ## CPU Hotplug Configuration
 
@@ -313,8 +308,7 @@ If configuration is missing or invalid, qemubox will:
     "log_dir": "/var/log/qemubox"
   },
   "runtime": {
-    "vmm": "qemu",
-    "shim_debug": false
+    "vmm": "qemu"
   },
   "cpu_hotplug": {},
   "memory_hotplug": {}
@@ -323,6 +317,16 @@ If configuration is missing or invalid, qemubox will:
 Empty hotplug sections use defaults.
 
 ### Debug Configuration
+
+To enable debug logging, configure it in containerd's config file (`/etc/containerd/config.toml`):
+
+```toml
+[debug]
+  level = "debug"
+```
+
+Example qemubox config for aggressive hotplug testing:
+
 ```json
 {
   "paths": {
@@ -331,8 +335,7 @@ Empty hotplug sections use defaults.
     "log_dir": "/var/log/qemubox"
   },
   "runtime": {
-    "vmm": "qemu",
-    "shim_debug": true
+    "vmm": "qemu"
   },
   "cpu_hotplug": {
     "monitor_interval": "1s",
@@ -355,8 +358,7 @@ Fast monitoring for debugging.
     "log_dir": "/var/log/qemubox"
   },
   "runtime": {
-    "vmm": "qemu",
-    "shim_debug": false
+    "vmm": "qemu"
   },
   "cpu_hotplug": {
     "scale_up_threshold": 90.0,
@@ -382,8 +384,7 @@ High thresholds, large safety margin, no scale-down.
     "log_dir": "/var/log/qemubox"
   },
   "runtime": {
-    "vmm": "qemu",
-    "shim_debug": false
+    "vmm": "qemu"
   },
   "cpu_hotplug": {
     "monitor_interval": "2s",

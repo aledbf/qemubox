@@ -7,8 +7,7 @@
     "qemu_share_path": ""
   },
   "runtime": {
-    "vmm": "qemu",
-    "shim_debug": false
+    "vmm": "qemu"
   },
   "cpu_hotplug": {
     "monitor_interval": "5s",

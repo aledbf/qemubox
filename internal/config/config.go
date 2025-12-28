@@ -37,8 +37,7 @@ type PathsConfig struct {
 
 // RuntimeConfig defines runtime behavior settings
 type RuntimeConfig struct {
-	VMM       string `json:"vmm"`        // VMM backend (currently only "qemu" supported)
-	ShimDebug bool   `json:"shim_debug"` // Enable debug logging in shim
+	VMM string `json:"vmm"` // VMM backend (currently only "qemu" supported)
 }
 
 // CPUHotplugConfig defines CPU hotplug controller settings
@@ -133,8 +132,7 @@ func DefaultConfig() *Config {
 			QEMUSharePath: "", // Auto-discovered
 		},
 		Runtime: RuntimeConfig{
-			VMM:       "qemu",
-			ShimDebug: false,
+			VMM: "qemu",
 		},
 		CPUHotplug: CPUHotplugConfig{
 			MonitorInterval:      "5s",

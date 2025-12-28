@@ -326,6 +326,18 @@ func (s *service) shutdown(ctx context.Context) error {
 
 	var errs []error
 
+	// Stop hotplug controllers before VM shutdown
+	s.controllerMu.Lock()
+	for id, controller := range s.cpuHotplugControllers {
+		controller.Stop()
+		delete(s.cpuHotplugControllers, id)
+	}
+	for id, controller := range s.memoryHotplugControllers {
+		controller.Stop()
+		delete(s.memoryHotplugControllers, id)
+	}
+	s.controllerMu.Unlock()
+
 	// Shutdown IO for container and execs
 	if s.container != nil {
 		if s.container.ioShutdown != nil {
@@ -542,7 +554,7 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 
 				if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
 					log.G(ctx).WithError(err).Info("vm event stream closed unexpectedly, attempting reconnect")
-					reconnectDeadline := time.Now().Add(5 * time.Second)
+					reconnectDeadline := time.Now().Add(2 * time.Second)
 					for time.Now().Before(reconnectDeadline) {
 						if s.intentionalShutdown.Load() {
 							log.G(ctx).Info("vm event stream closed (intentional shutdown)")
@@ -600,11 +612,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	log.G(ctx).WithFields(log.Fields{
 		"id":     r.ID,
 		"bundle": r.Bundle,
-		"rootfs": r.Rootfs,
-		"stdin":  r.Stdin,
-		"stdout": r.Stdout,
-		"stderr": r.Stderr,
-	}).Info("creating container task")
+	}).Debug("creating container task")
 
 	if r.Checkpoint != "" || r.ParentCheckpoint != "" {
 		return nil, errgrpc.ToGRPC(fmt.Errorf("checkpoints not supported: %w", errdefs.ErrNotImplemented))
@@ -641,15 +649,11 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	resourceCfg, resourceInfo := computeResourceConfig(ctx, &b.Spec)
 
 	log.G(ctx).WithFields(log.Fields{
-		"boot_cpus":              resourceCfg.BootCPUs,
-		"max_cpus":               resourceCfg.MaxCPUs,
-		"memory_size":            resourceCfg.MemorySize,
-		"memory_hotplug_size":    resourceCfg.MemoryHotplugSize,
-		"has_explicit_cpu_limit": resourceInfo.hasExplicitCPULimit,
-		"has_explicit_mem_limit": resourceInfo.hasExplicitMemoryLimit,
-		"host_cpus":              resourceInfo.hostCPUs,
-		"host_memory":            resourceInfo.hostMemory,
-	}).Info("VM resource configuration")
+		"boot_cpus":  resourceCfg.BootCPUs,
+		"max_cpus":   resourceCfg.MaxCPUs,
+		"memory_mb":  resourceCfg.MemorySize / (1024 * 1024),
+		"hotplug_mb": resourceCfg.MemoryHotplugSize / (1024 * 1024),
+	}).Debug("VM resource configuration")
 
 	vmi, err := s.initVMInstance(ctx, r, resourceCfg)
 	if err != nil {
@@ -821,15 +825,11 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 // Start a process.
 // This forwards the Start request to the vminitd process running inside the VM via TTRPC.
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("starting container task")
-
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("start: dialing guest TTRPC")
 	vmc, err := s.dialClientWithRetry(ctx, 30*time.Second)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("start: failed to get client")
 		return nil, errgrpc.ToGRPC(err)
 	}
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("start: guest TTRPC client ready")
 	defer func() {
 		if err := vmc.Close(); err != nil {
 			log.G(ctx).WithError(err).Warn("failed to close client in Start")
@@ -841,7 +841,7 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		log.G(ctx).WithError(err).Error("start: guest start failed")
 		return nil, err
 	}
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "pid": resp.Pid}).Info("start: task started successfully")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "pid": resp.Pid}).Debug("task started")
 	return resp, nil
 }
 
@@ -906,7 +906,7 @@ func isProcessAlreadyFinished(err error) bool {
 func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAPI.DeleteResponse, error) {
 	s.inflight.Add(1)
 	defer s.inflight.Add(-1)
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("deleting task")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("deleting task")
 
 	// Mark deletion in progress to prevent new Create requests
 	// Only do this for container deletion (not exec)
@@ -931,9 +931,17 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	resp, err := tc.Delete(ctx, r)
 	if err != nil {
 		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Warn("delete task failed")
-		// On error, attempt VM shutdown for container (not exec) deletion
+		// On error, attempt cleanup for container (not exec) deletion
 		if r.ExecID == "" && s.vm != nil {
-			log.G(ctx).Info("delete failed, attempting VM shutdown anyway")
+			// Clean up IO before VM shutdown to prevent FD leaks
+			s.containerMu.Lock()
+			if s.container != nil && s.container.ioShutdown != nil {
+				if ioErr := s.container.ioShutdown(ctx); ioErr != nil {
+					log.G(ctx).WithError(ioErr).Warn("failed to shutdown io after delete failure")
+				}
+			}
+			s.containerMu.Unlock()
+
 			s.intentionalShutdown.Store(true)
 			if shutdownErr := s.vm.Shutdown(ctx); shutdownErr != nil {
 				if !isProcessAlreadyFinished(shutdownErr) {
@@ -1003,13 +1011,11 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	// Stop CPU hotplug controller
 	if cpuController != nil {
 		cpuController.Stop()
-		log.G(ctx).Info("cpu-hotplug: controller stopped")
 	}
 
 	// Stop memory hotplug controller
 	if memController != nil {
 		memController.Stop()
-		log.G(ctx).Info("memory-hotplug: controller stopped")
 	}
 
 	// Shutdown VM if needed (one VM per container)
@@ -1044,13 +1050,13 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		}
 	}
 
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("task deleted successfully")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("task deleted successfully")
 	return resp, nil
 }
 
 // Exec an additional process inside the container
 func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("exec container")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("exec container")
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1119,7 +1125,7 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 
 // ResizePty of a process
 func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("resize pty")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("resize pty")
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1136,7 +1142,6 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 
 // State returns runtime state information for a process
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("state: called")
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1154,14 +1159,13 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Error("state: guest state failed")
 		return nil, errgrpc.ToGRPC(err)
 	}
-	log.G(ctx).WithFields(log.Fields{"status": st.Status, "id": r.ID, "exec": r.ExecID}).Info("state: success")
 
 	return st, nil
 }
 
 // Pause the container
 func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("pause")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pause")
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1178,7 +1182,7 @@ func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.E
 
 // Resume the container
 func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("resume")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("resume")
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1195,7 +1199,7 @@ func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes
 
 // Kill a process with the provided signal
 func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("kill")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("kill")
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1212,7 +1216,7 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 
 // Pids returns all pids inside the container
 func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.PidsResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("all pids")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pids")
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1229,7 +1233,7 @@ func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 
 // CloseIO of a process
 func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "stdin": r.Stdin}).Info("close io")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "stdin": r.Stdin}).Debug("close io")
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1246,13 +1250,13 @@ func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptyp
 
 // Checkpoint the container
 func (s *service) Checkpoint(ctx context.Context, r *taskAPI.CheckpointTaskRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("checkpoint")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("checkpoint")
 	return &ptypes.Empty{}, nil
 }
 
 // Update a running container
 func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("update")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("update")
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1269,7 +1273,7 @@ func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*pt
 
 // Wait for a process to exit
 func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.WaitResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("wait")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("wait")
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {
@@ -1286,7 +1290,7 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.Wa
 
 // Connect returns shim information such as the shim's pid
 func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*taskAPI.ConnectResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("connect")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("connect")
 	s.containerMu.Lock()
 	hasContainer := s.container != nil && s.containerID == r.ID
 	pid := uint32(0)
@@ -1326,7 +1330,7 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*ptypes.Empty, error) {
 	s.inflight.Add(1)
 	defer s.inflight.Add(-1)
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("shutdown")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("shutdown")
 
 	// Mark as intentional shutdown
 	s.intentionalShutdown.Store(true)
@@ -1344,7 +1348,7 @@ func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*pt
 }
 
 func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.StatsResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Info("stats")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("stats")
 
 	vmc, err := s.dialClient(ctx)
 	if err != nil {

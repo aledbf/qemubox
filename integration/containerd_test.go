@@ -146,7 +146,10 @@ func runContainer(t *testing.T, client *containerd.Client, cfg testConfig, conta
 	}
 	defer func() {
 		if _, err := task.Delete(ctx, containerd.WithProcessKill); err != nil {
-			t.Logf("cleanup task for container %s: %v", containerName, err)
+			// Ignore "ttrpc: closed" errors - expected when task completes successfully
+			if !strings.Contains(err.Error(), "ttrpc: closed") {
+				t.Logf("cleanup task for container %s: %v", containerName, err)
+			}
 		}
 	}()
 
