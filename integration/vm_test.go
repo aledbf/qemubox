@@ -14,6 +14,7 @@ import (
 
 func TestSystemInfo(t *testing.T) {
 	runWithVM(t, func(t *testing.T, i vm.Instance) {
+		t.Helper()
 		client := i.Client()
 
 		ss := systemapi.NewTTRPCSystemClient(client)
@@ -31,6 +32,7 @@ func TestSystemInfo(t *testing.T) {
 
 func TestStreamInitialization(t *testing.T) {
 	runWithVM(t, func(t *testing.T, i vm.Instance) {
+		t.Helper()
 		sid1, conn, err := i.StartStream(t.Context())
 		if err != nil {
 			if errors.Is(err, errdefs.ErrNotImplemented) {

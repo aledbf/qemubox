@@ -7,6 +7,7 @@ import (
 
 	current "github.com/containernetworking/cni/pkg/types/100"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestExtractTAPDevice_Success(t *testing.T) {
@@ -82,9 +83,9 @@ func TestExtractTAPDevice_Success(t *testing.T) {
 			tapDevice, err := ExtractTAPDevice(tt.result)
 
 			if tt.expectError {
-				assert.Error(t, err)
+				require.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expectedTAP, tapDevice)
 			}
 		})
@@ -93,7 +94,7 @@ func TestExtractTAPDevice_Success(t *testing.T) {
 
 func TestExtractTAPDevice_NilResult(t *testing.T) {
 	_, err := ExtractTAPDevice(nil)
-	assert.Error(t, err)
+	require.Error(t, err)
 }
 
 func TestExtractTAPDevice_PrefersTCRedirectTapPattern(t *testing.T) {
@@ -106,7 +107,7 @@ func TestExtractTAPDevice_PrefersTCRedirectTapPattern(t *testing.T) {
 	}
 
 	tapDevice, err := ExtractTAPDevice(result)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	// Should return first matching TAP device
 	assert.Equal(t, "tap123", tapDevice)
 }
@@ -148,7 +149,7 @@ func TestExtractTAPDevice_ErrorMessages(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := ExtractTAPDevice(tt.result)
-			assert.Error(t, err)
+			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errorContains)
 		})
 	}
@@ -166,7 +167,7 @@ func TestExtractTAPDevice_MultipleMatches(t *testing.T) {
 	}
 
 	tapDevice, err := ExtractTAPDevice(result)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "tap111", tapDevice)
 }
 
@@ -181,6 +182,6 @@ func TestExtractTAPDevice_CaseSensitive(t *testing.T) {
 	}
 
 	tapDevice, err := ExtractTAPDevice(result)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "tap789", tapDevice)
 }

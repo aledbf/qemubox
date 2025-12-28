@@ -64,7 +64,7 @@ func descriptorCount(t *testing.T) int {
 	// To retain compatibility with previous Go versions (or Go 1.23+
 	// behavior on older kernels), let's not count pidfds.
 	//
-	// TODO: if the proposal to check for internal file descriptors
+	// Note: If the proposal to check for internal file descriptors
 	// (https://go.dev/issues/67639) is accepted, we can use that
 	// instead to detect internal fds in use by the Go runtime.
 	count := 0

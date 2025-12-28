@@ -84,13 +84,21 @@ func readInterfaceMAC(netnsPath, ifName string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get target netns: %w", err)
 	}
-	defer func() { _ = targetNS.Close() }()
+	defer func() {
+		if err := targetNS.Close(); err != nil {
+			log.L.WithError(err).Warn("failed to close target netns handle")
+		}
+	}()
 
 	origNS, err := netns.Get()
 	if err != nil {
 		return "", fmt.Errorf("get current netns: %w", err)
 	}
-	defer func() { _ = origNS.Close() }()
+	defer func() {
+		if err := origNS.Close(); err != nil {
+			log.L.WithError(err).Warn("failed to close original netns handle")
+		}
+	}()
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -109,7 +117,7 @@ func readInterfaceMAC(netnsPath, ifName string) (string, error) {
 		return "", fmt.Errorf("lookup interface %s: %w", ifName, err)
 	}
 	mac := link.Attrs().HardwareAddr
-	if mac == nil || len(mac) == 0 {
+	if len(mac) == 0 {
 		return "", fmt.Errorf("interface %q has empty MAC", ifName)
 	}
 	return mac.String(), nil

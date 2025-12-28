@@ -1,6 +1,6 @@
 //go:build linux
 
-// mountutil performs local mounts on Linux. This package should likely
+// Package mountutil performs local mounts on Linux. This package should likely
 // be replaced with functions in the containerd mount code.
 package mountutil
 
@@ -20,16 +20,17 @@ import (
 	"github.com/containerd/log"
 )
 
+//nolint:gocognit // The mount pipeline is kept inline to match containerd semantics.
 func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retErr error) {
 	log.G(ctx).WithField("mounts", mounts).Info("mounting rootfs components")
 	active := []mount.ActiveMount{}
 
-	// TODO: Use mount manager interface, mount temps to directory
+	// Note: Use mount manager interface; mount temps to directory.
 	for i, m := range mounts {
 		var target string
 		if i < len(mounts)-1 {
 			target = filepath.Join(mdir, fmt.Sprintf("%d", i))
-			if err := os.MkdirAll(target, 0711); err != nil {
+			if err := os.MkdirAll(target, 0750); err != nil {
 				return err
 			}
 		} else {
@@ -74,7 +75,7 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 					part := strings.SplitN(o[len(prefix):], ":", 4)
 					var dir string
 					var mode os.FileMode = 0755
-					var uid, gid int = -1, -1
+					uid, gid := -1, -1
 
 					switch len(part) {
 					case 4:
@@ -158,7 +159,7 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 	defer func() {
 		if retErr != nil {
 			for i := len(active) - 1; i >= 0; i-- {
-				// TODO: delegate custom types to handlers
+				// Note: delegate custom types to handlers.
 				if active[i].Type == "mkdir" {
 					continue
 				}

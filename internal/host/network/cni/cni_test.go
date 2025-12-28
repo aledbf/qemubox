@@ -46,9 +46,9 @@ func TestNewCNIManager(t *testing.T) {
 			mgr, err := NewCNIManager(tt.confDir, tt.binDir)
 
 			if tt.expectError {
-				assert.Error(t, err)
+				require.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.NotNil(t, mgr)
 				assert.Equal(t, tt.confDir, mgr.confDir)
 				assert.Equal(t, tt.binDir, mgr.binDir)
@@ -81,8 +81,9 @@ func TestCNIManager_LoadNetworkConfig(t *testing.T) {
 						},
 					},
 				}
-				data1, _ := json.Marshal(config1)
-				_ = os.WriteFile(filepath.Join(tmpDir, "10-first.conflist"), data1, 0644)
+				data1, err := json.Marshal(config1)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "10-first.conflist"), data1, 0600))
 
 				config2 := map[string]interface{}{
 					"cniVersion": "1.0.0",
@@ -91,8 +92,9 @@ func TestCNIManager_LoadNetworkConfig(t *testing.T) {
 						{"type": "bridge"},
 					},
 				}
-				data2, _ := json.Marshal(config2)
-				_ = os.WriteFile(filepath.Join(tmpDir, "20-second.conflist"), data2, 0644)
+				data2, err := json.Marshal(config2)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "20-second.conflist"), data2, 0600))
 				return tmpDir
 			},
 			expectedName: "first-network", // Should load 10-first.conflist
@@ -102,7 +104,7 @@ func TestCNIManager_LoadNetworkConfig(t *testing.T) {
 			name: "single conflist file",
 			setupConfig: func() string {
 				dir := filepath.Join(tmpDir, "single")
-				_ = os.MkdirAll(dir, 0755)
+				require.NoError(t, os.MkdirAll(dir, 0750))
 				config := map[string]interface{}{
 					"cniVersion": "1.0.0",
 					"name":       "my-network",
@@ -110,8 +112,9 @@ func TestCNIManager_LoadNetworkConfig(t *testing.T) {
 						{"type": "bridge"},
 					},
 				}
-				data, _ := json.Marshal(config)
-				_ = os.WriteFile(filepath.Join(dir, "99-my.conflist"), data, 0644)
+				data, err := json.Marshal(config)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "99-my.conflist"), data, 0600))
 				return dir
 			},
 			expectedName: "my-network",
@@ -121,7 +124,7 @@ func TestCNIManager_LoadNetworkConfig(t *testing.T) {
 			name: "empty config directory",
 			setupConfig: func() string {
 				emptyDir := filepath.Join(tmpDir, "empty")
-				_ = os.MkdirAll(emptyDir, 0755)
+				require.NoError(t, os.MkdirAll(emptyDir, 0750))
 				return emptyDir
 			},
 			expectError: true,
@@ -137,9 +140,9 @@ func TestCNIManager_LoadNetworkConfig(t *testing.T) {
 			config, err := mgr.loadNetworkConfig()
 
 			if tt.expectError {
-				assert.Error(t, err)
+				require.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.NotNil(t, config)
 				assert.Equal(t, tt.expectedName, config.Name)
 			}
@@ -209,10 +212,10 @@ func TestParseCNIResult(t *testing.T) {
 			result, err := ParseCNIResult(tt.result)
 
 			if tt.expectError {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Nil(t, result)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.NotNil(t, result)
 			}
 		})

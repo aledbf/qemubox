@@ -1,5 +1,6 @@
 //go:build linux
 
+// Package cni manages CNI-based networking for VMs.
 package cni
 
 import (

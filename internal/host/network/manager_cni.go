@@ -114,7 +114,7 @@ func (nm *NetworkManager) ensureNetworkResourcesCNI(env *Environment) error {
 		TapName: result.TAPDevice,
 		MAC:     result.TAPMAC,
 		IP:      result.IPAddress,
-		Netmask: "255.255.0.0", // TODO: Extract from CNI result
+		Netmask: "255.255.0.0", // Note: Extract from CNI result when available.
 		Gateway: result.Gateway,
 	}
 

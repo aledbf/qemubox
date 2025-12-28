@@ -1,5 +1,6 @@
 //go:build linux
 
+// Package network provides host networking orchestration.
 package network
 
 import (
@@ -23,6 +24,7 @@ const (
 	NetworkModeCNI NetworkMode = "cni"
 )
 
+// NetworkConfig describes the CNI configuration locations.
 type NetworkConfig struct {
 	// Mode is always CNI (kept for compatibility)
 	Mode NetworkMode
@@ -100,6 +102,7 @@ type NetworkManagerInterface interface {
 	ReleaseNetworkResources(env *Environment) error
 }
 
+// NetworkManager manages lifecycle of host networking resources.
 type NetworkManager struct {
 	config             NetworkConfig
 	networkConfigStore boltstore.Store[NetworkConfig]
@@ -115,6 +118,7 @@ type NetworkManager struct {
 	cniMu      sync.RWMutex
 }
 
+// NewNetworkManager creates a network manager for the configured mode.
 func NewNetworkManager(
 	ctx context.Context,
 	config NetworkConfig,
@@ -128,6 +132,7 @@ func NewNetworkManager(
 	return newCNINetworkManager(ctx, cancel, config, networkConfigStore)
 }
 
+// Close stops the network manager and releases internal resources.
 func (nm *NetworkManager) Close() error {
 	if nm.cancelFunc != nil {
 		nm.cancelFunc()

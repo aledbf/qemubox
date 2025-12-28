@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/containerd/log"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 )
@@ -27,7 +28,7 @@ const (
 // Returns the path to the network namespace.
 func CreateNetNS(vmID string) (string, error) {
 	// Ensure netns directory exists
-	if err := os.MkdirAll(netnsBasePath, 0755); err != nil {
+	if err := os.MkdirAll(netnsBasePath, 0750); err != nil {
 		return "", fmt.Errorf("failed to create netns directory: %w", err)
 	}
 
@@ -49,21 +50,31 @@ func CreateNetNS(vmID string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get current netns: %w", err)
 	}
-	defer origNS.Close()
+	defer func() {
+		if err := origNS.Close(); err != nil {
+			log.L.WithError(err).Warn("failed to close original netns handle")
+		}
+	}()
 
 	// Create new network namespace
 	newNS, err := netns.New()
 	if err != nil {
 		return "", fmt.Errorf("failed to create new netns: %w", err)
 	}
-	defer newNS.Close()
+	defer func() {
+		if err := newNS.Close(); err != nil {
+			log.L.WithError(err).Warn("failed to close new netns handle")
+		}
+	}()
 
 	// Bind mount the namespace to make it persistent
 	// Use the file descriptor directly instead of /proc/self/ns/net
 	// to ensure we're mounting the correct namespace
 	nsFdPath := fmt.Sprintf("/proc/self/fd/%d", newNS)
 	if err := bindMountNetNS(nsFdPath, netnsPath); err != nil {
-		netns.Set(origNS)
+		if restoreErr := netns.Set(origNS); restoreErr != nil {
+			return "", fmt.Errorf("failed to restore original netns after bind mount error: %w", restoreErr)
+		}
 		return "", fmt.Errorf("failed to bind mount netns: %w", err)
 	}
 
@@ -95,7 +106,11 @@ func verifyNetNS(netnsPath string, hostNS netns.NsHandle) error {
 	if err != nil {
 		return fmt.Errorf("failed to open netns file: %w", err)
 	}
-	defer nsFile.Close()
+	defer func() {
+		if err := nsFile.Close(); err != nil {
+			log.L.WithError(err).Warn("failed to close netns file")
+		}
+	}()
 
 	// Get the inode of the netns file
 	var nsFileStat, hostNSStat unix.Stat_t
@@ -153,15 +168,19 @@ func bindMountNetNS(source, target string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create netns file: %w", err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("failed to close netns file: %w", err)
+	}
 
 	// Bind mount the namespace
 	// Using MS_BIND | MS_REC flags
-	const MS_BIND = 4096
-	const MS_REC = 16384
+	const msBind = 4096
+	const msRec = 16384
 
-	if err := mount(source, target, "", uintptr(MS_BIND|MS_REC), ""); err != nil {
-		os.Remove(target)
+	if err := mount(source, target, "", uintptr(msBind|msRec), ""); err != nil {
+		if removeErr := os.Remove(target); removeErr != nil && !os.IsNotExist(removeErr) {
+			log.L.WithError(removeErr).Warn("failed to remove netns file after mount error")
+		}
 		return fmt.Errorf("failed to bind mount: %w", err)
 	}
 
@@ -170,9 +189,9 @@ func bindMountNetNS(source, target string) error {
 
 // unmountNetNS unmounts a network namespace.
 func unmountNetNS(target string) error {
-	const MNT_DETACH = 2 // Lazy unmount
+	const mntDetach = 2 // Lazy unmount
 
-	if err := unmount(target, MNT_DETACH); err != nil {
+	if err := unmount(target, mntDetach); err != nil {
 		return fmt.Errorf("failed to unmount netns: %w", err)
 	}
 

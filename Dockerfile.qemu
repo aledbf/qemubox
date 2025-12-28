@@ -65,75 +65,78 @@ RUN --mount=type=cache,sharing=locked,id=qemu-aptlib,target=/var/lib/apt \
 
 WORKDIR /build
 
-# Download QEMU source (cached across builds)
+# Download and extract QEMU source (cached across builds)
+# Store both tarball and extracted source in cache mount for maximum reuse
 RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
     if [ ! -f "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz" ]; then \
+        echo "Downloading QEMU ${QEMU_VERSION} source..."; \
         curl -fsSL "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" -o "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz"; \
+    else \
+        echo "Using cached QEMU ${QEMU_VERSION} source tarball"; \
     fi && \
-    rm -rf /build/qemu-src && \
-    tar -xf "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz" -C /build && \
-    mv /build/qemu-${QEMU_VERSION} /build/qemu-src
+    if [ ! -d "/var/cache/qemu/qemu-${QEMU_VERSION}" ]; then \
+        echo "Extracting QEMU source..."; \
+        tar -xf "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz" -C /var/cache/qemu; \
+    else \
+        echo "Using cached extracted QEMU source"; \
+    fi
 
-WORKDIR /build
-
-# Configure QEMU for minimal build with libc compatibility
-# Focused on VMs use case with virtio devices
-# Note: Using dynamic linking with glibc (not fully static like Alpine/musl)
-# Building both system emulator (qemu-system-x86_64) and disk utilities (qemu-img)
-# Split into separate RUN commands for better layer caching
-# Use cache mount for build directory to persist Makefile and build artifacts
-RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
+# Configure, build, and install QEMU with incremental build support
+# Only run configure if Makefile doesn't exist
+# Combine all steps in single RUN to ensure cache mount consistency
+RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
+    --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
     cd qemu-build && \
-    ../qemu-src/configure \
-    --prefix=/opt/qemu \
-    --target-list=x86_64-softmmu \
-    --enable-tools \
-    --enable-lto \
-    --enable-strip \
-    # Disable unnecessary features for minimal build
-    --disable-containers \
-    --disable-docs \
-    --disable-debug-info \
-    --disable-werror \
-    # Disable graphical output (headless VMs)
-    --disable-sdl \
-    --disable-gtk \
-    --disable-opengl \
-    --disable-virglrenderer \
-    --disable-spice \
-    --disable-vnc \
-    # Disable audio
-    --disable-alsa \
-    --disable-coreaudio \
-    --disable-oss \
-    --disable-pa \
-    --disable-jack \
-    --disable-sndio \
-    # Enable features needed for VMs
-    --enable-kvm \
-    --enable-virtfs \
-    --enable-linux-aio \
-    --enable-linux-io-uring \
-    --enable-cap-ng \
-    --enable-seccomp \
-    --disable-slirp \
-    --disable-gio
-
-# Build QEMU (cached independently from configure)
-RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
-    cd qemu-build && make -j${JOBS}
-
-# Install QEMU binaries
-RUN --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
-    cd qemu-build && make install
+    if [ ! -f Makefile ]; then \
+        echo "Running QEMU configure (first build)..."; \
+        /var/cache/qemu/qemu-${QEMU_VERSION}/configure \
+        --prefix=/opt/qemu \
+        --target-list=x86_64-softmmu \
+        --enable-tools \
+        --enable-lto \
+        --enable-strip \
+        --disable-containers \
+        --disable-docs \
+        --disable-debug-info \
+        --disable-werror \
+        --disable-sdl \
+        --disable-gtk \
+        --disable-opengl \
+        --disable-virglrenderer \
+        --disable-spice \
+        --disable-vnc \
+        --disable-alsa \
+        --disable-coreaudio \
+        --disable-oss \
+        --disable-pa \
+        --disable-jack \
+        --disable-sndio \
+        --enable-kvm \
+        --enable-virtfs \
+        --enable-linux-aio \
+        --enable-linux-io-uring \
+        --enable-cap-ng \
+        --enable-seccomp \
+        --disable-slirp \
+        --disable-gio; \
+    else \
+        echo "Using cached QEMU build (Makefile exists, skipping configure)"; \
+    fi && \
+    make -j${JOBS} && \
+    make install
 
 # Copy BIOS/firmware files and verify
-RUN cp -a qemu-src/pc-bios/* /opt/qemu/share/qemu/ && \
+# Also copy source to regular directory for later COPY commands (cache mount not available in later stages)
+RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
+    cp -a /var/cache/qemu/qemu-${QEMU_VERSION}/pc-bios/* /opt/qemu/share/qemu/ && \
     if [ ! -f /opt/qemu/share/qemu/bios-256k.bin ]; then \
-        install -m 0644 qemu-src/pc-bios/bios-256k.bin /opt/qemu/share/qemu/bios-256k.bin; \
+        install -m 0644 /var/cache/qemu/qemu-${QEMU_VERSION}/pc-bios/bios-256k.bin /opt/qemu/share/qemu/bios-256k.bin; \
     fi && \
     test -f /opt/qemu/share/qemu/bios-256k.bin && \
-    ls -la /opt/qemu/share/qemu
+    ls -la /opt/qemu/share/qemu && \
+    mkdir -p /build/pc-bios && \
+    cp /var/cache/qemu/qemu-${QEMU_VERSION}/pc-bios/kvmvapic.bin /build/pc-bios/ && \
+    cp /var/cache/qemu/qemu-${QEMU_VERSION}/pc-bios/vgabios-stdvga.bin /build/pc-bios/
 
 # Verify binary type and show dynamic library dependencies
 RUN file /opt/qemu/bin/qemu-system-x86_64 && \
@@ -187,5 +190,5 @@ COPY --from=builder /opt/qemu/bin/qemu-img /bin/qemu-img
 COPY --from=builder /opt/qemu/share/qemu/bios.bin /share/qemubox/qemu/bios.bin
 COPY --from=builder /opt/qemu/share/qemu/bios-256k.bin /share/qemubox/qemu/bios-256k.bin
 COPY --from=builder /opt/qemu/share/qemu/pvh.bin /share/qemubox/qemu/pvh.bin
-COPY --from=builder /build/qemu-src/pc-bios/kvmvapic.bin /share/qemubox/qemu/kvmvapic.bin
-COPY --from=builder /build/qemu-src/pc-bios/vgabios-stdvga.bin /share/qemubox/qemu/vgabios-stdvga.bin
+COPY --from=builder /build/pc-bios/kvmvapic.bin /share/qemubox/qemu/kvmvapic.bin
+COPY --from=builder /build/pc-bios/vgabios-stdvga.bin /share/qemubox/qemu/vgabios-stdvga.bin

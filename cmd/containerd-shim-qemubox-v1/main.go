@@ -27,7 +27,6 @@ func main() {
 	// Set log level from configuration
 	setShimLogLevel(cfg)
 
-	//nolint:staticcheck // shim.Run ignores the context on this build.
 	ctx := context.Background()
 	shim.Run(ctx, manager.NewShimManager("io.containerd.qemubox.v1"))
 }

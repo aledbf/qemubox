@@ -39,13 +39,17 @@ func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vm
 	}).Info("network resources allocated")
 
 	if env.NetworkInfo.MAC == "" {
-		nm.ReleaseNetworkResources(env)
+		if err := nm.ReleaseNetworkResources(env); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to release network resources")
+		}
 		return nil, fmt.Errorf("CNI did not report TAP MAC address")
 	}
 
 	guestMAC, err := net.ParseMAC(env.NetworkInfo.MAC)
 	if err != nil {
-		nm.ReleaseNetworkResources(env)
+		if err := nm.ReleaseNetworkResources(env); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to release network resources")
+		}
 		return nil, fmt.Errorf("invalid CNI TAP MAC address %q: %w", env.NetworkInfo.MAC, err)
 	}
 
@@ -56,7 +60,9 @@ func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vm
 
 	// Attach TAP to VM (QEMU opens by name)
 	if err := vmi.AddTAPNIC(ctx, env.NetworkInfo.TapName, guestMAC); err != nil {
-		nm.ReleaseNetworkResources(env)
+		if err := nm.ReleaseNetworkResources(env); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to release network resources")
+		}
 		return nil, fmt.Errorf("add TAP NIC to VM: %w", err)
 	}
 

@@ -1,5 +1,6 @@
 //go:build linux
 
+// Package manager launches and manages containerd shims.
 package manager
 
 import (
@@ -20,6 +21,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/errdefs"
+	"github.com/containerd/log"
 	"golang.org/x/sys/unix"
 )
 
@@ -51,7 +53,7 @@ type spec struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-func newCommand(ctx context.Context, id, containerdAddress, containerdTTRPCAddress string, debug bool) (*exec.Cmd, error) {
+func newCommand(ctx context.Context, id, containerdAddress string, debug bool) (*exec.Cmd, error) {
 	ns, err := namespaces.NamespaceRequired(ctx)
 	if err != nil {
 		return nil, err
@@ -72,6 +74,7 @@ func newCommand(ctx context.Context, id, containerdAddress, containerdTTRPCAddre
 	if debug {
 		args = append(args, "-debug")
 	}
+	// #nosec G204 -- shim command uses the current executable and validated arguments.
 	cmd := exec.Command(self, args...)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "GOMAXPROCS=4")
@@ -88,7 +91,11 @@ func readSpec() (*spec, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.L.WithError(err).Warn("failed to close config.json")
+		}
+	}()
 	var s spec
 	if err := json.NewDecoder(f).Decode(&s); err != nil {
 		return nil, err
@@ -108,10 +115,14 @@ type shimSocket struct {
 
 func (s *shimSocket) Close() {
 	if s.s != nil {
-		s.s.Close()
+		if err := s.s.Close(); err != nil {
+			log.L.WithError(err).Debug("failed to close shim socket listener")
+		}
 	}
 	if s.f != nil {
-		s.f.Close()
+		if err := s.f.Close(); err != nil {
+			log.L.WithError(err).Debug("failed to close shim socket file")
+		}
 	}
 	_ = shim.RemoveSocket(s.addr)
 }
@@ -158,7 +169,7 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 	params.Version = 3
 	params.Protocol = "ttrpc"
 
-	cmd, err := newCommand(ctx, id, opts.Address, opts.TTRPCAddress, opts.Debug)
+	cmd, err := newCommand(ctx, id, opts.Address, opts.Debug)
 	if err != nil {
 		return params, err
 	}
@@ -211,7 +222,9 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 		return params, err
 	}
 	defer func() {
-		_ = origNS.Close()
+		if err := origNS.Close(); err != nil {
+			log.L.WithError(err).Warn("failed to close original mount namespace handle")
+		}
 	}()
 	defer func() {
 		if restoreErr := unix.Setns(int(origNS.Fd()), unix.CLONE_NEWNS); restoreErr != nil && retErr == nil {
@@ -235,7 +248,11 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 		}
 	}()
 	// make sure to wait after start
-	go cmd.Wait()
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.L.WithError(err).Debug("shim process wait failed")
+		}
+	}()
 
 	if err = shim.WritePidFile("shim.pid", cmd.Process.Pid); err != nil {
 		return params, err

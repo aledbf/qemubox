@@ -152,14 +152,18 @@ FROM base AS crun-build
 ARG TARGETARCH
 WORKDIR /usr/src/crun
 
-# Download crun binary (cached across builds)
+# Download crun binary (cached across builds using cache mount)
 RUN --mount=type=cache,sharing=locked,id=crun-download,target=/var/cache/crun \
     mkdir -p /build && \
     if [ ! -f "/var/cache/crun/crun-1.25.1-linux-${TARGETARCH}-disable-systemd" ]; then \
+        echo "Downloading crun 1.25.1 for ${TARGETARCH}..."; \
         wget -O "/var/cache/crun/crun-1.25.1-linux-${TARGETARCH}-disable-systemd" \
             https://github.com/containers/crun/releases/download/1.25.1/crun-1.25.1-linux-${TARGETARCH}-disable-systemd; \
+    else \
+        echo "Using cached crun binary for ${TARGETARCH}"; \
     fi && \
-    cp "/var/cache/crun/crun-1.25.1-linux-${TARGETARCH}-disable-systemd" /build/crun
+    cp "/var/cache/crun/crun-1.25.1-linux-${TARGETARCH}-disable-systemd" /build/crun && \
+    chmod +x /build/crun
 
 # ============================================================================
 # initrd Build Stage

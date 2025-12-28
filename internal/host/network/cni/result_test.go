@@ -126,7 +126,7 @@ func TestParseCNIResult_NoIPs(t *testing.T) {
 	}
 
 	_, err := ParseCNIResult(result)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no IP addresses")
 }
 
@@ -170,13 +170,13 @@ func TestParseCNIResult_NoTAPDevice(t *testing.T) {
 	}
 
 	_, err := ParseCNIResult(result)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no TAP device found")
 }
 
 func TestParseCNIResult_NilResult(t *testing.T) {
 	_, err := ParseCNIResult(nil)
-	assert.Error(t, err)
+	require.Error(t, err)
 }
 
 func TestParseCNIResult_GatewayOptional(t *testing.T) {

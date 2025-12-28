@@ -37,16 +37,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          driver-opts: image=moby/buildkit:latest
+          driver: docker-container
+          use: true
+          name: qemubox-builder
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+          buildkitd-flags: --allow-insecure-entitlement security.insecure --allow-insecure-entitlement network.host
           buildkitd-config-inline: |
             [worker.oci]
               max-parallelism = 4
             [worker.containerd]
               gc = true
-              gckeepstorage = 30000000000
+              gckeepstorage = 50000000000
               [[worker.containerd.gcpolicy]]
-                keepBytes = 30000000000
-                keepDuration = 604800
+                keepBytes = 50000000000
+                keepDuration = 1209600
                 filters = [ "type==source.local", "type==exec.cachemount", "type==source.git.checkout"]
 
       - name: Build release tarball
@@ -62,7 +68,7 @@ jobs:
       - name: Cleanup BuildKit cache
         if: always()
         run: |
-          # Prune BuildKit internal cache (images, layers)
-          docker buildx prune --filter until=168h --force || true
-          # Clean up old local cache files as safety measure
-          find /var/lib/qemubox-buildkit-cache -type f -mtime +7 -delete || true
+          # BuildKit GC policy handles automatic cleanup based on gckeepstorage setting
+          # Only manually clean very old local cache exports (60 days)
+          find /var/lib/qemubox-buildkit-cache -type f -mtime +60 -delete || true
+          echo "BuildKit cache cleanup complete (local cache files older than 60 days removed)"

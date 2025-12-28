@@ -168,7 +168,7 @@ func (s *service) preStart(c *runc.Container) (func(*runc.Container, process.Pro
 		}
 	}
 
-	handleStarted = func(c *runc.Container, p process.Process) {
+	handleStarted := func(c *runc.Container, p process.Process) {
 		var pid int
 		if p != nil {
 			pid = p.Pid()
@@ -194,7 +194,7 @@ func (s *service) preStart(c *runc.Container) (func(*runc.Container, process.Pro
 		}
 	}
 
-	cleanup = func() {
+	cleanup := func() {
 		if exits != nil {
 			s.lifecycleMu.Lock()
 			defer s.lifecycleMu.Unlock()

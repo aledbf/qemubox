@@ -34,6 +34,11 @@ vars:
   OUTPUT_DIR: _output
   BIN_DIR: bin
   SCRIPTS_DIR: script
+  BUILDKIT_CACHE_DIR: '{{.BUILDKIT_CACHE_DIR | default "/var/lib/qemubox-buildkit-cache"}}'
+  BUILDKIT_CACHE_KERNEL: '{{.BUILDKIT_CACHE_DIR}}/kernel'
+  BUILDKIT_CACHE_INITRD: '{{.BUILDKIT_CACHE_DIR}}/initrd'
+  BUILDKIT_CACHE_QEMU: '{{.BUILDKIT_CACHE_DIR}}/qemu'
+  BUILDKIT_CACHE_DEV: '{{.BUILDKIT_CACHE_DIR}}/dev'
 
   # Build flags
   LDFLAGS: "-s -w"
@@ -51,22 +56,6 @@ tasks:
   # Build Tasks
   # ==========================================================================
 
-  bake:
-    internal: true
-    vars:
-      TARGET: ""
-    cmds:
-      - |
-        set -eou pipefail
-        if [ -n "{{.TARGET}}" ]; then
-          echo "🐳 {{.MESSAGE}}..."
-          {{.BUILDX}} bake --allow=fs=/var/lib/qemubox-buildkit-cache {{.TARGET}}
-        else
-          echo "🐳 {{.MESSAGE}}..."
-          {{.BUILDX}} bake --allow=fs=/var/lib/qemubox-buildkit-cache
-        fi
-        echo "✓ {{.DONE_MESSAGE}}"
-
   build:go:
     internal: true
     cmds:
@@ -78,12 +67,14 @@ tasks:
         echo "✓ {{.NAME}} built: {{.OUTPUT_DIR}}/{{.OUT}} (static)"
 
   build:
-    desc: Build all components (shim, kernel, initrd)
+    desc: Build all components (shim, kernel, initrd, QEMU)
+    deps:
+      - build:shim
+      - build:kernel
+      - build:initrd
+      - build:qemu
     cmds:
-      - task: bake
-        vars:
-          MESSAGE: "Building all components"
-          DONE_MESSAGE: "Build complete"
+      - cmd: 'echo "✓ Build complete"'
 
   build:shim:
     desc: Build containerd shim binary (static, Linux x86_64)
@@ -122,30 +113,59 @@ tasks:
   build:initrd:
     desc: Build initrd image
     cmds:
-      - task: bake
-        vars:
-          TARGET: initrd
-          MESSAGE: "Building initrd"
-          DONE_MESSAGE: "Initrd built: _output/qemubox-initrd"
+      - |
+        set -eou pipefail
+        echo "🐳 Building initrd..."
+        {{.BUILDX}} build \
+          --file Dockerfile \
+          --target initrd \
+          --platform linux/amd64 \
+          --cache-from type=local,src={{.BUILDKIT_CACHE_INITRD}} \
+          --cache-to type=local,dest={{.BUILDKIT_CACHE_INITRD}},mode=max,compression=zstd \
+          --build-arg KERNEL_VERSION=6.18 \
+          --build-arg KERNEL_ARCH=x86_64 \
+          --build-arg KERNEL_NPROC=8 \
+          --output type=local,dest={{.OUTPUT_DIR}} \
+          .
+        echo "✓ Initrd built: _output/qemubox-initrd"
 
   build:kernel:
     desc: Build kernel
     cmds:
-      - task: bake
-        vars:
-          TARGET: kernel
-          MESSAGE: "Building kernel"
-          DONE_MESSAGE: "Kernel built"
+      - |
+        set -eou pipefail
+        echo "🐳 Building kernel..."
+        {{.BUILDX}} build \
+          --file Dockerfile \
+          --target kernel \
+          --platform linux/amd64 \
+          --cache-from type=local,src={{.BUILDKIT_CACHE_KERNEL}} \
+          --cache-to type=local,dest={{.BUILDKIT_CACHE_KERNEL}},mode=max,compression=zstd \
+          --build-arg KERNEL_VERSION=6.18 \
+          --build-arg KERNEL_ARCH=x86_64 \
+          --build-arg KERNEL_NPROC=8 \
+          --output type=local,dest={{.OUTPUT_DIR}} \
+          .
+        echo "✓ Kernel built: _output/qemubox-kernel-x86_64"
 
   build:qemu:
     desc: Build QEMU binaries and firmware (qemu-system-x86_64, qemu-img, BIOS files)
     cmds:
-      - task: bake
-        vars:
-          TARGET: qemu
-          MESSAGE: "Building QEMU"
-          DONE_MESSAGE: "QEMU built: _output/bin/qemu-system-x86_64, _output/bin/qemu-img"
-      - cmd: 'echo "✓ QEMU firmware: _output/share/qemubox/qemu/"'
+      - |
+        set -eou pipefail
+        echo "🐳 Building QEMU..."
+        {{.BUILDX}} build \
+          --file Dockerfile.qemu \
+          --target extract \
+          --platform linux/amd64 \
+          --cache-from type=local,src={{.BUILDKIT_CACHE_QEMU}} \
+          --cache-to type=local,dest={{.BUILDKIT_CACHE_QEMU}},mode=max,compression=zstd \
+          --build-arg QEMU_VERSION=10.2.0 \
+          --build-arg QEMU_JOBS=8 \
+          --output type=local,dest={{.OUTPUT_DIR}} \
+          .
+        echo "✓ QEMU built: _output/bin/qemu-system-x86_64, _output/bin/qemu-img"
+        echo "✓ QEMU firmware: _output/share/qemubox/qemu/"
 
   # ==========================================================================
   # Development Tasks
@@ -157,7 +177,19 @@ tasks:
       - |
         set -eou pipefail
         echo "🐳 Building dev environment..."
-        {{.BUILDX}} bake dev
+        {{.BUILDX}} build \
+          --file Dockerfile \
+          --target dev \
+          --platform linux/amd64 \
+          --cache-from type=local,src={{.BUILDKIT_CACHE_DEV}} \
+          --cache-to type=local,dest={{.BUILDKIT_CACHE_DEV}},mode=max,compression=zstd \
+          --build-arg KERNEL_VERSION=6.18 \
+          --build-arg KERNEL_ARCH=x86_64 \
+          --build-arg KERNEL_NPROC=8 \
+          --build-arg QEMU_VERSION=10.2.0 \
+          --build-arg QEMU_JOBS=8 \
+          --output type=docker,name=qemubox-dev \
+          .
         echo "🐳 Starting development shell..."
         {{.DOCKER}} run --rm -it --privileged \
           --name qemubox-dev \
@@ -180,7 +212,17 @@ tasks:
       - |
         set -eou pipefail
         echo "🐳 Building menuconfig environment..."
-        {{.BUILDX}} bake menuconfig
+        {{.BUILDX}} build \
+          --file Dockerfile \
+          --target kernel-build-base \
+          --platform linux/amd64 \
+          --cache-from type=local,src={{.BUILDKIT_CACHE_KERNEL}} \
+          --cache-to type=local,dest={{.BUILDKIT_CACHE_KERNEL}},mode=max,compression=zstd \
+          --build-arg KERNEL_VERSION=${KERNEL_VERSION} \
+          --build-arg KERNEL_ARCH=${KERNEL_ARCH} \
+          --build-arg KERNEL_NPROC=${KERNEL_NPROC:-8} \
+          --output type=docker,name=qemubox-menuconfig \
+          .
         echo "🐳 Starting kernel menuconfig..."
         echo "   Use arrow keys to navigate, Space to select, Enter to confirm"
         echo "   Press '/' to search for options"

@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"io"
 
 	"github.com/containerd/containerd/api/types"
 	"github.com/containerd/containerd/v2/core/events"
@@ -61,14 +62,31 @@ func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
 }
 
 func (s *service) Stream(ctx context.Context, _ *emptypb.Empty, ss vmevents.TTRPCEvents_StreamServer) error {
+	log.G(ctx).Info("vmevents stream opened")
 	events, errs := s.sub.Subscribe(ctx)
 	for {
 		select {
-		case event := <-events:
+		case event, ok := <-events:
+			if !ok {
+				log.G(ctx).Warn("vmevents stream events channel closed")
+				return io.EOF
+			}
+			if event == nil {
+				log.G(ctx).Warn("vmevents stream received nil event")
+				continue
+			}
 			if err := ss.Send(toProto(event)); err != nil {
+				log.G(ctx).WithError(err).WithFields(log.Fields{
+					"topic":     event.Topic,
+					"namespace": event.Namespace,
+				}).Warn("vmevents stream send failed")
 				return err
 			}
-		case err := <-errs:
+		case err, ok := <-errs:
+			if !ok {
+				log.G(ctx).Warn("vmevents stream error channel closed")
+				return nil
+			}
 			if err != nil {
 				log.G(ctx).WithError(err).Warn("vmevents stream error")
 			} else {

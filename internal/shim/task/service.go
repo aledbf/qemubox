@@ -51,6 +51,8 @@ import (
 const (
 	// eventChannelBuffer is the size of the event channel buffer
 	eventChannelBuffer = 128
+	// eventStreamShutdownDelay gives the guest time to emit logs before we tear down the VM.
+	eventStreamShutdownDelay = 2 * time.Second
 )
 
 var (
@@ -303,7 +305,8 @@ func checkKVM() error {
 	// See https://docs.kernel.org/virt/kvm/api.html#kvm-get-api-version
 	// Note: This is Linux-specific KVM functionality. unix.SYS_IOCTL is deprecated on macOS,
 	// but this code only runs on Linux systems with KVM support.
-	apiVersion, _, errno := unix.RawSyscall(unix.SYS_IOCTL, uintptr(fd), ioctlKVMGetAPIVersion, 0) //nolint:staticcheck // Linux-only KVM check
+	// Linux-only KVM check using ioctl API version.
+	apiVersion, _, errno := unix.RawSyscall(unix.SYS_IOCTL, uintptr(fd), ioctlKVMGetAPIVersion, 0)
 	if errno != 0 {
 		return fmt.Errorf("failed to get KVM API version: %w. You may have insufficient permissions", errno)
 	}
@@ -517,11 +520,13 @@ func computeResourceConfig(ctx context.Context, spec *specs.Spec) (*vm.VMResourc
 }
 
 func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) error {
-	sc, err := vmevents.NewTTRPCEventsClient(vmc).Stream(ctx, &ptypes.Empty{})
+	currentClient := vmc
+	sc, err := vmevents.NewTTRPCEventsClient(currentClient).Stream(ctx, &ptypes.Empty{})
 	if err != nil {
 		return err
 	}
 	go func() {
+	recvLoop:
 		for {
 			ev, err := sc.Recv()
 			if err != nil {
@@ -533,9 +538,41 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 				}
 
 				if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
+					log.G(ctx).WithError(err).Info("vm event stream closed unexpectedly, attempting reconnect")
+					reconnectDeadline := time.Now().Add(5 * time.Second)
+					for time.Now().Before(reconnectDeadline) {
+						if s.intentionalShutdown.Load() {
+							log.G(ctx).Info("vm event stream closed (intentional shutdown)")
+							return
+						}
+						newClient, dialErr := s.dialClientWithRetry(ctx, 2*time.Second)
+						if dialErr != nil {
+							log.G(ctx).WithError(dialErr).Debug("event stream reconnect: dial failed")
+							time.Sleep(200 * time.Millisecond)
+							continue
+						}
+						newStream, streamErr := vmevents.NewTTRPCEventsClient(newClient).Stream(ctx, &ptypes.Empty{})
+						if streamErr != nil {
+							_ = newClient.Close()
+							log.G(ctx).WithError(streamErr).Debug("event stream reconnect: stream failed")
+							time.Sleep(200 * time.Millisecond)
+							continue
+						}
+						if currentClient != nil {
+							_ = currentClient.Close()
+						}
+						currentClient = newClient
+						sc = newStream
+						log.G(ctx).Info("vm event stream reconnected")
+						continue recvLoop
+					}
 					log.G(ctx).WithError(err).Info("vm event stream closed unexpectedly, initiating shim shutdown")
 				} else {
 					log.G(ctx).WithError(err).Error("vm event stream error, initiating shim shutdown")
+				}
+				if eventStreamShutdownDelay > 0 {
+					log.G(ctx).WithField("delay", eventStreamShutdownDelay).Info("delaying shim shutdown after event stream close")
+					time.Sleep(eventStreamShutdownDelay)
 				}
 				// VM died unexpectedly - trigger shim shutdown to clean up and exit
 				s.requestShutdownAndExit(ctx, "vm event stream closed")
@@ -784,7 +821,7 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("starting container task")
 
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("start: dialing guest TTRPC")
-	vmc, err := s.dialClient(ctx)
+	vmc, err := s.dialClientWithRetry(ctx, 30*time.Second)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("start: failed to get client")
 		return nil, errgrpc.ToGRPC(err)
@@ -803,6 +840,48 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	}
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "pid": resp.Pid}).Info("start: task started successfully")
 	return resp, nil
+}
+
+func (s *service) dialClientWithRetry(ctx context.Context, maxWait time.Duration) (*ttrpc.Client, error) {
+	deadline := time.Now().Add(maxWait)
+	for {
+		vmc, err := s.dialClient(ctx)
+		if err == nil {
+			return vmc, nil
+		}
+		if !isTransientVsockError(err) {
+			return nil, err
+		}
+		if time.Now().After(deadline) {
+			return nil, err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func isTransientVsockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errdefs.IsFailedPrecondition(err) || errdefs.IsUnavailable(err) {
+		return true
+	}
+	if errors.Is(err, ttrpc.ErrClosed) || errors.Is(err, io.EOF) {
+		return true
+	}
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "ttrpc: closed") || strings.Contains(msg, "broken pipe") {
+		return true
+	}
+	if !strings.Contains(msg, "dial vsock") {
+		return false
+	}
+	return strings.Contains(msg, "no such device") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "connection refused")
 }
 
 func isProcessAlreadyFinished(err error) bool {

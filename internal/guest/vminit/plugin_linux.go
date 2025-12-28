@@ -1,6 +1,8 @@
 package vminit
 
 import (
+	"fmt"
+
 	"github.com/containerd/containerd/v2/core/events"
 	"github.com/containerd/containerd/v2/pkg/shutdown"
 	cplugins "github.com/containerd/containerd/v2/plugins"
@@ -34,7 +36,19 @@ func init() {
 			if err != nil {
 				return nil, err
 			}
-			return task.NewTaskService(ic.Context, bundle.RootDir, pp.(events.Publisher), ss.(shutdown.Service), sm.(stream.Manager))
+			publisher, ok := pp.(events.Publisher)
+			if !ok {
+				return nil, fmt.Errorf("unexpected event publisher type %T", pp)
+			}
+			shutdownSvc, ok := ss.(shutdown.Service)
+			if !ok {
+				return nil, fmt.Errorf("unexpected shutdown service type %T", ss)
+			}
+			streamMgr, ok := sm.(stream.Manager)
+			if !ok {
+				return nil, fmt.Errorf("unexpected stream manager type %T", sm)
+			}
+			return task.NewTaskService(ic.Context, bundle.RootDir, publisher, shutdownSvc, streamMgr)
 		},
 	})
 }
