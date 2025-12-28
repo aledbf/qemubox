@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 
@@ -31,6 +30,10 @@ type Transformer func(ctx context.Context, b *Bundle) error
 // Load loads an OCI bundle from the given path and apply a series of transformers
 // to turn the host-side bundle into a VM-side bundle.
 func Load(ctx context.Context, path string, transformers ...Transformer) (*Bundle, error) {
+	if path == "" {
+		return nil, fmt.Errorf("bundle path cannot be empty")
+	}
+
 	specBytes, err := os.ReadFile(filepath.Join(path, "config.json"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read bundle config: %w", err)
@@ -68,17 +71,25 @@ func (b *Bundle) AddExtraFile(name string, data []byte) error {
 	if name == "config.json" {
 		return fmt.Errorf("cannot override config.json")
 	}
-	if filepath.Base(name) != name {
-		return fmt.Errorf("file name %q must not contain path separators", name)
+
+	// Prevent path traversal attacks
+	cleaned := filepath.Clean(name)
+	if cleaned != name || filepath.Base(name) != name || cleaned == ".." || cleaned == "." {
+		return fmt.Errorf("file name %q must not contain path separators or relative components", name)
 	}
+
 	b.extraFiles[name] = data
 	return nil
 }
 
 // Files returns all the bundle files that must be setup inside the VM.
-// Note: The returned map is a shallow copy; byte slices are shared with the bundle.
+// The returned map is a deep copy; modifications will not affect the bundle.
 func (b *Bundle) Files() (map[string][]byte, error) {
-	files := maps.Clone(b.extraFiles)
+	// Deep copy to prevent callers from modifying bundle's internal state
+	files := make(map[string][]byte, len(b.extraFiles)+1)
+	for k, v := range b.extraFiles {
+		files[k] = append([]byte(nil), v...)
+	}
 
 	specBytes, err := json.Marshal(b.Spec)
 	if err != nil {
@@ -89,6 +100,9 @@ func (b *Bundle) Files() (map[string][]byte, error) {
 	return files, nil
 }
 
+// resolveRootfsPath is a Transformer that resolves the absolute rootfs path on the host
+// and normalizes it to "rootfs" in the spec for the VM.
+// The context parameter is unused but required to match the Transformer signature.
 func resolveRootfsPath(_ context.Context, b *Bundle) error {
 	if b.Spec.Root == nil {
 		return fmt.Errorf("%w: root path not specified", errdefs.ErrInvalidArgument)
@@ -99,6 +113,9 @@ func resolveRootfsPath(_ context.Context, b *Bundle) error {
 	} else {
 		b.Rootfs = filepath.Join(b.Path, b.Spec.Root.Path)
 	}
+
+	// Normalize to "rootfs" for the VM as that's where vminitd expects the root filesystem
+	// to be mounted inside the VM, regardless of the host-side path.
 	b.Spec.Root.Path = "rootfs"
 
 	return nil
