@@ -403,12 +403,17 @@ func TestSystemServiceOnlineMemory(t *testing.T) {
 }
 
 func TestMemoryAutoOnline(t *testing.T) {
+	const (
+		autoOnlineEnabled  = "online"
+		autoOnlineDisabled = "offline"
+	)
+
 	t.Run("read auto_online setting", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		autoOnlinePath := filepath.Join(tmpDir, "auto_online_blocks")
 
 		// Test with auto_online enabled
-		if err := os.WriteFile(autoOnlinePath, []byte("online\n"), 0600); err != nil {
+		if err := os.WriteFile(autoOnlinePath, []byte(autoOnlineEnabled+"\n"), 0600); err != nil {
 			t.Fatalf("failed to write auto_online file: %v", err)
 		}
 
@@ -416,12 +421,12 @@ func TestMemoryAutoOnline(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to read auto_online: %v", err)
 		}
-		if value != "online" {
-			t.Errorf("auto_online = %q, want %q", value, "online")
+		if value != autoOnlineEnabled {
+			t.Errorf("auto_online = %q, want %q", value, autoOnlineEnabled)
 		}
 
 		// Test with auto_online disabled
-		if err := os.WriteFile(autoOnlinePath, []byte("offline\n"), 0600); err != nil {
+		if err := os.WriteFile(autoOnlinePath, []byte(autoOnlineDisabled+"\n"), 0600); err != nil {
 			t.Fatalf("failed to write auto_online file: %v", err)
 		}
 
@@ -429,8 +434,8 @@ func TestMemoryAutoOnline(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to read auto_online: %v", err)
 		}
-		if value != "offline" {
-			t.Errorf("auto_online = %q, want %q", value, "offline")
+		if value != autoOnlineDisabled {
+			t.Errorf("auto_online = %q, want %q", value, autoOnlineDisabled)
 		}
 	})
 }
