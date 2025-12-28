@@ -28,9 +28,21 @@ type forwardIOSetup struct {
 	pio         stdio.Stdio
 	streams     [3]io.ReadWriteCloser
 	passthrough bool
+	usePIOPaths bool
+	// filePaths stores the actual file paths when using file:// scheme
+	// These are used on the host for copyStreams, while pio contains stream:// URIs for the VM
+	stdoutFilePath string
+	stderrFilePath string
 }
 
 func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forwardIOSetup, error) {
+	log.G(ctx).WithFields(log.Fields{
+		"stdin":    pio.Stdin,
+		"stdout":   pio.Stdout,
+		"stderr":   pio.Stderr,
+		"terminal": pio.Terminal,
+	}).Debug("setupForwardIO: entry")
+
 	u, err := url.Parse(pio.Stdout)
 	if err != nil {
 		return forwardIOSetup{}, fmt.Errorf("unable to parse stdout uri: %w", err)
@@ -38,7 +50,9 @@ func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forw
 	if u.Scheme == "" {
 		u.Scheme = defaultScheme
 	}
+	log.G(ctx).WithField("scheme", u.Scheme).Debug("setupForwardIO: parsed scheme")
 
+	usePIOPaths := false
 	switch u.Scheme {
 	case "stream":
 		// Pass through
@@ -47,18 +61,35 @@ func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forw
 		// Handled below via createStreams
 	case "file":
 		filePath := u.Path
+		log.G(ctx).WithField("filePath", filePath).Debug("file scheme: using file path for logging")
+
+		// Validate parent directory can be created
 		if err := os.MkdirAll(filepath.Dir(filePath), 0750); err != nil {
-			return forwardIOSetup{}, err
+			return forwardIOSetup{}, fmt.Errorf("failed to create parent directory: %w", err)
 		}
-		f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+
+		// createStreams will replace pio.Stdout/Stderr with stream:// URIs
+		// These stream URIs will be sent to the VM
+		pio, streams, err := createStreams(ctx, vmi, pio)
 		if err != nil {
 			return forwardIOSetup{}, err
 		}
-		if err := f.Close(); err != nil {
-			return forwardIOSetup{}, err
-		}
-		pio.Stdout = filePath
-		pio.Stderr = filePath
+
+		log.G(ctx).WithFields(log.Fields{
+			"stdout":         pio.Stdout,
+			"stderr":         pio.Stderr,
+			"stdoutFilePath": filePath,
+		}).Debug("file scheme: created streams, will copy to file on host")
+
+		// Save file paths separately - these will be used on the host side in copyStreams
+		// The pio.Stdout/Stderr contain stream:// URIs which will be sent to the VM
+		return forwardIOSetup{
+			pio:            pio,
+			streams:        streams,
+			usePIOPaths:    true,
+			stdoutFilePath: filePath,
+			stderrFilePath: filePath,
+		}, nil
 	default:
 		return forwardIOSetup{}, fmt.Errorf("unsupported STDIO scheme %s: %w", u.Scheme, errdefs.ErrNotImplemented)
 	}
@@ -67,7 +98,7 @@ func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forw
 	if err != nil {
 		return forwardIOSetup{}, err
 	}
-	return forwardIOSetup{pio: pio, streams: streams}, nil
+	return forwardIOSetup{pio: pio, streams: streams, usePIOPaths: usePIOPaths}, nil
 }
 
 func (s *service) forwardIO(ctx context.Context, vmi vm.Instance, sio stdio.Stdio) (stdio.Stdio, func(ctx context.Context) error, error) {
@@ -100,7 +131,23 @@ func (s *service) forwardIO(ctx context.Context, vmi vm.Instance, sio stdio.Stdi
 		}
 	}()
 	ioDone := make(chan struct{})
-	if err = copyStreams(ctx, streams, sio.Stdin, sio.Stdout, sio.Stderr, ioDone); err != nil {
+	stdinPath := sio.Stdin
+	stdoutPath := sio.Stdout
+	stderrPath := sio.Stderr
+	if setup.usePIOPaths {
+		// Use the saved file paths for copyStreams on the host
+		// pio.Stdout/Stderr contain stream:// URIs which will be sent to the VM
+		stdoutPath = setup.stdoutFilePath
+		stderrPath = setup.stderrFilePath
+		log.G(ctx).WithFields(log.Fields{
+			"stdoutPath":  stdoutPath,
+			"stderrPath":  stderrPath,
+			"vmStdout":    pio.Stdout,
+			"vmStderr":    pio.Stderr,
+			"usePIOPaths": setup.usePIOPaths,
+		}).Debug("forwardIO: using file paths for copyStreams, stream URIs for VM")
+	}
+	if err = copyStreams(ctx, streams, stdinPath, stdoutPath, stderrPath, ioDone); err != nil {
 		return stdio.Stdio{}, nil, err
 	}
 	return pio, func(ctx context.Context) error {
@@ -229,10 +276,17 @@ func openOutputDestination(ctx context.Context, name, stdout, stderr string, sam
 		return *sameFile, nil, nil
 	}
 
-	fw, err := os.OpenFile(name, syscall.O_WRONLY|syscall.O_APPEND, 0)
+	// Ensure parent directory exists before opening file
+	if err := os.MkdirAll(filepath.Dir(name), 0750); err != nil {
+		return nil, nil, fmt.Errorf("containerd-shim: creating parent directory for %q failed: %w", name, err)
+	}
+
+	log.G(ctx).WithField("file", name).Debug("openOutputDestination: opening file for writing")
+	fw, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
 	if err != nil {
 		return nil, nil, fmt.Errorf("containerd-shim: opening file %q failed: %w", name, err)
 	}
+	log.G(ctx).WithField("file", name).Debug("openOutputDestination: successfully opened file")
 	if stdout == stderr {
 		*sameFile = newCountingWriteCloser(fw, 1)
 		return *sameFile, nil, nil
@@ -244,10 +298,24 @@ func startOutputCopy(ctx context.Context, cwg *sync.WaitGroup, copying *atomic.I
 	cwg.Add(1)
 	go func() {
 		cwg.Done()
+		log.G(ctx).WithFields(log.Fields{
+			"target": target.name,
+			"label":  target.label,
+		}).Debug("startOutputCopy: starting to copy stream data")
 		p := iobuf.Get()
 		defer iobuf.Put(p)
-		if _, err := io.CopyBuffer(wc, target.stream, *p); err != nil {
-			log.G(ctx).WithError(err).WithField("stream", target.stream).Warn("error copying " + target.label)
+		n, err := io.CopyBuffer(wc, target.stream, *p)
+		if err != nil {
+			log.G(ctx).WithError(err).WithFields(log.Fields{
+				"stream": target.stream,
+				"bytes":  n,
+			}).Warn("error copying " + target.label)
+		} else {
+			log.G(ctx).WithFields(log.Fields{
+				"target": target.name,
+				"label":  target.label,
+				"bytes":  n,
+			}).Debug("startOutputCopy: finished copying stream data")
 		}
 		if copying.Add(-1) == 0 {
 			close(done)

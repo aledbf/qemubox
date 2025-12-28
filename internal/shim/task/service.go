@@ -326,14 +326,6 @@ func (s *service) shutdown(ctx context.Context) error {
 
 	var errs []error
 
-	// Release network resources first
-	if s.containerID != "" {
-		env := &network.Environment{ID: s.containerID}
-		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
-			log.G(ctx).WithError(err).WithField("id", s.containerID).Warn("failed to release network resources")
-		}
-	}
-
 	// Shutdown IO for container and execs
 	if s.container != nil {
 		if s.container.ioShutdown != nil {
@@ -349,12 +341,23 @@ func (s *service) shutdown(ctx context.Context) error {
 	}
 
 	// Shutdown VM (idempotent - may be nil if Delete already cleared it)
+	// IMPORTANT: This must happen BEFORE network cleanup so QEMU can exit cleanly
+	// before CNI tears down the TAP interface
 	if s.vm != nil {
 		if err := s.vm.Shutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("vm shutdown: %w", err))
 		}
 		// Clear s.vm if not already nil
 		s.vm = nil
+	}
+
+	// Release network resources AFTER VM shutdown
+	// This ensures QEMU has exited and closed TAP FDs before CNI deletes the TAP interface
+	if s.containerID != "" {
+		env := &network.Environment{ID: s.containerID}
+		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
+			log.G(ctx).WithError(err).WithField("id", s.containerID).Warn("failed to release network resources")
+		}
 	}
 
 	// Close network manager (this closes the database)
@@ -997,14 +1000,6 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		}
 	}
 
-	// Release network resources
-	if needNetworkClean {
-		env := &network.Environment{ID: r.ID}
-		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
-			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
-		}
-	}
-
 	// Stop CPU hotplug controller
 	if cpuController != nil {
 		cpuController.Stop()
@@ -1018,6 +1013,8 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	}
 
 	// Shutdown VM if needed (one VM per container)
+	// IMPORTANT: This must happen BEFORE network cleanup so QEMU can exit cleanly
+	// before CNI tears down the TAP interface
 	if needVMShutdown {
 		log.G(ctx).Info("container deleted, shutting down VM")
 		s.intentionalShutdown.Store(true)
@@ -1036,6 +1033,15 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 
 		// Schedule async exit (non-blocking, allows Delete to return)
 		go s.requestShutdownAndExit(ctx, "container deleted")
+	}
+
+	// Release network resources AFTER VM shutdown
+	// This ensures QEMU has exited and closed TAP FDs before CNI deletes the TAP interface
+	if needNetworkClean {
+		env := &network.Environment{ID: r.ID}
+		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
+			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
+		}
 	}
 
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("task deleted successfully")

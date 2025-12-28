@@ -64,37 +64,52 @@ func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
 func (s *service) Stream(ctx context.Context, _ *emptypb.Empty, ss vmevents.TTRPCEvents_StreamServer) error {
 	log.G(ctx).Info("vmevents stream opened")
 	events, errs := s.sub.Subscribe(ctx)
+
+	// Add debug logging to track stream lifecycle
+	defer func() {
+		log.G(ctx).Info("vmevents stream handler exiting")
+	}()
+
+	eventCount := 0
 	for {
 		select {
 		case event, ok := <-events:
 			if !ok {
-				log.G(ctx).Warn("vmevents stream events channel closed")
+				log.G(ctx).WithField("events_sent", eventCount).Warn("vmevents stream events channel closed")
 				return io.EOF
 			}
 			if event == nil {
 				log.G(ctx).Warn("vmevents stream received nil event")
 				continue
 			}
+			log.G(ctx).WithFields(log.Fields{
+				"topic":     event.Topic,
+				"namespace": event.Namespace,
+				"event_num": eventCount,
+			}).Debug("vmevents sending event")
 			if err := ss.Send(toProto(event)); err != nil {
 				log.G(ctx).WithError(err).WithFields(log.Fields{
-					"topic":     event.Topic,
-					"namespace": event.Namespace,
+					"topic":       event.Topic,
+					"namespace":   event.Namespace,
+					"events_sent": eventCount,
 				}).Warn("vmevents stream send failed")
 				return err
 			}
+			eventCount++
+			log.G(ctx).WithField("event_num", eventCount).Debug("vmevents event sent successfully")
 		case err, ok := <-errs:
 			if !ok {
-				log.G(ctx).Warn("vmevents stream error channel closed")
+				log.G(ctx).WithField("events_sent", eventCount).Warn("vmevents stream error channel closed")
 				return nil
 			}
 			if err != nil {
-				log.G(ctx).WithError(err).Warn("vmevents stream error")
+				log.G(ctx).WithError(err).WithField("events_sent", eventCount).Error("vmevents stream error from subscriber")
 			} else {
-				log.G(ctx).Warn("vmevents stream closed without error")
+				log.G(ctx).WithField("events_sent", eventCount).Warn("vmevents stream closed without error")
 			}
 			return err
 		case <-ctx.Done():
-			log.G(ctx).WithError(ctx.Err()).Warn("vmevents stream context done")
+			log.G(ctx).WithError(ctx.Err()).WithField("events_sent", eventCount).Warn("vmevents stream context cancelled")
 			return ctx.Err()
 		}
 	}

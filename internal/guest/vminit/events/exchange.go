@@ -112,6 +112,8 @@ func (e *Exchange) Publish(ctx context.Context, topic string, event events.Event
 // *any* of the provided filters will be sent on the channel. The filters use
 // the standard containerd filters package syntax.
 func (e *Exchange) Subscribe(ctx context.Context, fs ...string) (<-chan *events.Envelope, <-chan error) {
+	log.G(ctx).WithField("filters", fs).Debug("event exchange: new subscriber")
+
 	var (
 		evch                  = make(chan *events.Envelope)
 		errq                  = make(chan error, 1)
@@ -121,6 +123,7 @@ func (e *Exchange) Subscribe(ctx context.Context, fs ...string) (<-chan *events.
 	)
 
 	closeAll := func() {
+		log.G(ctx).Debug("event exchange: closing subscriber channels")
 		_ = channel.Close()
 		_ = queue.Close()
 		_ = e.broadcaster.Remove(dst)
@@ -130,6 +133,7 @@ func (e *Exchange) Subscribe(ctx context.Context, fs ...string) (<-chan *events.
 	if len(fs) > 0 {
 		filter, err := filters.ParseAll(fs...)
 		if err != nil {
+			log.G(ctx).WithError(err).Error("event exchange: failed to parse filters")
 			errq <- fmt.Errorf("failed parsing subscription filters: %w", err)
 			closeAll()
 			return evch, errq
@@ -141,15 +145,19 @@ func (e *Exchange) Subscribe(ctx context.Context, fs ...string) (<-chan *events.
 	}
 
 	if err := e.broadcaster.Add(dst); err != nil {
+		log.G(ctx).WithError(err).Error("event exchange: failed to add subscriber to broadcaster")
 		errq <- fmt.Errorf("add sink to broadcaster: %w", err)
 		closeAll()
 		return evch, errq
 	}
 
+	log.G(ctx).Info("event exchange: subscriber added to broadcaster")
+
 	go func() {
 		defer closeAll()
 
 		var err error
+		eventsSent := 0
 	loop:
 		for {
 			select {
@@ -159,15 +167,23 @@ func (e *Exchange) Subscribe(ctx context.Context, fs ...string) (<-chan *events.
 					// This should not happen in practice - both Forward and Publish
 					// methods ensure only *events.Envelope types are sent to this channel.
 					err = fmt.Errorf("invalid envelope encountered %#v; please file a bug", ev)
+					log.G(ctx).WithError(err).Error("event exchange: invalid envelope type")
 					break
 				}
 
 				select {
 				case evch <- env:
+					eventsSent++
+					log.G(ctx).WithFields(log.Fields{
+						"topic":       env.Topic,
+						"events_sent": eventsSent,
+					}).Debug("event exchange: forwarded event to subscriber")
 				case <-ctx.Done():
+					log.G(ctx).WithField("events_sent", eventsSent).Info("event exchange: context cancelled while sending event")
 					break loop
 				}
 			case <-ctx.Done():
+				log.G(ctx).WithField("events_sent", eventsSent).Info("event exchange: subscriber context cancelled")
 				break loop
 			}
 		}
@@ -176,6 +192,12 @@ func (e *Exchange) Subscribe(ctx context.Context, fs ...string) (<-chan *events.
 			if cerr := ctx.Err(); cerr != context.Canceled {
 				err = cerr
 			}
+		}
+
+		if err != nil {
+			log.G(ctx).WithError(err).WithField("events_sent", eventsSent).Warn("event exchange: subscriber exiting with error")
+		} else {
+			log.G(ctx).WithField("events_sent", eventsSent).Info("event exchange: subscriber exiting cleanly")
 		}
 
 		errq <- err

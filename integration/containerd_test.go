@@ -4,16 +4,18 @@ package integration
 
 import (
 	"context"
-	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
-	ctrapp "github.com/containerd/containerd/v2/cmd/ctr/app"
+	"github.com/containerd/containerd/v2/cmd/ctr/commands/tasks"
+	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
-	"github.com/urfave/cli/v2"
+	"github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/containerd/errdefs"
 )
 
 func TestContainerdRunQemubox(t *testing.T) {
@@ -25,15 +27,17 @@ func TestContainerdRunQemubox(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
+	ctx = namespaces.WithNamespace(ctx, namespaces.Default)
+
 	client, err := containerd.New(socket)
 	if err != nil {
 		t.Fatalf("connect containerd: %v", err)
 	}
 	defer client.Close()
 
-	pullCtx := namespaces.WithNamespace(ctx, namespaces.Default)
-	_, err = client.Pull(
-		pullCtx,
+	// Pull image
+	image, err := client.Pull(
+		ctx,
 		imageRef,
 		containerd.WithPullSnapshotter(snapshotter),
 		containerd.WithPullUnpack,
@@ -48,38 +52,112 @@ func TestContainerdRunQemubox(t *testing.T) {
 	}
 	t.Logf("container name: %s", containerName)
 
-	args := []string{
-		"ctr",
-		"--address", socket,
-		"--debug",
-		"run",
-		"--snapshotter", snapshotter,
-		"--runtime", runtime,
-		"--privileged",
-		"--rm",
+	// Create container
+	container, err := client.NewContainer(
+		ctx,
+		containerName,
+		containerd.WithSnapshotter(snapshotter),
+		containerd.WithNewSnapshot(containerName+"-snapshot", image),
+		containerd.WithNewSpec(
+			oci.WithImageConfig(image),
+			oci.WithProcessArgs("/bin/echo", "OK_FROM_QEMUBOX"),
+			oci.Compose(
+				oci.WithAllCurrentCapabilities,
+				oci.WithMaskedPaths(nil),
+				oci.WithReadonlyPaths(nil),
+				oci.WithWriteableSysfs,
+				oci.WithWriteableCgroupfs,
+				oci.WithSelinuxLabel(""),
+				oci.WithApparmorProfile(""),
+				oci.WithSeccompUnconfined,
+			),
+		),
+		containerd.WithRuntime(runtime, nil),
+	)
+	if err != nil {
+		t.Fatalf("create container: %v", err)
 	}
 
-	// if setupCTRPTY(t) {
-	// 	args = append(args, "--tty")
-	// }
-
-	args = append(args, imageRef, containerName, "/bin/echo", "OK_FROM_QEMUBOX")
-
-	ctr := ctrapp.New()
-	ctr.ExitErrHandler = func(*cli.Context, error) {}
-	stdoutBuf, restoreStdout := captureStdout(t)
-	if err := ctr.RunContext(ctx, args); err != nil {
-		if !strings.Contains(err.Error(), "ttrpc: closed") {
-			t.Fatalf("ctr run: %v", err)
+	// Cleanup container on exit
+	defer func() {
+		if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+			t.Logf("failed to cleanup container: %v", err)
 		}
-		t.Logf("ctr run: ignoring cleanup error: %v", err)
-	}
-	restoreStdout()
-	if !strings.Contains(stdoutBuf.String(), "OK_FROM_QEMUBOX") {
-		t.Fatalf("missing echo output, got: %q", stdoutBuf.String())
+	}()
+
+	// Create log file for capturing output
+	logDir := t.TempDir()
+	logFile := filepath.Join(logDir, "output.log")
+	logURI := "file://" + logFile
+
+	// Create task using the same helper function as the working CLI
+	// This handles all the I/O setup complexity correctly
+	ioOpts := []cio.Opt{cio.WithFIFODir(logDir)}
+
+	// Task options - empty slice since we don't need any special options
+	taskOpts := []containerd.NewTaskOpts{}
+
+	task, err := tasks.NewTask(
+		ctx,
+		client,
+		container,
+		"",          // checkpoint
+		nil,         // con (console)
+		false,       // nullIO
+		logURI,      // logURI
+		ioOpts,      // ioOpts
+		taskOpts..., // task options (required parameter)
+	)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
 	}
 
-	t.Log("ctr run completed")
+	// Cleanup task on exit
+	defer func() {
+		if _, err := task.Delete(ctx, containerd.WithProcessKill); err != nil && !errdefs.IsNotFound(err) {
+			// Ignore "ttrpc: closed" error on cleanup
+			if !strings.Contains(err.Error(), "ttrpc: closed") {
+				t.Logf("failed to cleanup task: %v", err)
+			}
+		}
+	}()
+
+	// Wait for task completion
+	statusC, err := task.Wait(ctx)
+	if err != nil {
+		t.Fatalf("wait for task: %v", err)
+	}
+
+	// Start the task
+	if err := task.Start(ctx); err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+
+	// Wait for completion
+	status := <-statusC
+	code, _, err := status.Result()
+	if err != nil {
+		t.Fatalf("task result: %v", err)
+	}
+
+	if code != 0 {
+		// Try to read log file for error details
+		logData, _ := os.ReadFile(logFile)
+		t.Fatalf("task exited with code %d, output: %s", code, string(logData))
+	}
+
+	// Read and check output from log file
+	output, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+
+	if !strings.Contains(string(output), "OK_FROM_QEMUBOX") {
+		t.Fatalf("missing echo output, got: %q", string(output))
+	}
+
+	t.Logf("output: %s", strings.TrimSpace(string(output)))
+	t.Log("test completed successfully")
 }
 
 func getenvDefault(key, def string) string {
@@ -88,82 +166,3 @@ func getenvDefault(key, def string) string {
 	}
 	return def
 }
-
-func captureStdout(t *testing.T) (*strings.Builder, func()) {
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("create stdout pipe: %v", err)
-	}
-	origStdout := os.Stdout
-	origStderr := os.Stderr
-	os.Stdout = w
-	os.Stderr = w
-
-	var buf strings.Builder
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _ = io.Copy(&buf, r)
-	}()
-
-	return &buf, func() {
-		_ = w.Close()
-		os.Stdout = origStdout
-		os.Stderr = origStderr
-		_ = r.Close()
-		<-done
-	}
-}
-
-/*
-func setupCTRPTY(t *testing.T) bool {
-	if os.Getenv("QEMUBOX_CTR_TTY") == "0" {
-		return false
-	}
-	if !isTerminal(os.Stdin) {
-		master, slavePath, err := console.NewPty()
-		if err != nil {
-			t.Logf("failed to allocate PTY, running without --tty: %v", err)
-			return false
-		}
-		ttyFile, err := os.OpenFile(slavePath, os.O_RDWR, 0)
-		if err != nil {
-			_ = master.Close()
-			t.Logf("failed to open PTY slave, running without --tty: %v", err)
-			return false
-		}
-		t.Cleanup(func() {
-			_ = master.Close()
-			_ = ttyFile.Close()
-		})
-
-		restoreStdin := os.Stdin
-		restoreStdout := os.Stdout
-		restoreStderr := os.Stderr
-		os.Stdin = ttyFile
-		os.Stdout = ttyFile
-		os.Stderr = ttyFile
-		t.Cleanup(func() {
-			os.Stdin = restoreStdin
-			os.Stdout = restoreStdout
-			os.Stderr = restoreStderr
-		})
-
-		go func() {
-			scanner := bufio.NewScanner(master)
-			for scanner.Scan() {
-				t.Logf("ctr: %s", scanner.Text())
-			}
-			if err := scanner.Err(); err != nil {
-				t.Logf("ctr: pty read error: %v", err)
-			}
-		}()
-	}
-	return true
-}
-
-func isTerminal(f *os.File) bool {
-	_, err := console.ConsoleFromFile(f)
-	return err == nil
-}
-*/

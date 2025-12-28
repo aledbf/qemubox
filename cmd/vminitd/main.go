@@ -184,12 +184,19 @@ func run(ctx context.Context, config ServiceConfig) error {
 	for {
 		select {
 		case <-config.Shutdown.Done():
-			if err := config.Shutdown.Err(); err != nil && !errors.Is(err, shutdown.ErrShutdown) {
-				log.G(ctx).WithError(err).Error("shutdown error")
+			shutdownErr := config.Shutdown.Err()
+			if shutdownErr != nil && !errors.Is(shutdownErr, shutdown.ErrShutdown) {
+				log.G(ctx).WithError(shutdownErr).Error("vminitd shutdown triggered with error")
+			} else {
+				log.G(ctx).Info("vminitd shutdown triggered")
 			}
 			return nil
 		case err := <-serviceErr:
-			log.G(ctx).WithError(err).Error("service exited")
+			if err != nil {
+				log.G(ctx).WithError(err).Error("TTRPC service exited with error, triggering shutdown")
+			} else {
+				log.G(ctx).Info("TTRPC service exited cleanly, triggering shutdown")
+			}
 			return err
 		case sig := <-s:
 			switch sig {
@@ -200,8 +207,8 @@ func run(ctx context.Context, config ServiceConfig) error {
 					log.G(ctx).Debug("reaped child process")
 				}
 			case unix.SIGKILL, unix.SIGINT, unix.SIGTERM, unix.SIGQUIT:
+				log.G(ctx).WithField("signal", sig).Info("received shutdown signal, triggering shutdown")
 				config.Shutdown.Shutdown()
-				log.G(ctx).WithField("signal", sig).Info("received shutdown signal")
 			default:
 				log.G(ctx).WithField("signal", sig).Debug("received unhandled signal")
 			}
@@ -529,5 +536,11 @@ func New(ctx context.Context, config ServiceConfig) (Runnable, error) {
 
 func (s *service) Run(ctx context.Context) error {
 	log.G(ctx).Info("starting TTRPC server")
-	return s.server.Serve(ctx, s.l)
+	err := s.server.Serve(ctx, s.l)
+	if err != nil {
+		log.G(ctx).WithError(err).Error("TTRPC server exited with error")
+	} else {
+		log.G(ctx).Info("TTRPC server exited cleanly")
+	}
+	return err
 }

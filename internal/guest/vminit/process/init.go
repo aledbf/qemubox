@@ -235,7 +235,22 @@ func (p *Init) Start(ctx context.Context) error {
 }
 
 func (p *Init) start(ctx context.Context) error {
+	log.G(ctx).WithFields(log.Fields{
+		"container_id": p.id,
+		"bundle":       p.Bundle,
+		"runtime":      p.runtime.Command,
+	}).Info("executing OCI runtime start command")
 	err := p.runtime.Start(ctx, p.id)
+	if err != nil {
+		log.G(ctx).WithError(err).WithFields(log.Fields{
+			"container_id": p.id,
+		}).Error("OCI runtime start command failed")
+	} else {
+		log.G(ctx).WithFields(log.Fields{
+			"container_id": p.id,
+			"pid":          p.pid,
+		}).Info("OCI runtime start command succeeded")
+	}
 	return p.runtimeError(err, "OCI runtime start failed")
 }
 
