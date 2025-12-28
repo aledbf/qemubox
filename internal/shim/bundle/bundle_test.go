@@ -12,6 +12,8 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
+const testRootfsPath = "rootfs"
+
 func TestLoad(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -25,12 +27,12 @@ func TestLoad(t *testing.T) {
 			name: "valid bundle with relative rootfs",
 			setup: func(t *testing.T) string {
 				return createTestBundle(t, specs.Spec{
-					Root: &specs.Root{Path: "rootfs"},
+					Root: &specs.Root{Path: testRootfsPath},
 				})
 			},
 			wantErr: false,
 			validate: func(t *testing.T, b *Bundle) {
-				if b.Spec.Root.Path != "rootfs" {
+				if b.Spec.Root.Path != testRootfsPath {
 					t.Errorf("expected root path 'rootfs', got %q", b.Spec.Root.Path)
 				}
 				if !filepath.IsAbs(b.Rootfs) {
@@ -48,7 +50,7 @@ func TestLoad(t *testing.T) {
 			},
 			wantErr: false,
 			validate: func(t *testing.T, b *Bundle) {
-				if b.Spec.Root.Path != "rootfs" {
+				if b.Spec.Root.Path != testRootfsPath {
 					t.Errorf("expected normalized root path 'rootfs', got %q", b.Spec.Root.Path)
 				}
 				if !filepath.IsAbs(b.Rootfs) {
@@ -98,7 +100,7 @@ func TestLoad(t *testing.T) {
 			name: "transformer applied",
 			setup: func(t *testing.T) string {
 				return createTestBundle(t, specs.Spec{
-					Root: &specs.Root{Path: "rootfs"},
+					Root: &specs.Root{Path: testRootfsPath},
 				})
 			},
 			transformers: []Transformer{
@@ -118,7 +120,7 @@ func TestLoad(t *testing.T) {
 			name: "transformer error",
 			setup: func(t *testing.T) string {
 				return createTestBundle(t, specs.Spec{
-					Root: &specs.Root{Path: "rootfs"},
+					Root: &specs.Root{Path: testRootfsPath},
 				})
 			},
 			transformers: []Transformer{
@@ -133,7 +135,7 @@ func TestLoad(t *testing.T) {
 			name: "multiple transformers",
 			setup: func(t *testing.T) string {
 				return createTestBundle(t, specs.Spec{
-					Root: &specs.Root{Path: "rootfs"},
+					Root: &specs.Root{Path: testRootfsPath},
 				})
 			},
 			transformers: []Transformer{
@@ -412,11 +414,11 @@ func TestResolveRootfsPath(t *testing.T) {
 		{
 			name:       "relative path",
 			bundlePath: "/var/lib/containerd/bundles/123",
-			rootPath:   "rootfs",
+			rootPath:   testRootfsPath,
 			isAbs:      false,
 			wantErr:    false,
 			validateRootfs: func(t *testing.T, bundlePath, rootfs string) {
-				expected := filepath.Join(bundlePath, "rootfs")
+				expected := filepath.Join(bundlePath, testRootfsPath)
 				if rootfs != expected {
 					t.Errorf("rootfs = %q, want %q", rootfs, expected)
 				}
@@ -485,8 +487,8 @@ func TestResolveRootfsPath(t *testing.T) {
 			}
 
 			// Verify spec.Root.Path was normalized
-			if b.Spec.Root.Path != "rootfs" {
-				t.Errorf("spec.Root.Path = %q, want %q", b.Spec.Root.Path, "rootfs")
+			if b.Spec.Root.Path != testRootfsPath {
+				t.Errorf("spec.Root.Path = %q, want %q", b.Spec.Root.Path, testRootfsPath)
 			}
 
 			if tt.validateRootfs != nil {
