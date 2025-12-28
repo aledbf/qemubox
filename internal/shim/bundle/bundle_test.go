@@ -400,13 +400,13 @@ func TestFiles(t *testing.T) {
 
 func TestResolveRootfsPath(t *testing.T) {
 	tests := []struct {
-		name          string
-		bundlePath    string
-		rootPath      string
-		isAbs         bool
-		nilRoot       bool
-		wantErr       bool
-		wantErrIs     error
+		name           string
+		bundlePath     string
+		rootPath       string
+		isAbs          bool
+		nilRoot        bool
+		wantErr        bool
+		wantErrIs      error
 		validateRootfs func(t *testing.T, bundlePath, rootfs string)
 	}{
 		{

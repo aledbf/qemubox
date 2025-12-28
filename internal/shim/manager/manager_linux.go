@@ -77,6 +77,10 @@ func newCommand(ctx context.Context, id, containerdAddress string, debug bool) (
 	// #nosec G204 -- shim command uses the current executable and validated arguments.
 	cmd := exec.Command(self, args...)
 	cmd.Dir = cwd
+	// Limit shim process to avoid consuming excessive host CPU resources.
+	// The shim primarily does I/O forwarding and VM management, which are
+	// not CPU-intensive tasks. 4 threads provides sufficient concurrency
+	// for QEMU management, vsock I/O, and TTRPC handling.
 	cmd.Env = append(os.Environ(), "GOMAXPROCS=4")
 	cmd.Env = append(cmd.Env, "OTEL_SERVICE_NAME=containerd-shim-"+id)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -85,17 +89,16 @@ func newCommand(ctx context.Context, id, containerdAddress string, debug bool) (
 	return cmd, nil
 }
 
+// readSpec reads the OCI runtime spec from config.json in the current directory.
+// This assumes the working directory is set to the container's bundle directory,
+// which is established by containerd before calling the shim manager.
 func readSpec() (*spec, error) {
 	const configFileName = "config.json"
 	f, err := os.Open(configFileName)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err := f.Close(); err != nil {
-			log.L.WithError(err).Warn("failed to close config.json")
-		}
-	}()
+	defer f.Close()
 	var s spec
 	if err := json.NewDecoder(f).Decode(&s); err != nil {
 		return nil, err
@@ -107,6 +110,19 @@ func (m manager) Name() string {
 	return m.name
 }
 
+// socketExistsError is returned when a shim socket already exists and is reusable.
+type socketExistsError struct {
+	address string
+}
+
+func (e *socketExistsError) Error() string {
+	return fmt.Sprintf("socket already exists: %s", e.address)
+}
+
+func (e *socketExistsError) Is(target error) bool {
+	return target == errdefs.ErrAlreadyExists
+}
+
 type shimSocket struct {
 	addr string
 	s    *net.UnixListener
@@ -115,14 +131,10 @@ type shimSocket struct {
 
 func (s *shimSocket) Close() {
 	if s.s != nil {
-		if err := s.s.Close(); err != nil {
-			log.L.WithError(err).Debug("failed to close shim socket listener")
-		}
+		_ = s.s.Close()
 	}
 	if s.f != nil {
-		if err := s.f.Close(); err != nil {
-			log.L.WithError(err).Debug("failed to close shim socket file")
-		}
+		_ = s.f.Close()
 	}
 	_ = shim.RemoveSocket(s.addr)
 }
@@ -134,34 +146,34 @@ func newShimSocket(ctx context.Context, path, id string, debug bool) (*shimSocke
 	}
 	socket, err := shim.NewSocket(address)
 	if err != nil {
-		// the only time where this would happen is if there is a bug and the socket
-		// was not cleaned up in the cleanup method of the shim or we are using the
-		// grouping functionality where the new process should be run with the same
-		// shim as an existing container
+		// The socket already exists. This happens in two scenarios:
+		// 1. A bug where the socket wasn't cleaned up properly
+		// 2. Grouping mode where multiple containers share the same shim
 		if !shim.SocketEaddrinuse(err) {
 			return nil, fmt.Errorf("create new shim socket: %w", err)
 		}
 		if !debug && shim.CanConnect(address) {
-			return &shimSocket{addr: address}, errdefs.ErrAlreadyExists
+			// Socket exists and is reachable - reuse it
+			return nil, &socketExistsError{address: address}
 		}
+		// Socket exists but is stale - remove and recreate
 		if err := shim.RemoveSocket(address); err != nil {
-			return nil, fmt.Errorf("remove pre-existing socket: %w", err)
+			return nil, fmt.Errorf("remove stale socket: %w", err)
 		}
 		if socket, err = shim.NewSocket(address); err != nil {
-			return nil, fmt.Errorf("try create new shim socket 2x: %w", err)
+			return nil, fmt.Errorf("create new shim socket after removing stale socket: %w", err)
 		}
-	}
-	s := &shimSocket{
-		addr: address,
-		s:    socket,
 	}
 	f, err := socket.File()
 	if err != nil {
-		s.Close()
+		_ = socket.Close()
 		return nil, err
 	}
-	s.f = f
-	return s, nil
+	return &shimSocket{
+		addr: address,
+		s:    socket,
+		f:    f,
+	}, nil
 }
 
 func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shim.BootstrapParams, retErr error) {
@@ -196,8 +208,10 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 
 	s, err := newShimSocket(ctx, opts.Address, grouping, false)
 	if err != nil {
-		if errdefs.IsAlreadyExists(err) {
-			params.Address = s.addr
+		var existsErr *socketExistsError
+		if errors.As(err, &existsErr) {
+			// Shim already exists - reuse it
+			params.Address = existsErr.address
 			return params, nil
 		}
 		return params, err
@@ -247,13 +261,17 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 			}
 		}
 	}()
-	// make sure to wait after start
+
+	// Wait for the shim process in the background.
+	// The shim runs independently as a daemon, so we don't wait for this goroutine.
+	// If the process fails immediately, the failure will be detected when containerd
+	// attempts to connect to the shim socket.
 	go func() {
-		if err := cmd.Wait(); err != nil {
-			log.L.WithError(err).Debug("shim process wait failed")
-		}
+		_ = cmd.Wait()
 	}()
 
+	// Write PID file to the bundle directory (current working directory).
+	// This file is used by Stop() to send signals to the shim process.
 	if err = shim.WritePidFile("shim.pid", cmd.Process.Pid); err != nil {
 		return params, err
 	}
@@ -263,16 +281,20 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 }
 
 func (manager) Stop(ctx context.Context, id string) (shim.StopStatus, error) {
+	// Read PID from the bundle directory (current working directory).
+	// This assumes containerd has set the working directory to the bundle path,
+	// matching the directory used in Start().
 	p, err := os.ReadFile("shim.pid")
 	if err != nil {
 		return shim.StopStatus{}, err
 	}
 	pid, err := strconv.Atoi(string(p))
 	if err != nil {
-		return shim.StopStatus{}, err
+		return shim.StopStatus{}, fmt.Errorf("parse shim PID: %w", err)
 	}
+	// SIGKILL the shim process. Ignore ESRCH (process doesn't exist).
 	if err := unix.Kill(pid, unix.SIGKILL); err != nil && !errors.Is(err, unix.ESRCH) {
-		return shim.StopStatus{}, err
+		return shim.StopStatus{}, fmt.Errorf("kill shim process: %w", err)
 	}
 	return shim.StopStatus{
 		ExitedAt:   time.Now(),
@@ -290,8 +312,15 @@ func (m manager) Info(ctx context.Context, optionsR io.Reader) (*types.RuntimeIn
 		},
 	}
 
-	// Try to read runtime features from vminitd
-	if features, err := readVMRuntimeFeatures(); err == nil {
+	// Try to read runtime features from vminitd.
+	// This file only exists when running inside the VM, so we expect
+	// it to be missing when running on the host.
+	features, err := readVMRuntimeFeatures()
+	if err != nil && !os.IsNotExist(err) {
+		// File exists but couldn't be read - this is unexpected
+		log.L.WithError(err).Warn("failed to read VM runtime features")
+	}
+	if err == nil {
 		// Merge features into annotations
 		for k, v := range features {
 			info.Annotations[k] = v

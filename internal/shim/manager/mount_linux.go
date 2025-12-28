@@ -7,21 +7,16 @@ import (
 )
 
 func setupMntNs() error {
-	err := unix.Unshare(unix.CLONE_NEWNS)
-	if err != nil {
-		return err
+	if err := unix.Unshare(unix.CLONE_NEWNS); err != nil {
+		return fmt.Errorf("unshare mount namespace: %w", err)
 	}
 
-	err = unix.Mount("", "/", "", unix.MS_REC|unix.MS_SLAVE, "")
-	if err != nil {
-		err = fmt.Errorf("failed to mount with slave: %w", err)
-		return err
+	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_SLAVE, ""); err != nil {
+		return fmt.Errorf("remount root as slave: %w", err)
 	}
 
-	err = unix.Mount("", "/", "", unix.MS_REC|unix.MS_SHARED, "")
-	if err != nil {
-		err = fmt.Errorf("failed to mount with shared: %w", err)
-		return err
+	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_SHARED, ""); err != nil {
+		return fmt.Errorf("remount root as shared: %w", err)
 	}
 
 	return nil
