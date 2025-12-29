@@ -11,9 +11,7 @@ import (
 	"github.com/docker/docker/libnetwork/resolvconf"
 
 	"github.com/aledbf/qemubox/containerd/internal/host/network"
-	boltstore "github.com/aledbf/qemubox/containerd/internal/host/store"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
-	"github.com/aledbf/qemubox/containerd/internal/paths"
 )
 
 type linuxManager struct{}
@@ -24,30 +22,15 @@ func newManager() Manager {
 
 // InitNetworkManager creates and initializes a new NetworkManager instance.
 // Qemubox uses CNI (Container Network Interface) for all network management.
-// This store persists CNI network configuration metadata; IP allocation
-// is delegated to CNI IPAM plugins (state stored in /var/lib/cni/networks/).
+// Network state is managed in-memory (cniResults map) and by CNI IPAM plugins
+// (state stored in /var/lib/cni/networks/).
 func (m *linuxManager) InitNetworkManager(ctx context.Context) (network.NetworkManager, error) {
-	// Create BoltDB store for CNI network configuration metadata
-	dbPath := paths.CNIConfigDBPath()
-
-	networkConfigStore, err := boltstore.NewBoltStore[network.NetworkConfig](
-		dbPath, "network_configs",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create CNI network config store: %w", err)
-	}
-
 	// Load CNI network configuration from environment
 	netCfg := network.LoadNetworkConfig()
 
 	// Create CNI-based NetworkManager
-	nm, err := network.NewNetworkManager(
-		ctx,
-		netCfg,
-		networkConfigStore,
-	)
+	nm, err := network.NewNetworkManager(ctx, netCfg)
 	if err != nil {
-		_ = networkConfigStore.Close()
 		return nil, fmt.Errorf("create CNI network manager: %w", err)
 	}
 

@@ -13,7 +13,6 @@ import (
 	"github.com/containerd/log"
 
 	"github.com/aledbf/qemubox/containerd/internal/host/network/cni"
-	boltstore "github.com/aledbf/qemubox/containerd/internal/host/store"
 )
 
 // NetworkConfig describes the CNI configuration locations.
@@ -91,8 +90,7 @@ type NetworkManager interface {
 
 // cniNetworkManager manages lifecycle of host networking resources using CNI.
 type cniNetworkManager struct {
-	config             NetworkConfig
-	networkConfigStore boltstore.Store[NetworkConfig]
+	config NetworkConfig
 
 	// CNI manager for network configuration
 	cniManager *cni.CNIManager
@@ -106,12 +104,11 @@ type cniNetworkManager struct {
 func NewNetworkManager(
 	ctx context.Context,
 	config NetworkConfig,
-	networkConfigStore boltstore.Store[NetworkConfig],
 ) (NetworkManager, error) {
 	// Log the network mode
 	log.G(ctx).Info("Initializing CNI network manager")
 
-	return newCNINetworkManager(config, networkConfigStore)
+	return newCNINetworkManager(config)
 }
 
 // Close stops the network manager and releases internal resources.

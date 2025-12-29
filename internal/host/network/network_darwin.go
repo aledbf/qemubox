@@ -8,8 +8,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-
-	boltstore "github.com/aledbf/qemubox/containerd/internal/host/store"
 )
 
 // NetworkConfig defines network configuration
@@ -57,12 +55,10 @@ type darwinNetworkManager struct{}
 func NewNetworkManager(
 	ctx context.Context,
 	config NetworkConfig,
-	networkConfigStore boltstore.Store[NetworkConfig],
 ) (NetworkManager, error) {
 	// Reference unused parameter to avoid compiler errors
 	_ = ctx
 	_ = config
-	_ = networkConfigStore
 	return nil, fmt.Errorf("network manager not supported on darwin")
 }
 

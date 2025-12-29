@@ -10,18 +10,10 @@ import (
 	"github.com/containerd/log"
 
 	"github.com/aledbf/qemubox/containerd/internal/host/network/cni"
-	boltstore "github.com/aledbf/qemubox/containerd/internal/host/store"
 )
 
 // newCNINetworkManager creates a cniNetworkManager configured for CNI mode.
-func newCNINetworkManager(
-	config NetworkConfig,
-	networkConfigStore boltstore.Store[NetworkConfig],
-) (*cniNetworkManager, error) {
-	if networkConfigStore == nil {
-		return nil, fmt.Errorf("NetworkConfigStore is required")
-	}
-
+func newCNINetworkManager(config NetworkConfig) (*cniNetworkManager, error) {
 	// Create CNI manager
 	cniMgr, err := cni.NewCNIManager(
 		config.CNIConfDir,
@@ -32,10 +24,9 @@ func newCNINetworkManager(
 	}
 
 	nm := &cniNetworkManager{
-		config:             config,
-		networkConfigStore: networkConfigStore,
-		cniManager:         cniMgr,
-		cniResults:         make(map[string]*cni.CNIResult),
+		config:     config,
+		cniManager: cniMgr,
+		cniResults: make(map[string]*cni.CNIResult),
 	}
 
 	return nm, nil
@@ -198,12 +189,6 @@ func (nm *cniNetworkManager) releaseNetworkResourcesCNI(ctx context.Context, env
 	nm.cniMu.Lock()
 	delete(nm.cniResults, env.ID)
 	nm.cniMu.Unlock()
-
-	// Also remove from network config store (persistent state)
-	if err := nm.networkConfigStore.Delete(ctx, env.ID); err != nil {
-		log.G(ctx).WithError(err).WithField("vmID", env.ID).
-			Warn("Failed to delete network config from store")
-	}
 
 	if exists {
 		log.G(ctx).WithFields(log.Fields{
