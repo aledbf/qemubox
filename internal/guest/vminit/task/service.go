@@ -11,8 +11,6 @@ import (
 	"sync"
 
 	"github.com/containerd/cgroups/v3"
-	"github.com/containerd/cgroups/v3/cgroup1"
-	cgroupsv2 "github.com/containerd/cgroups/v3/cgroup2"
 	eventstypes "github.com/containerd/containerd/api/events"
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
 	"github.com/containerd/containerd/api/types/runc/options"
@@ -34,7 +32,6 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 	"github.com/containerd/typeurl/v2"
-	"github.com/moby/sys/userns"
 
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/runc"
@@ -309,27 +306,10 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 
 	switch r.ExecID {
 	case "":
-		switch cg := container.Cgroup().(type) {
-		case cgroup1.Cgroup:
-			if err := s.ep.Add(container.ID, cg); err != nil {
-				log.G(ctx).WithError(err).Error("add cg to OOM monitor")
-			}
-		case *cgroupsv2.Manager:
-			allControllers, err := cg.RootControllers()
-			if err != nil {
-				log.G(ctx).WithError(err).Error("failed to get root controllers")
-			} else {
-				if err := cg.ToggleControllers(allControllers, cgroupsv2.Enable); err != nil {
-					if userns.RunningInUserNS() {
-						log.G(ctx).WithError(err).Debugf("failed to enable controllers (%v)", allControllers)
-					} else {
-						log.G(ctx).WithError(err).Errorf("failed to enable controllers (%v)", allControllers)
-					}
-				}
-			}
-			if err := s.ep.Add(container.ID, cg); err != nil {
-				log.G(ctx).WithError(err).Error("add cg to OOM monitor")
-			}
+		cg := container.Cgroup()
+		if cg != nil {
+			// Enable all available cgroup v2 controllers
+			_ = cg.EnableControllers(ctx)
 		}
 
 		s.send(&eventstypes.TaskStart{
@@ -627,28 +607,17 @@ func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.
 	if err != nil {
 		return nil, err
 	}
-	cgx := container.Cgroup()
-	if cgx == nil {
+	cg := container.Cgroup()
+	if cg == nil {
 		return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "cgroup does not exist")
 	}
-	var statsx interface{}
-	switch cg := cgx.(type) {
-	case cgroup1.Cgroup:
-		stats, err := cg.Stat(cgroup1.IgnoreNotExist)
-		if err != nil {
-			return nil, err
-		}
-		statsx = stats
-	case *cgroupsv2.Manager:
-		stats, err := cg.Stat()
-		if err != nil {
-			return nil, err
-		}
-		statsx = stats
-	default:
-		return nil, errgrpc.ToGRPCf(errdefs.ErrNotImplemented, "unsupported cgroup type %T", cg)
+
+	stats, err := cg.Stats(ctx)
+	if err != nil {
+		return nil, err
 	}
-	data, err := typeurl.MarshalAny(statsx)
+
+	data, err := typeurl.MarshalAny(stats)
 	if err != nil {
 		return nil, err
 	}

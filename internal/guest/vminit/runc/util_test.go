@@ -13,10 +13,10 @@ import (
 
 func TestReadSpec(t *testing.T) {
 	tests := []struct {
-		name      string
-		specJSON  string
-		wantErr   bool
-		validate  func(t *testing.T, spec *specs.Spec)
+		name     string
+		specJSON string
+		wantErr  bool
+		validate func(t *testing.T, spec *specs.Spec)
 	}{
 		{
 			name: "valid minimal spec",
@@ -139,9 +139,9 @@ func TestWriteSpec(t *testing.T) {
 
 func TestShouldKillAllOnExit(t *testing.T) {
 	tests := []struct {
-		name     string
-		spec     *specs.Spec
-		want     bool
+		name string
+		spec *specs.Spec
+		want bool
 	}{
 		{
 			name: "private PID namespace - should NOT kill all",
