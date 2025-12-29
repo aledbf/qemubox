@@ -10,7 +10,18 @@
       "Bash(task build:shim)",
       "Bash(go test:*)",
       "Bash(GOOS=linux go test:*)",
-      "Bash(go build:*)"
+      "Bash(go build:*)",
+      "Bash(go tool cover:*)",
+      "Bash(gofmt:*)",
+      "Bash(golangci-lint run:*)",
+      "Bash(task lint:*)",
+      "Bash(GOOS=linux go build:*)",
+      "Bash(tree:*)",
+      "Bash(wc:*)",
+      "Bash(go doc:*)",
+      "Bash(go list:*)",
+      "Bash(GOOS=linux go vet:*)",
+      "Bash(GOOS=linux task lint:*)"
     ]
   }
 }

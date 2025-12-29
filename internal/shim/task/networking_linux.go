@@ -18,7 +18,7 @@ import (
 // and TAP device management. NetworkManager handles bridge creation, IP allocation,
 // TAP device lifecycle, and NFTables rules.
 // Returns the network configuration that should be passed to the VM kernel
-func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vmi vm.Instance, containerID, netnsPath string) (*vm.NetworkConfig, error) {
+func setupNetworking(ctx context.Context, nm network.NetworkManager, vmi vm.Instance, containerID, netnsPath string) (*vm.NetworkConfig, error) {
 	log.G(ctx).WithField("id", containerID).Info("setting up NetworkManager-based networking")
 
 	// Create environment for this container
@@ -27,7 +27,7 @@ func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vm
 	}
 
 	// Allocate network resources (IP + TAP device)
-	if err := nm.EnsureNetworkResources(env); err != nil {
+	if err := nm.EnsureNetworkResources(ctx, env); err != nil {
 		return nil, fmt.Errorf("allocate network resources: %w", err)
 	}
 
@@ -39,7 +39,7 @@ func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vm
 	}).Info("network resources allocated")
 
 	if env.NetworkInfo.MAC == "" {
-		if err := nm.ReleaseNetworkResources(env); err != nil {
+		if err := nm.ReleaseNetworkResources(ctx, env); err != nil {
 			log.G(ctx).WithError(err).Warn("failed to release network resources")
 		}
 		return nil, fmt.Errorf("CNI did not report TAP MAC address")
@@ -47,7 +47,7 @@ func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vm
 
 	guestMAC, err := net.ParseMAC(env.NetworkInfo.MAC)
 	if err != nil {
-		if err := nm.ReleaseNetworkResources(env); err != nil {
+		if err := nm.ReleaseNetworkResources(ctx, env); err != nil {
 			log.G(ctx).WithError(err).Warn("failed to release network resources")
 		}
 		return nil, fmt.Errorf("invalid CNI TAP MAC address %q: %w", env.NetworkInfo.MAC, err)
@@ -60,7 +60,7 @@ func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vm
 
 	// Attach TAP to VM (QEMU opens by name)
 	if err := vmi.AddTAPNIC(ctx, env.NetworkInfo.TapName, guestMAC); err != nil {
-		if err := nm.ReleaseNetworkResources(env); err != nil {
+		if err := nm.ReleaseNetworkResources(ctx, env); err != nil {
 			log.G(ctx).WithError(err).Warn("failed to release network resources")
 		}
 		return nil, fmt.Errorf("add TAP NIC to VM: %w", err)

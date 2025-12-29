@@ -23,6 +23,9 @@ type CNIResult struct {
 	// IPAddress is the IP address allocated to the VM.
 	IPAddress net.IP
 
+	// Netmask is the network mask for the allocated IP address.
+	Netmask string
+
 	// Gateway is the gateway IP address for the network.
 	Gateway net.IP
 }
@@ -60,8 +63,9 @@ func ParseCNIResultWithNetNS(result *current.Result, netnsPath string) (*CNIResu
 		tapMAC = resolvedMAC
 	}
 
-	// Parse IP address and gateway
+	// Parse IP address, netmask, and gateway
 	var ipAddress net.IP
+	var netmask string
 	var gateway net.IP
 
 	if len(result.IPs) > 0 {
@@ -69,12 +73,18 @@ func ParseCNIResultWithNetNS(result *current.Result, netnsPath string) (*CNIResu
 		ipConfig := result.IPs[0]
 		ipAddress = ipConfig.Address.IP
 		gateway = ipConfig.Gateway
+
+		// Extract netmask from the IPNet
+		if ipConfig.Address.Mask != nil {
+			netmask = net.IP(ipConfig.Address.Mask).String()
+		}
 	}
 
 	return &CNIResult{
 		TAPDevice: tapDevice,
 		TAPMAC:    tapMAC,
 		IPAddress: ipAddress,
+		Netmask:   netmask,
 		Gateway:   gateway,
 	}, nil
 }

@@ -17,7 +17,7 @@ import (
 // Qemubox uses CNI (Container Network Interface) for all network management.
 // This store persists CNI network configuration metadata; IP allocation
 // is delegated to CNI IPAM plugins (state stored in /var/lib/cni/networks/).
-func initNetworkManager(ctx context.Context) (network.NetworkManagerInterface, error) {
+func initNetworkManager(ctx context.Context) (network.NetworkManager, error) {
 	// Create BoltDB store for CNI network configuration metadata
 	dbPath := paths.CNIConfigDBPath()
 
@@ -42,6 +42,6 @@ func initNetworkManager(ctx context.Context) (network.NetworkManagerInterface, e
 		return nil, fmt.Errorf("create CNI network manager: %w", err)
 	}
 
-	log.G(ctx).WithField("mode", netCfg.Mode).Info("NetworkManager initialized")
+	log.G(ctx).Info("NetworkManager initialized")
 	return nm, nil
 }

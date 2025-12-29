@@ -16,19 +16,8 @@ import (
 	boltstore "github.com/aledbf/qemubox/containerd/internal/host/store"
 )
 
-// NetworkMode represents the network management mode.
-type NetworkMode string
-
-const (
-	// NetworkModeCNI uses CNI plugin chains for network configuration.
-	NetworkModeCNI NetworkMode = "cni"
-)
-
 // NetworkConfig describes the CNI configuration locations.
 type NetworkConfig struct {
-	// Mode is always CNI (kept for compatibility)
-	Mode NetworkMode
-
 	// CNIConfDir is the directory containing CNI network configuration files.
 	// Default: /etc/cni/net.d
 	CNIConfDir string
@@ -49,7 +38,6 @@ type NetworkConfig struct {
 func LoadNetworkConfig() NetworkConfig {
 	if dir := os.Getenv("QEMUBOX_CNI_CONF_DIR"); dir != "" {
 		return NetworkConfig{
-			Mode:       NetworkModeCNI,
 			CNIConfDir: dir,
 			CNIBinDir:  os.Getenv("QEMUBOX_CNI_BIN_DIR"),
 		}
@@ -59,14 +47,12 @@ func LoadNetworkConfig() NetworkConfig {
 	qemuboxBinDir := filepath.Join("/usr/share/qemubox", "libexec", "cni")
 	if _, err := os.Stat(qemuboxConfDir); err == nil {
 		return NetworkConfig{
-			Mode:       NetworkModeCNI,
 			CNIConfDir: qemuboxConfDir,
 			CNIBinDir:  qemuboxBinDir,
 		}
 	}
 
 	return NetworkConfig{
-		Mode:       NetworkModeCNI,
 		CNIConfDir: "/etc/cni/net.d",
 		CNIBinDir:  "/opt/cni/bin",
 	}
@@ -91,24 +77,22 @@ type Environment struct {
 	NetworkInfo *NetworkInfo
 }
 
-// NetworkManagerInterface defines the interface for network management operations
-// that can be implemented by NetworkManager or mocked for testing
-type NetworkManagerInterface interface {
-	// Core lifecycle methods
+// NetworkManager defines the interface for network management operations
+type NetworkManager interface {
+	// Close stops the network manager and releases internal resources
 	Close() error
 
-	// Network resource management
-	EnsureNetworkResources(env *Environment) error
-	ReleaseNetworkResources(env *Environment) error
+	// EnsureNetworkResources allocates and configures network resources for an environment
+	EnsureNetworkResources(ctx context.Context, env *Environment) error
+
+	// ReleaseNetworkResources releases network resources for an environment
+	ReleaseNetworkResources(ctx context.Context, env *Environment) error
 }
 
-// NetworkManager manages lifecycle of host networking resources.
-type NetworkManager struct {
+// cniNetworkManager manages lifecycle of host networking resources using CNI.
+type cniNetworkManager struct {
 	config             NetworkConfig
 	networkConfigStore boltstore.Store[NetworkConfig]
-
-	ctx        context.Context
-	cancelFunc context.CancelFunc
 
 	// CNI manager for network configuration
 	cniManager *cni.CNIManager
@@ -123,32 +107,26 @@ func NewNetworkManager(
 	ctx context.Context,
 	config NetworkConfig,
 	networkConfigStore boltstore.Store[NetworkConfig],
-) (NetworkManagerInterface, error) {
-	ctx, cancel := context.WithCancel(ctx)
-
+) (NetworkManager, error) {
 	// Log the network mode
 	log.G(ctx).Info("Initializing CNI network manager")
 
-	return newCNINetworkManager(ctx, cancel, config, networkConfigStore)
+	return newCNINetworkManager(config, networkConfigStore)
 }
 
 // Close stops the network manager and releases internal resources.
-func (nm *NetworkManager) Close() error {
-	if nm.cancelFunc != nil {
-		nm.cancelFunc()
-	}
-
+func (nm *cniNetworkManager) Close() error {
 	// CNI resources are cleaned up per-VM via ReleaseNetworkResources
 	// No global cleanup needed for CNI mode
 	return nil
 }
 
 // EnsureNetworkResources allocates and configures network resources for an environment using CNI.
-func (nm *NetworkManager) EnsureNetworkResources(env *Environment) error {
-	return nm.ensureNetworkResourcesCNI(env)
+func (nm *cniNetworkManager) EnsureNetworkResources(ctx context.Context, env *Environment) error {
+	return nm.ensureNetworkResourcesCNI(ctx, env)
 }
 
 // ReleaseNetworkResources releases network resources for an environment using CNI.
-func (nm *NetworkManager) ReleaseNetworkResources(env *Environment) error {
-	return nm.releaseNetworkResourcesCNI(env)
+func (nm *cniNetworkManager) ReleaseNetworkResources(ctx context.Context, env *Environment) error {
+	return nm.releaseNetworkResourcesCNI(ctx, env)
 }

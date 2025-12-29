@@ -52,7 +52,7 @@ func (m *CNIManager) Setup(ctx context.Context, vmID string, netns string) (*CNI
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute CNI plugin chain: %w", err)
 	}
-	log.L.WithFields(log.Fields{
+	log.G(ctx).WithFields(log.Fields{
 		"net":        netConfList.Name,
 		"plugins":    len(netConfList.Plugins),
 		"interfaces": len(result.Interfaces),
@@ -115,6 +115,8 @@ func (m *CNIManager) loadNetworkConfig() (*libcni.NetworkConfigList, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load CNI config from %s: %w", confFile, err)
 	}
+	// Note: No context available here - this is called from both Setup and Teardown
+	// Could pass context through if needed, but for now use package logger
 	log.L.WithFields(log.Fields{
 		"config": confFile,
 		"name":   netConfList.Name,

@@ -11,6 +11,6 @@ import (
 )
 
 // setupNetworking is a stub for Darwin
-func setupNetworking(ctx context.Context, nm network.NetworkManagerInterface, vmi vm.Instance, id, netnsPath string) (*vm.NetworkConfig, error) {
+func setupNetworking(ctx context.Context, nm network.NetworkManager, vmi vm.Instance, id, netnsPath string) (*vm.NetworkConfig, error) {
 	return nil, fmt.Errorf("not supported on darwin")
 }

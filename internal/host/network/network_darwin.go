@@ -12,28 +12,17 @@ import (
 	boltstore "github.com/aledbf/qemubox/containerd/internal/host/store"
 )
 
-// NetworkMode represents the network management mode.
-type NetworkMode string
-
-const (
-	// NetworkModeCNI uses CNI plugin chains (not supported on Darwin).
-	NetworkModeCNI NetworkMode = "cni"
-)
-
 // NetworkConfig defines network configuration
 type NetworkConfig struct {
-	Mode NetworkMode
-
 	// CNI fields (not used on Darwin)
 	CNIConfDir string
 	CNIBinDir  string
 }
 
 // LoadNetworkConfig loads network configuration.
-// On Darwin, returns CNI mode config (though CNI is not supported).
+// On Darwin, returns stub config (networking is not supported).
 func LoadNetworkConfig() NetworkConfig {
 	return NetworkConfig{
-		Mode:       NetworkModeCNI,
 		CNIConfDir: "/etc/cni/net.d",
 		CNIBinDir:  "/opt/cni/bin",
 	}
@@ -54,22 +43,22 @@ type Environment struct {
 	NetworkInfo *NetworkInfo
 }
 
-// NetworkManagerInterface defines the interface for network management operations
-type NetworkManagerInterface interface {
+// NetworkManager defines the interface for network management operations
+type NetworkManager interface {
 	Close() error
-	EnsureNetworkResources(env *Environment) error
-	ReleaseNetworkResources(env *Environment) error
+	EnsureNetworkResources(ctx context.Context, env *Environment) error
+	ReleaseNetworkResources(ctx context.Context, env *Environment) error
 }
 
-// NetworkManager stub for Darwin
-type NetworkManager struct{}
+// darwinNetworkManager stub for Darwin
+type darwinNetworkManager struct{}
 
 // NewNetworkManager creates a stub network manager (Darwin only)
 func NewNetworkManager(
 	ctx context.Context,
 	config NetworkConfig,
 	networkConfigStore boltstore.Store[NetworkConfig],
-) (NetworkManagerInterface, error) {
+) (NetworkManager, error) {
 	// Reference unused parameter to avoid compiler errors
 	_ = ctx
 	_ = config
@@ -78,16 +67,16 @@ func NewNetworkManager(
 }
 
 // Close is a stub for Darwin
-func (nm *NetworkManager) Close() error {
+func (nm *darwinNetworkManager) Close() error {
 	return fmt.Errorf("not supported on darwin")
 }
 
 // EnsureNetworkResources is a stub for Darwin
-func (nm *NetworkManager) EnsureNetworkResources(env *Environment) error {
+func (nm *darwinNetworkManager) EnsureNetworkResources(ctx context.Context, env *Environment) error {
 	return fmt.Errorf("not supported on darwin")
 }
 
 // ReleaseNetworkResources is a stub for Darwin
-func (nm *NetworkManager) ReleaseNetworkResources(env *Environment) error {
+func (nm *darwinNetworkManager) ReleaseNetworkResources(ctx context.Context, env *Environment) error {
 	return fmt.Errorf("not supported on darwin")
 }

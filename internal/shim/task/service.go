@@ -119,7 +119,7 @@ type service struct {
 	vm vm.Instance
 
 	// networkManager handles network resource allocation and cleanup
-	networkManager network.NetworkManagerInterface
+	networkManager network.NetworkManager
 
 	// Single container (qemubox enforces 1 container per VM per shim)
 	container   *container
@@ -367,7 +367,7 @@ func (s *service) shutdown(ctx context.Context) error {
 	// This ensures QEMU has exited and closed TAP FDs before CNI deletes the TAP interface
 	if s.containerID != "" {
 		env := &network.Environment{ID: s.containerID}
-		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
+		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
 			log.G(ctx).WithError(err).WithField("id", s.containerID).Warn("failed to release network resources")
 		}
 	}
@@ -681,7 +681,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 			return
 		}
 		env := &network.Environment{ID: r.ID}
-		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
+		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
 			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup network resources after failure")
 		}
 		networkCleanupDone = true
@@ -1045,7 +1045,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	// This ensures QEMU has exited and closed TAP FDs before CNI deletes the TAP interface
 	if needNetworkClean {
 		env := &network.Environment{ID: r.ID}
-		if err := s.networkManager.ReleaseNetworkResources(env); err != nil {
+		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
 			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
 		}
 	}
