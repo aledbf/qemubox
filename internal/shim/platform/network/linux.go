@@ -1,6 +1,6 @@
 //go:build linux
 
-package task
+package network
 
 import (
 	"context"
@@ -11,14 +11,55 @@ import (
 	"github.com/docker/docker/libnetwork/resolvconf"
 
 	"github.com/aledbf/qemubox/containerd/internal/host/network"
+	boltstore "github.com/aledbf/qemubox/containerd/internal/host/store"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/aledbf/qemubox/containerd/internal/paths"
 )
 
-// setupNetworking sets up networking using NetworkManager for dynamic IP allocation
+type linuxManager struct{}
+
+func newManager() Manager {
+	return &linuxManager{}
+}
+
+// InitNetworkManager creates and initializes a new NetworkManager instance.
+// Qemubox uses CNI (Container Network Interface) for all network management.
+// This store persists CNI network configuration metadata; IP allocation
+// is delegated to CNI IPAM plugins (state stored in /var/lib/cni/networks/).
+func (m *linuxManager) InitNetworkManager(ctx context.Context) (network.NetworkManager, error) {
+	// Create BoltDB store for CNI network configuration metadata
+	dbPath := paths.CNIConfigDBPath()
+
+	networkConfigStore, err := boltstore.NewBoltStore[network.NetworkConfig](
+		dbPath, "network_configs",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create CNI network config store: %w", err)
+	}
+
+	// Load CNI network configuration from environment
+	netCfg := network.LoadNetworkConfig()
+
+	// Create CNI-based NetworkManager
+	nm, err := network.NewNetworkManager(
+		ctx,
+		netCfg,
+		networkConfigStore,
+	)
+	if err != nil {
+		_ = networkConfigStore.Close()
+		return nil, fmt.Errorf("create CNI network manager: %w", err)
+	}
+
+	log.G(ctx).Info("NetworkManager initialized")
+	return nm, nil
+}
+
+// Setup sets up networking using NetworkManager for dynamic IP allocation
 // and TAP device management. NetworkManager handles bridge creation, IP allocation,
 // TAP device lifecycle, and NFTables rules.
-// Returns the network configuration that should be passed to the VM kernel
-func setupNetworking(ctx context.Context, nm network.NetworkManager, vmi vm.Instance, containerID, netnsPath string) (*vm.NetworkConfig, error) {
+// Returns the network configuration that should be passed to the VM kernel.
+func (m *linuxManager) Setup(ctx context.Context, nm network.NetworkManager, vmi vm.Instance, containerID, netnsPath string) (*vm.NetworkConfig, error) {
 	log.G(ctx).WithField("id", containerID).Info("setting up NetworkManager-based networking")
 
 	// Create environment for this container

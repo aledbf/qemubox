@@ -1,0 +1,350 @@
+//go:build linux
+
+package mounts
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/containerd/containerd/api/types"
+	"github.com/containerd/containerd/v2/core/mount"
+	"github.com/containerd/errdefs"
+	"github.com/containerd/log"
+
+	"github.com/aledbf/qemubox/containerd/internal/host/erofs"
+	"github.com/aledbf/qemubox/containerd/internal/host/mountutil"
+	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+)
+
+type linuxManager struct{}
+
+func newManager() Manager {
+	return &linuxManager{}
+}
+
+func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, rootfsMounts []*types.Mount, bundleRootfs string, mountDir string) ([]*types.Mount, error) {
+	// Try virtiofs first (not currently implemented for QEMU), fall back to block devices
+
+	if len(rootfsMounts) == 1 && (rootfsMounts[0].Type == "overlay" || rootfsMounts[0].Type == "bind") {
+		tag := fmt.Sprintf("rootfs-%s", id)
+		// Keep disk ID reasonably short for logging and tracking
+		if len(tag) > 36 {
+			tag = tag[:36]
+		}
+		mnt := mount.Mount{
+			Type:    rootfsMounts[0].Type,
+			Source:  rootfsMounts[0].Source,
+			Options: rootfsMounts[0].Options,
+		}
+		if err := mnt.Mount(bundleRootfs); err != nil {
+			return nil, err
+		}
+		if err := vmi.AddFS(ctx, tag, bundleRootfs); err != nil {
+			return nil, err
+		}
+		return []*types.Mount{{
+			Type:    "virtiofs",
+			Source:  tag,
+			Options: translateMountOptions(ctx, rootfsMounts[0].Options),
+		}}, nil
+	} else if len(rootfsMounts) == 0 {
+		tag := fmt.Sprintf("rootfs-%s", id)
+		// Keep disk ID reasonably short for logging and tracking
+		if len(tag) > 36 {
+			tag = tag[:36]
+		}
+		if err := vmi.AddFS(ctx, tag, bundleRootfs); err != nil {
+			return nil, err
+		}
+		return []*types.Mount{{
+			Type:   "virtiofs",
+			Source: tag,
+		}}, nil
+	}
+	mounts, err := m.transformMounts(ctx, vmi, id, rootfsMounts)
+	if err != nil && errdefs.IsNotImplemented(err) {
+		if err := mountutil.All(ctx, bundleRootfs, mountDir, rootfsMounts); err != nil {
+			return nil, err
+		}
+
+		// Fallback to original rootfs mount
+		tag := fmt.Sprintf("rootfs-%s", id)
+		// Keep disk ID reasonably short for logging and tracking
+		if len(tag) > 36 {
+			tag = tag[:36]
+		}
+		if err := vmi.AddFS(ctx, tag, bundleRootfs); err != nil {
+			return nil, err
+		}
+		return []*types.Mount{{
+			Type:   "virtiofs",
+			Source: tag,
+		}}, nil
+	}
+	return mounts, err
+}
+
+type diskOptions struct {
+	name     string
+	source   string
+	readOnly bool
+	vmdk     bool
+}
+
+// transformMounts does not perform any local mounts but transforms
+// the mounts to be used inside the VM via virtio.
+func (m *linuxManager) transformMounts(ctx context.Context, vmi vm.Instance, id string, ms []*types.Mount) ([]*types.Mount, error) {
+	disks := byte('a')
+	var (
+		addDisks []diskOptions
+		am       []*types.Mount
+	)
+
+	for _, mnt := range ms {
+		mounts, disksToAdd, err := m.transformMount(ctx, id, &disks, mnt)
+		if err != nil {
+			return nil, err
+		}
+		am = append(am, mounts...)
+		addDisks = append(addDisks, disksToAdd...)
+	}
+
+	if len(addDisks) > 10 {
+		return nil, fmt.Errorf("exceeded maximum virtio disk count: %d > 10: %w", len(addDisks), errdefs.ErrNotImplemented)
+	}
+
+	if err := m.addDisksToVM(ctx, vmi, addDisks); err != nil {
+		return nil, err
+	}
+
+	return am, nil
+}
+
+func (m *linuxManager) transformMount(ctx context.Context, id string, disks *byte, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
+	switch mnt.Type {
+	case "erofs":
+		return m.handleEROFS(ctx, id, disks, mnt)
+	case "ext4":
+		return m.handleExt4(id, disks, mnt)
+	case "overlay", "format/overlay", "format/mkdir/overlay":
+		if err := m.validateOverlay(ctx, mnt); err != nil {
+			return nil, nil, err
+		}
+		return []*types.Mount{mnt}, nil, nil
+	default:
+		return []*types.Mount{mnt}, nil, nil
+	}
+}
+
+func (m *linuxManager) handleEROFS(ctx context.Context, id string, disks *byte, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
+	disk := fmt.Sprintf("disk-%d-%s", *disks, id)
+	// Keep disk ID reasonably short for logging and tracking
+	if len(disk) > 36 {
+		disk = disk[:36]
+	}
+
+	var options []string
+	devices := []string{mnt.Source}
+
+	// Extract device= options which specify additional EROFS layers
+	for _, o := range mnt.Options {
+		if d, found := strings.CutPrefix(o, "device="); found {
+			devices = append(devices, d)
+			continue
+		}
+		options = append(options, o)
+	}
+
+	addDisks := []diskOptions{{
+		name:     disk,
+		source:   mnt.Source,
+		readOnly: true,
+		vmdk:     false,
+	}}
+
+	// If multiple layers, generate VMDK descriptor to merge them
+	if len(devices) > 1 {
+		mergedfsPath := filepath.Dir(mnt.Source) + "/merged_fs.vmdk"
+		if _, err := os.Stat(mergedfsPath); err != nil {
+			if !os.IsNotExist(err) {
+				log.G(ctx).WithError(err).Warnf("failed to stat %v", mergedfsPath)
+				return nil, nil, errdefs.ErrNotImplemented
+			}
+			if err := erofs.DumpVMDKDescriptorToFile(mergedfsPath, 0xfffffffe, devices); err != nil {
+				log.G(ctx).WithError(err).Warnf("failed to generate %v", mergedfsPath)
+				return nil, nil, errdefs.ErrNotImplemented
+			}
+		}
+		addDisks[0].source = mergedfsPath
+		addDisks[0].vmdk = true
+	}
+
+	out := &types.Mount{
+		Type:    "erofs",
+		Source:  fmt.Sprintf("/dev/vd%c", *disks),
+		Target:  mnt.Target,
+		Options: filterOptions(options),
+	}
+	*disks++
+	return []*types.Mount{out}, addDisks, nil
+}
+
+func (m *linuxManager) handleExt4(id string, disks *byte, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
+	disk := fmt.Sprintf("disk-%d-%s", *disks, id)
+	// Keep disk ID reasonably short for logging and tracking
+	if len(disk) > 36 {
+		disk = disk[:36]
+	}
+	// Check if mount should be read-only
+	readOnly := false
+	for _, opt := range mnt.Options {
+		if opt == "ro" || opt == "readonly" {
+			readOnly = true
+			break
+		}
+	}
+	mnt.Options = filterOptions(mnt.Options)
+	out := &types.Mount{
+		Type:    "ext4",
+		Source:  fmt.Sprintf("/dev/vd%c", *disks),
+		Target:  mnt.Target,
+		Options: mnt.Options,
+	}
+	*disks++
+
+	addDisks := []diskOptions{{
+		name:     disk,
+		source:   mnt.Source,
+		readOnly: readOnly,
+		vmdk:     false,
+	}}
+	return []*types.Mount{out}, addDisks, nil
+}
+
+func (m *linuxManager) validateOverlay(ctx context.Context, mnt *types.Mount) error {
+	var (
+		wdi = -1
+		udi = -1
+	)
+	for i, opt := range mnt.Options {
+		if strings.HasPrefix(opt, "upperdir=") {
+			udi = i
+		} else if strings.HasPrefix(opt, "workdir=") {
+			wdi = i
+		}
+		// Note: virtiofs for lowerdir is not handled here.
+	}
+	if wdi > -1 && udi > -1 {
+		//
+		// If any upperdir or workdir isn't transformed, they both
+		// should fall back to virtiofs passthroughfs.  But...
+		//
+		if !strings.Contains(mnt.Options[wdi], "{{") ||
+			!strings.Contains(mnt.Options[udi], "{{") {
+			// Having the upper as virtiofs may return invalid argument, avoid
+			// transforming and attempt to perform the mounts on the host if
+			// supported.
+			return fmt.Errorf("cannot use virtiofs for upper dir in overlay: %w", errdefs.ErrNotImplemented)
+		}
+	} else {
+		log.G(ctx).WithField("options", mnt.Options).Warnf("overlayfs missing workdir or upperdir")
+	}
+	return nil
+}
+
+func (m *linuxManager) addDisksToVM(ctx context.Context, vmi vm.Instance, disks []diskOptions) error {
+	for _, do := range disks {
+		var opts []vm.MountOpt
+		if do.readOnly {
+			opts = append(opts, vm.WithReadOnly())
+		}
+		if do.vmdk {
+			opts = append(opts, vm.WithVmdk())
+		}
+		if err := vmi.AddDisk(ctx, do.name, do.source, opts...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func filterOptions(options []string) []string {
+	var filtered []string
+	for _, o := range options {
+		switch o {
+		case "loop":
+		default:
+			filtered = append(filtered, o)
+		}
+	}
+	return filtered
+}
+
+// translateMountOptions translates standard mount options to virtiofs-compatible options.
+// Note: virtiofs is not currently implemented for QEMU (uses virtio-blk instead).
+// This function exists for potential future virtiofs support.
+func translateMountOptions(ctx context.Context, options []string) []string {
+	var translated []string
+
+	// Map of mount options that are compatible with virtiofs
+	// or need translation
+	compatibleOptions := map[string]string{
+		"ro":       "ro",
+		"rw":       "rw",
+		"nodev":    "nodev",
+		"nosuid":   "nosuid",
+		"noexec":   "noexec",
+		"relatime": "relatime",
+		"noatime":  "noatime",
+	}
+
+	// Options that should be dropped (not supported by virtiofs)
+	droppedOptions := map[string]bool{
+		"rbind":       true,
+		"bind":        true,
+		"rprivate":    true,
+		"private":     true,
+		"rshared":     true,
+		"shared":      true,
+		"rslave":      true,
+		"slave":       true,
+		"remount":     true,
+		"strictatime": true,
+	}
+
+	for _, opt := range options {
+		// Check if it's a compatible option
+		if mappedOpt, ok := compatibleOptions[opt]; ok {
+			translated = append(translated, mappedOpt)
+			continue
+		}
+
+		// Check if it should be dropped
+		if droppedOptions[opt] {
+			log.G(ctx).WithField("option", opt).Debug("dropping incompatible virtiofs mount option")
+			continue
+		}
+
+		// For options with values (e.g., "uid=1000"), check the prefix
+		if strings.Contains(opt, "=") {
+			parts := strings.SplitN(opt, "=", 2)
+			switch parts[0] {
+			case "uid", "gid", "fmode", "dmode":
+				// These options might be supported, include them
+				translated = append(translated, opt)
+			default:
+				// Unknown option with value, log and skip
+				log.G(ctx).WithField("option", opt).Debug("skipping unknown virtiofs mount option")
+			}
+			continue
+		}
+
+		// Unknown option without value, log and skip
+		log.G(ctx).WithField("option", opt).Debug("skipping unknown virtiofs mount option")
+	}
+
+	return translated
+}
