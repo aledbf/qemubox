@@ -25,6 +25,11 @@ const (
 	// KVM ioctl obtained by running: printf("KVM_GET_API_VERSION: 0x%llX\n", KVM_GET_API_VERSION);
 	ioctlKVMGetAPIVersion = 0xAE00
 	expectedKVMAPIVersion = 12
+
+	// vsockRetryInterval is the delay between vsock connection attempts.
+	// 200ms balances quick recovery (for transient errors) against
+	// wasted CPU cycles (when VM is genuinely down).
+	vsockRetryInterval = 200 * time.Millisecond
 )
 
 // Manager manages VM instances and their lifecycle.
@@ -115,7 +120,7 @@ func (m *Manager) DialClientWithRetry(ctx context.Context, maxWait time.Duration
 		if time.Now().After(deadline) {
 			return nil, err
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(vsockRetryInterval)
 	}
 }
 
