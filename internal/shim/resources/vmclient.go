@@ -13,17 +13,21 @@ import (
 	systemAPI "github.com/aledbf/qemubox/containerd/api/services/system/v1"
 )
 
+// closeClient closes a TTRPC client and logs any errors.
+func closeClient(ctx context.Context, client *ttrpc.Client, operation string) {
+	if err := client.Close(); err != nil {
+		log.G(ctx).WithError(err).WithField("operation", operation).
+			Warn("failed to close TTRPC client")
+	}
+}
+
 // getCPUStats retrieves CPU usage statistics from the container via TTRPC.
 func getCPUStats(ctx context.Context, dialClient func(context.Context) (*ttrpc.Client, error), containerID string) (uint64, uint64, error) {
 	vmc, err := dialClient(ctx)
 	if err != nil {
 		return 0, 0, err
 	}
-	defer func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close client in CPU stats")
-		}
-	}()
+	defer closeClient(ctx, vmc, "CPU stats")
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
 	if err != nil {
@@ -52,11 +56,7 @@ func offlineCPU(ctx context.Context, dialClient func(context.Context) (*ttrpc.Cl
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close client in CPU offline")
-		}
-	}()
+	defer closeClient(ctx, vmc, "CPU offline")
 	client := systemAPI.NewTTRPCSystemClient(vmc)
 	_, err = client.OfflineCPU(ctx, &systemAPI.OfflineCPURequest{CpuID: uint32(cpuID)})
 	return err
@@ -68,11 +68,7 @@ func onlineCPU(ctx context.Context, dialClient func(context.Context) (*ttrpc.Cli
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close client in CPU online")
-		}
-	}()
+	defer closeClient(ctx, vmc, "CPU online")
 	client := systemAPI.NewTTRPCSystemClient(vmc)
 	_, err = client.OnlineCPU(ctx, &systemAPI.OnlineCPURequest{CpuID: uint32(cpuID)})
 	return err
@@ -84,11 +80,7 @@ func getMemoryStats(ctx context.Context, dialClient func(context.Context) (*ttrp
 	if err != nil {
 		return 0, err
 	}
-	defer func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close client in memory stats")
-		}
-	}()
+	defer closeClient(ctx, vmc, "memory stats")
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Stats(ctx, &taskAPI.StatsRequest{ID: containerID})
 	if err != nil {
@@ -117,11 +109,7 @@ func offlineMemory(ctx context.Context, dialClient func(context.Context) (*ttrpc
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close client in memory offline")
-		}
-	}()
+	defer closeClient(ctx, vmc, "memory offline")
 	client := systemAPI.NewTTRPCSystemClient(vmc)
 	_, err = client.OfflineMemory(ctx, &systemAPI.OfflineMemoryRequest{MemoryID: uint32(memoryID)})
 	return err
@@ -133,11 +121,7 @@ func onlineMemory(ctx context.Context, dialClient func(context.Context) (*ttrpc.
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close client in memory online")
-		}
-	}()
+	defer closeClient(ctx, vmc, "memory online")
 	client := systemAPI.NewTTRPCSystemClient(vmc)
 	_, err = client.OnlineMemory(ctx, &systemAPI.OnlineMemoryRequest{MemoryID: uint32(memoryID)})
 	return err
