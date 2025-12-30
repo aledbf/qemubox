@@ -404,6 +404,7 @@ tasks:
 
         TEST_ID="qbx-ci-$(date +%s)"
         ${SUDO} env \
+          PATH="${PATH}" \
           QEMUBOX_CONTAINERD_SOCKET="${SOCKET}" \
           QEMUBOX_IMAGE="{{.INTEGRATION_IMAGE}}" \
           QEMUBOX_RUNTIME="{{.INTEGRATION_RUNTIME}}" \
