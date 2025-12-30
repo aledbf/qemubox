@@ -85,19 +85,27 @@ func StartCPUHotplug(
 			log.G(ctx).WithError(err).Error("cpu-hotplug: invalid monitor_interval, using defaults")
 			cpuConfig = cpuhotplug.DefaultConfig()
 		} else {
-			scaleUpCooldown, _ := time.ParseDuration(cfg.CPUHotplug.ScaleUpCooldown)
-			scaleDownCooldown, _ := time.ParseDuration(cfg.CPUHotplug.ScaleDownCooldown)
+			scaleUpCooldown, err1 := time.ParseDuration(cfg.CPUHotplug.ScaleUpCooldown)
+			scaleDownCooldown, err2 := time.ParseDuration(cfg.CPUHotplug.ScaleDownCooldown)
 
-			cpuConfig = cpuhotplug.Config{
-				MonitorInterval:      monitorInterval,
-				ScaleUpCooldown:      scaleUpCooldown,
-				ScaleDownCooldown:    scaleDownCooldown,
-				ScaleUpThreshold:     cfg.CPUHotplug.ScaleUpThreshold,
-				ScaleDownThreshold:   cfg.CPUHotplug.ScaleDownThreshold,
-				ScaleUpThrottleLimit: cfg.CPUHotplug.ScaleUpThrottleLimit,
-				ScaleUpStability:     cfg.CPUHotplug.ScaleUpStability,
-				ScaleDownStability:   cfg.CPUHotplug.ScaleDownStability,
-				EnableScaleDown:      cfg.CPUHotplug.EnableScaleDown,
+			if err1 != nil || err2 != nil {
+				log.G(ctx).WithFields(log.Fields{
+					"scale_up_err":   err1,
+					"scale_down_err": err2,
+				}).Error("cpu-hotplug: invalid cooldown durations, using defaults")
+				cpuConfig = cpuhotplug.DefaultConfig()
+			} else {
+				cpuConfig = cpuhotplug.Config{
+					MonitorInterval:      monitorInterval,
+					ScaleUpCooldown:      scaleUpCooldown,
+					ScaleDownCooldown:    scaleDownCooldown,
+					ScaleUpThreshold:     cfg.CPUHotplug.ScaleUpThreshold,
+					ScaleDownThreshold:   cfg.CPUHotplug.ScaleDownThreshold,
+					ScaleUpThrottleLimit: cfg.CPUHotplug.ScaleUpThrottleLimit,
+					ScaleUpStability:     cfg.CPUHotplug.ScaleUpStability,
+					ScaleDownStability:   cfg.CPUHotplug.ScaleDownStability,
+					EnableScaleDown:      cfg.CPUHotplug.EnableScaleDown,
+				}
 			}
 		}
 	}
