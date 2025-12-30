@@ -130,6 +130,11 @@ const (
 	// possible while still catching most logs. Logs lost after this timeout are
 	// considered acceptable data loss (VM is shutting down anyway).
 	eventStreamShutdownDelay = 2 * time.Second
+
+	// eventStreamReconnectTimeout is how long we try to reconnect the event stream.
+	// 2 seconds allows for brief VM pauses (e.g., during snapshot operations)
+	// without triggering shim shutdown, while still detecting genuine VM failures quickly.
+	eventStreamReconnectTimeout = 2 * time.Second
 )
 
 var (
@@ -569,7 +574,7 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 // reconnectEventStream attempts to reconnect the event stream within a deadline.
 // Returns the new client, stream, and whether reconnection succeeded.
 func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Client) (*ttrpc.Client, vmevents.TTRPCEvents_StreamClient, bool) {
-	reconnectDeadline := time.Now().Add(2 * time.Second)
+	reconnectDeadline := time.Now().Add(eventStreamReconnectTimeout)
 
 	for time.Now().Before(reconnectDeadline) {
 		if s.intentionalShutdown.Load() {
@@ -577,7 +582,7 @@ func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Cli
 			return nil, nil, false
 		}
 
-		newClient, dialErr := s.vmLifecycle.DialClientWithRetry(ctx, 2*time.Second)
+		newClient, dialErr := s.vmLifecycle.DialClientWithRetry(ctx, eventStreamReconnectTimeout)
 		if dialErr != nil {
 			log.G(ctx).WithError(dialErr).Debug("event stream reconnect: dial failed")
 			time.Sleep(200 * time.Millisecond)
