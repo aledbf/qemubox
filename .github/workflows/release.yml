@@ -28,6 +28,11 @@ jobs:
           if command -v go &> /dev/null; then
             echo "exists=true" >> $GITHUB_OUTPUT
             echo "Go already installed: $(go version)"
+            # Ensure Go is in PATH
+            GO_BIN_DIR=$(dirname $(command -v go))
+            echo "${GO_BIN_DIR}" >> $GITHUB_PATH
+            # Also add GOPATH/bin
+            echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
           else
             echo "exists=false" >> $GITHUB_OUTPUT
             echo "Go not found"
