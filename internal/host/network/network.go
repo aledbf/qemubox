@@ -20,9 +20,9 @@
 //   - Worker shares result/error with all waiters via the channel
 //
 // Locking Order (when holding multiple locks):
-//   1. inflightMu (always acquire first if needed)
-//   2. cniMu (acquire second)
-//   Never hold inflightMu during CNI operations (expensive I/O)
+//  1. inflightMu (always acquire first if needed)
+//  2. cniMu (acquire second)
+//     Never hold inflightMu during CNI operations (expensive I/O)
 //
 // Goroutine Ownership:
 //   - Each ensureNetworkResourcesCNI call runs in caller's goroutine

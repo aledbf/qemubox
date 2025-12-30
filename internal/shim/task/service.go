@@ -8,8 +8,8 @@
 // a combination of mutexes and atomics:
 //
 // Locks (must be acquired in this order to prevent deadlocks):
-//   1. containerMu - Protects container field and containerID
-//   2. controllerMu - Protects hotplug controller maps
+//  1. containerMu - Protects container field and containerID
+//  2. controllerMu - Protects hotplug controller maps
 //
 // Lock Usage:
 //   - containerMu: Hold when reading/writing container or containerID
@@ -32,10 +32,10 @@
 //
 // Channel Usage:
 //   - events channel (buffered, size 128):
-//     * Producers: VM event stream, task service operations
-//     * Consumer: Event forwarder goroutine
-//     * Closed during shutdown to signal forwarder to exit
-//     * Buffer size prevents event loss during brief containerd unavailability
+//   - Producers: VM event stream, task service operations
+//   - Consumer: Event forwarder goroutine
+//   - Closed during shutdown to signal forwarder to exit
+//   - Buffer size prevents event loss during brief containerd unavailability
 //
 // Resource Lifecycle:
 //   - VM instance: Created in Create(), started in Create(), stopped in shutdown()
@@ -45,14 +45,14 @@
 //   - I/O streams: Created per container/exec, closed in shutdown()
 //
 // Shutdown Sequence:
-//   1. shutdown() called (via Delete or process exit)
-//   2. Lock containerMu and controllerMu
-//   3. Stop all hotplug controllers (graceful stop)
-//   4. Close all I/O streams (exec processes, then container)
-//   5. Shutdown VM (sends SIGTERM to QEMU, waits for exit)
-//   6. Release network resources (CNI teardown)
-//   7. Close network manager
-//   8. Close events channel (signals forwarder to exit)
+//  1. shutdown() called (via Delete or process exit)
+//  2. Lock containerMu and controllerMu
+//  3. Stop all hotplug controllers (graceful stop)
+//  4. Close all I/O streams (exec processes, then container)
+//  5. Shutdown VM (sends SIGTERM to QEMU, waits for exit)
+//  6. Release network resources (CNI teardown)
+//  7. Close network manager
+//  8. Close events channel (signals forwarder to exit)
 //
 // Concurrency Invariants:
 //   - Only one container per service (enforced in Create)
@@ -197,10 +197,10 @@ type service struct {
 	controllerMu sync.Mutex // Protects: cpuHotplugControllers, memoryHotplugControllers
 
 	// === Dependency Managers (thread-safe, injected at construction) ===
-	vmLifecycle     *lifecycle.Manager        // VM process management (internal locking)
-	networkManager  network.NetworkManager    // CNI network operations (internal locking)
-	platformMounts  platformMounts.Manager    // Mount configuration (stateless)
-	platformNetwork platformNetwork.Manager   // Network namespace setup (stateless)
+	vmLifecycle     *lifecycle.Manager      // VM process management (internal locking)
+	networkManager  network.NetworkManager  // CNI network operations (internal locking)
+	platformMounts  platformMounts.Manager  // Mount configuration (stateless)
+	platformNetwork platformNetwork.Manager // Network namespace setup (stateless)
 
 	// === Container State (protected by containerMu) ===
 	// qemubox enforces 1 container per VM per shim - Create() rejects if already set
@@ -220,11 +220,11 @@ type service struct {
 	events chan any
 
 	// === Shutdown Coordination ===
-	initiateShutdown    func()       // Callback to trigger shutdown service
-	eventsClosed        atomic.Bool  // True when events channel is closed
-	eventsCloseOnce     sync.Once    // Ensures events channel closed exactly once
-	intentionalShutdown atomic.Bool  // True for clean shutdown, false for VM crash
-	deletionInProgress  atomic.Bool  // True during Delete() to reject concurrent Create()
+	initiateShutdown    func()      // Callback to trigger shutdown service
+	eventsClosed        atomic.Bool // True when events channel is closed
+	eventsCloseOnce     sync.Once   // Ensures events channel closed exactly once
+	intentionalShutdown atomic.Bool // True for clean shutdown, false for VM crash
+	deletionInProgress  atomic.Bool // True during Delete() to reject concurrent Create()
 	shutdownSvc         shutdown.Service
 	inflight            atomic.Int64 // Count of in-flight RPC calls for graceful shutdown
 }
