@@ -2,8 +2,11 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -374,9 +377,15 @@ func isClosedConnError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Check for "use of closed network connection"
-	return err.Error() == "use of closed network connection" ||
-		err.Error() == "read: connection reset by peer"
+	// Check for typed errors first (Go 1.16+)
+	var netErr *net.OpError
+	if errors.As(err, &netErr) && errors.Is(netErr.Err, net.ErrClosed) {
+		return true
+	}
+	// Fallback to string matching for vsock-specific errors or older Go versions
+	msg := err.Error()
+	return msg == "use of closed network connection" ||
+		msg == "read: connection reset by peer"
 }
 
 // isAlreadyClosedError checks if the error is an "already closed" error.
@@ -385,7 +394,11 @@ func isAlreadyClosedError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Check for "file already closed" or "close of closed"
+	// Check for fs.ErrClosed (Go 1.16+)
+	if errors.Is(err, fs.ErrClosed) {
+		return true
+	}
+	// Fallback to string matching for compatibility
 	errStr := err.Error()
 	return errStr == "file already closed" ||
 		errStr == "close of closed file" ||
