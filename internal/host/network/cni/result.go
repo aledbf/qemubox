@@ -64,20 +64,19 @@ func ParseCNIResultWithNetNS(result *current.Result, netnsPath string) (*CNIResu
 	}
 
 	// Parse IP address, netmask, and gateway
-	var ipAddress net.IP
+	if len(result.IPs) == 0 {
+		return nil, fmt.Errorf("CNI result contains no IP addresses")
+	}
+
+	// Use the first IP configuration
+	ipConfig := result.IPs[0]
+	ipAddress := ipConfig.Address.IP
+	gateway := ipConfig.Gateway
+
+	// Extract netmask from the IPNet
 	var netmask string
-	var gateway net.IP
-
-	if len(result.IPs) > 0 {
-		// Use the first IP configuration
-		ipConfig := result.IPs[0]
-		ipAddress = ipConfig.Address.IP
-		gateway = ipConfig.Gateway
-
-		// Extract netmask from the IPNet
-		if ipConfig.Address.Mask != nil {
-			netmask = net.IP(ipConfig.Address.Mask).String()
-		}
+	if ipConfig.Address.Mask != nil {
+		netmask = net.IP(ipConfig.Address.Mask).String()
 	}
 
 	return &CNIResult{
