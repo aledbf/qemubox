@@ -984,22 +984,25 @@ func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error
 	return nil
 }
 
+// closeAndLog is a helper to close a resource and log any errors.
+// It checks for nil before closing to avoid panics.
+func closeAndLog(logger *log.Entry, name string, closer io.Closer) {
+	if closer == nil {
+		return
+	}
+	if err := closer.Close(); err != nil {
+		logger.WithError(err).WithField("resource", name).Debug("error closing resource")
+	}
+}
+
 func (q *Instance) cleanupResources(logger *log.Entry) {
 	// Close QMP client
-	if q.qmpClient != nil {
-		if err := q.qmpClient.Close(); err != nil {
-			logger.WithError(err).Debug("qemu: error closing QMP client")
-		}
-		q.qmpClient = nil
-	}
+	closeAndLog(logger, "qmp", q.qmpClient)
+	q.qmpClient = nil
 
 	// Close console file (this will also stop the FIFO streaming goroutine)
-	if q.consoleFile != nil {
-		if err := q.consoleFile.Close(); err != nil {
-			logger.WithError(err).Debug("qemu: error closing console file")
-		}
-		q.consoleFile = nil
-	}
+	closeAndLog(logger, "console", q.consoleFile)
+	q.consoleFile = nil
 
 	// Remove FIFO pipe
 	if q.consoleFifoPath != "" {
@@ -1038,18 +1041,14 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 	// Close TTRPC client to stop guest communication
 	if q.client != nil {
 		logger.Debug("qemu: closing TTRPC client")
-		if err := q.client.Close(); err != nil {
-			logger.WithError(err).Debug("qemu: error closing TTRPC client")
-		}
+		closeAndLog(logger, "ttrpc", q.client)
 		q.client = nil
 	}
 
 	// Close vsock listener
 	if q.vsockConn != nil {
 		logger.Debug("qemu: closing vsock connection")
-		if err := q.vsockConn.Close(); err != nil {
-			logger.WithError(err).Debug("qemu: error closing vsock connection")
-		}
+		closeAndLog(logger, "vsock", q.vsockConn)
 		q.vsockConn = nil
 	}
 
