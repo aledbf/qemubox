@@ -820,15 +820,14 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) ([]string, error) {
 
 // Client returns the long-lived TTRPC client for communicating with the guest.
 // This is used for the event stream and should not be shared for concurrent RPCs.
-func (q *Instance) Client() *ttrpc.Client {
-	// Return nil if VM is shutdown
+func (q *Instance) Client() (*ttrpc.Client, error) {
 	if q.getState() != vmStateRunning {
-		return nil
+		return nil, fmt.Errorf("vm not running: %w", errdefs.ErrFailedPrecondition)
 	}
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.client
+	return q.client, nil
 }
 
 // DialClient creates a short-lived TTRPC client for one-off RPCs.
@@ -881,15 +880,14 @@ func (q *Instance) QMPClient() *qmpClient {
 }
 
 // CPUHotplugger returns an interface for CPU hotplug operations
-func (q *Instance) CPUHotplugger() vm.CPUHotplugger {
-	// Return nil if VM is shutdown
+func (q *Instance) CPUHotplugger() (vm.CPUHotplugger, error) {
 	if q.getState() == vmStateShutdown {
-		return nil
+		return nil, fmt.Errorf("vm shutdown: %w", errdefs.ErrFailedPrecondition)
 	}
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.qmpClient
+	return q.qmpClient, nil
 }
 
 func (q *Instance) shutdownGuest(ctx context.Context, logger *log.Entry) {

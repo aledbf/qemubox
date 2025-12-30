@@ -1,27 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(grep:*)",
-      "Bash(git mv:*)",
-      "Bash(find:*)",
-      "Bash(task proto:*)",
-      "Bash(task protos:*)",
-      "Bash(go mod tidy:*)",
-      "Bash(task build:shim)",
-      "Bash(go test:*)",
-      "Bash(GOOS=linux go test:*)",
-      "Bash(go build:*)",
-      "Bash(go tool cover:*)",
-      "Bash(gofmt:*)",
-      "Bash(golangci-lint run:*)",
-      "Bash(task lint:*)",
-      "Bash(GOOS=linux go build:*)",
-      "Bash(tree:*)",
-      "Bash(wc:*)",
-      "Bash(go doc:*)",
-      "Bash(go list:*)",
-      "Bash(GOOS=linux go vet:*)",
-      "Bash(GOOS=linux task lint:*)"
+      "Bash(*:*)",
+      "Bash(ls:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(payload\" don''t indicate which container failed or which operation,\nmaking troubleshooting difficult.\n\nAdded container ID to all error messages in getCPUStats\\(\\) and\ngetMemoryStats\\(\\) to provide better context for operators:\n- \"missing stats payload\" -> \"container X: missing CPU/memory stats payload\"\n- \"missing CPU/memory stats\" -> \"container X: missing CPU/memory stats in metrics\"\n- Also improved unmarshal error to include context\n\nChanges:\n- internal/shim/resources/vmclient.go: Add containerID to error messages\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }

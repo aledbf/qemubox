@@ -110,9 +110,15 @@ func StartCPUHotplug(
 		}
 	}
 
+	hotplugger, err := vmi.CPUHotplugger()
+	if err != nil {
+		log.G(ctx).WithError(err).Warn("cpu-hotplug: failed to get CPU hotplugger")
+		return nil
+	}
+
 	controller := cpuhotplug.NewController(
 		containerID,
-		vmi.CPUHotplugger(),
+		hotplugger,
 		func(ctx context.Context) (uint64, uint64, error) {
 			return callbacks.GetCPUStats(ctx, containerID)
 		},

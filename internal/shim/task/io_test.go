@@ -50,8 +50,8 @@ func (m *mockVMInstance) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockVMInstance) Client() *ttrpc.Client {
-	return nil
+func (m *mockVMInstance) Client() (*ttrpc.Client, error) {
+	return nil, errNotImplemented
 }
 
 func (m *mockVMInstance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
@@ -68,8 +68,8 @@ func (m *mockVMInstance) VMInfo() vm.VMInfo {
 	return vm.VMInfo{}
 }
 
-func (m *mockVMInstance) CPUHotplugger() vm.CPUHotplugger {
-	return nil
+func (m *mockVMInstance) CPUHotplugger() (vm.CPUHotplugger, error) {
+	return nil, errNotImplemented
 }
 
 // mockConn implements net.Conn for testing

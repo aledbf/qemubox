@@ -89,11 +89,7 @@ func (m *Manager) Client() (*ttrpc.Client, error) {
 	if m.instance == nil {
 		return nil, fmt.Errorf("vm not created: %w", errdefs.ErrFailedPrecondition)
 	}
-	client := m.instance.Client()
-	if client == nil {
-		return nil, fmt.Errorf("vm not running: %w", errdefs.ErrFailedPrecondition)
-	}
-	return client, nil
+	return m.instance.Client()
 }
 
 // DialClient creates a new TTRPC client connection to the VM.

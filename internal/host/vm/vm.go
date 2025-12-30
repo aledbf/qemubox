@@ -133,14 +133,14 @@ type Instance interface {
 	Shutdown(ctx context.Context) error
 
 	// Communication with guest
-	Client() *ttrpc.Client
+	Client() (*ttrpc.Client, error)
 	// DialClient creates a new, short-lived TTRPC client connection to the guest.
 	// Callers must close the returned client when done.
 	DialClient(ctx context.Context) (*ttrpc.Client, error)
 	StartStream(ctx context.Context) (uint32, net.Conn, error)
 
 	// Resource management
-	CPUHotplugger() CPUHotplugger
+	CPUHotplugger() (CPUHotplugger, error)
 
 	// Metadata
 	VMInfo() VMInfo
