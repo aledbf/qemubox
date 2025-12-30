@@ -90,25 +90,18 @@ func ParseCNIResultWithNetNS(result *current.Result, netnsPath string) (*CNIResu
 }
 
 func readInterfaceMAC(netnsPath, ifName string) (string, error) {
-	targetNS, err := netns.GetFromPath(netnsPath)
-	if err != nil {
-		return "", fmt.Errorf("get target netns: %w", err)
-	}
-	defer func() {
-		if err := targetNS.Close(); err != nil {
-			log.L.WithError(err).Warn("failed to close target netns handle")
-		}
-	}()
-
+	// Get current namespace first so it closes last (LIFO order)
 	origNS, err := netns.Get()
 	if err != nil {
 		return "", fmt.Errorf("get current netns: %w", err)
 	}
-	defer func() {
-		if err := origNS.Close(); err != nil {
-			log.L.WithError(err).Warn("failed to close original netns handle")
-		}
-	}()
+	defer origNS.Close() // Closes last (LIFO)
+
+	targetNS, err := netns.GetFromPath(netnsPath)
+	if err != nil {
+		return "", fmt.Errorf("get target netns: %w", err)
+	}
+	defer targetNS.Close() // Closes first (LIFO)
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
