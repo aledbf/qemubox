@@ -33,16 +33,16 @@ type qmpClient struct {
 
 type qmpCommand struct {
 	Execute   string                 `json:"execute"`
-	Arguments map[string]interface{} `json:"arguments,omitempty"`
+	Arguments map[string]any `json:"arguments,omitempty"`
 	ID        uint64                 `json:"id,omitempty"`
 }
 
 type qmpResponse struct {
-	Return interface{}            `json:"return,omitempty"`
+	Return any            `json:"return,omitempty"`
 	Error  *qmpError              `json:"error,omitempty"`
 	ID     uint64                 `json:"id,omitempty"`
 	Event  string                 `json:"event,omitempty"`
-	Data   map[string]interface{} `json:"data,omitempty"`
+	Data   map[string]any `json:"data,omitempty"`
 }
 
 type qmpError struct {
@@ -136,11 +136,11 @@ func newQMPClient(ctx context.Context, socketPath string) (*qmpClient, error) {
 
 // execute sends a QMP command and waits for response.
 // Returns the response and any error. Most callers ignore the response.
-func (q *qmpClient) execute(ctx context.Context, command string, args map[string]interface{}) (*qmpResponse, error) {
+func (q *qmpClient) execute(ctx context.Context, command string, args map[string]any) (*qmpResponse, error) {
 	return q.sendCommand(ctx, command, args)
 }
 
-func (q *qmpClient) sendCommand(ctx context.Context, command string, args map[string]interface{}) (*qmpResponse, error) {
+func (q *qmpClient) sendCommand(ctx context.Context, command string, args map[string]any) (*qmpResponse, error) {
 	if q.closed.Load() {
 		return nil, fmt.Errorf("QMP client closed")
 	}
@@ -198,41 +198,41 @@ func (q *qmpClient) sendCommand(ctx context.Context, command string, args map[st
 	}
 }
 
-type qmpEventHandler func(logger *log.Entry, data map[string]interface{})
+type qmpEventHandler func(logger *log.Entry, data map[string]any)
 
 var qmpEventHandlers = map[string]qmpEventHandler{
-	"SHUTDOWN": func(logger *log.Entry, data map[string]interface{}) {
+	"SHUTDOWN": func(logger *log.Entry, data map[string]any) {
 		reason := qmpStringField(data, "reason")
 		logger.WithField("reason", reason).Info("qemu: guest initiated shutdown")
 	},
-	"POWERDOWN": func(logger *log.Entry, data map[string]interface{}) {
+	"POWERDOWN": func(logger *log.Entry, data map[string]any) {
 		logger.Info("qemu: ACPI powerdown event received")
 	},
-	"RESET": func(logger *log.Entry, data map[string]interface{}) {
+	"RESET": func(logger *log.Entry, data map[string]any) {
 		logger.Warn("qemu: guest reset/reboot detected")
 	},
-	"STOP": func(logger *log.Entry, data map[string]interface{}) {
+	"STOP": func(logger *log.Entry, data map[string]any) {
 		logger.Debug("qemu: VM execution paused")
 	},
-	"RESUME": func(logger *log.Entry, data map[string]interface{}) {
+	"RESUME": func(logger *log.Entry, data map[string]any) {
 		logger.Debug("qemu: VM execution resumed")
 	},
-	"DEVICE_DELETED": func(logger *log.Entry, data map[string]interface{}) {
+	"DEVICE_DELETED": func(logger *log.Entry, data map[string]any) {
 		deviceID := qmpStringField(data, "device")
 		logger.WithField("device", deviceID).Debug("qemu: device removed")
 	},
-	"NIC_RX_FILTER_CHANGED": func(logger *log.Entry, data map[string]interface{}) {
+	"NIC_RX_FILTER_CHANGED": func(logger *log.Entry, data map[string]any) {
 		nicName := qmpStringField(data, "name")
 		logger.WithField("nic", nicName).Debug("qemu: NIC RX filter changed")
 	},
-	"WATCHDOG": func(logger *log.Entry, data map[string]interface{}) {
+	"WATCHDOG": func(logger *log.Entry, data map[string]any) {
 		action := qmpStringField(data, "action")
 		logger.WithField("action", action).Warn("qemu: watchdog timer expired")
 	},
-	"GUEST_PANICKED": func(logger *log.Entry, data map[string]interface{}) {
+	"GUEST_PANICKED": func(logger *log.Entry, data map[string]any) {
 		logger.Error("qemu: guest kernel panic detected")
 	},
-	"BLOCK_IO_ERROR": func(logger *log.Entry, data map[string]interface{}) {
+	"BLOCK_IO_ERROR": func(logger *log.Entry, data map[string]any) {
 		device := qmpStringField(data, "device")
 		operation := qmpStringField(data, "operation")
 		logger.WithFields(log.Fields{
@@ -242,7 +242,7 @@ var qmpEventHandlers = map[string]qmpEventHandler{
 	},
 }
 
-func qmpStringField(data map[string]interface{}, key string) string {
+func qmpStringField(data map[string]any, key string) string {
 	if data == nil {
 		return "unknown"
 	}
@@ -318,12 +318,12 @@ func (q *qmpClient) eventLoop(ctx context.Context) {
 // This is more reliable than ACPI powerdown for some Linux distributions
 func (q *qmpClient) SendCtrlAltDelete(ctx context.Context) error {
 	// Send CTRL+ALT+DELETE key sequence via QMP
-	keys := []interface{}{
-		map[string]interface{}{"type": "qcode", "data": "ctrl"},
-		map[string]interface{}{"type": "qcode", "data": "alt"},
-		map[string]interface{}{"type": "qcode", "data": "delete"},
+	keys := []any{
+		map[string]any{"type": "qcode", "data": "ctrl"},
+		map[string]any{"type": "qcode", "data": "alt"},
+		map[string]any{"type": "qcode", "data": "delete"},
 	}
-	_, err := q.execute(ctx, "send-key", map[string]interface{}{
+	_, err := q.execute(ctx, "send-key", map[string]any{
 		"keys": keys,
 	})
 	return err
@@ -394,9 +394,9 @@ func (q *qmpClient) QueryStatus(ctx context.Context) (*qmpStatus, error) {
 }
 
 // DeviceAdd hotplugs a device
-func (q *qmpClient) DeviceAdd(ctx context.Context, driver string, args map[string]interface{}) error {
+func (q *qmpClient) DeviceAdd(ctx context.Context, driver string, args map[string]any) error {
 	if args == nil {
-		args = make(map[string]interface{})
+		args = make(map[string]any)
 	}
 	args["driver"] = driver
 	_, err := q.execute(ctx, "device_add", args)
@@ -405,7 +405,7 @@ func (q *qmpClient) DeviceAdd(ctx context.Context, driver string, args map[strin
 
 // DeviceDelete removes a device
 func (q *qmpClient) DeviceDelete(ctx context.Context, deviceID string) error {
-	_, err := q.execute(ctx, "device_del", map[string]interface{}{
+	_, err := q.execute(ctx, "device_del", map[string]any{
 		"id": deviceID,
 	})
 	return err
@@ -415,7 +415,7 @@ func (q *qmpClient) DeviceDelete(ctx context.Context, deviceID string) error {
 type HotpluggableCPU struct {
 	Type       string                 `json:"type"`
 	QOMPath    string                 `json:"qom-path"`
-	Props      map[string]interface{} `json:"props"`
+	Props      map[string]any `json:"props"`
 	VCPUsCount int                    `json:"vcpus-count"`
 }
 
@@ -470,7 +470,7 @@ func (q *qmpClient) HotplugCPU(ctx context.Context, cpuID int) error {
 	}
 
 	driver := "host-x86_64-cpu"
-	args := map[string]interface{}{
+	args := map[string]any{
 		"id":        fmt.Sprintf("cpu%d", cpuID),
 		"socket-id": 0,
 		"core-id":   cpuID,
@@ -485,7 +485,7 @@ func (q *qmpClient) HotplugCPU(ctx context.Context, cpuID int) error {
 		}
 		if match := matchHotpluggableCPU(cpus, cpuID); match != nil {
 			driver = match.Type
-			args = map[string]interface{}{
+			args = map[string]any{
 				"id": fmt.Sprintf("cpu%d", cpuID),
 			}
 			for k, v := range match.Props {
@@ -559,7 +559,7 @@ func matchHotpluggableCPU(cpus []HotpluggableCPU, cpuID int) *HotpluggableCPU {
 	return fallback
 }
 
-func intFromProp(value interface{}) (int, bool) {
+func intFromProp(value any) (int, bool) {
 	switch v := value.(type) {
 	case int:
 		return v, true
@@ -595,7 +595,7 @@ func (q *qmpClient) UnplugCPU(ctx context.Context, cpuID int) error {
 // MemoryDeviceInfo represents a hotplugged memory device
 type MemoryDeviceInfo struct {
 	Type string                 `json:"type"` // "dimm" or "virtio-mem"
-	Data map[string]interface{} `json:"data"`
+	Data map[string]any `json:"data"`
 }
 
 // MemorySizeSummary from query-memory-size-summary
@@ -727,8 +727,8 @@ func (q *qmpClient) QueryMemorySizeSummary(ctx context.Context) (*MemorySizeSumm
 }
 
 // ObjectAdd adds a QEMU object (e.g., memory backend)
-func (q *qmpClient) ObjectAdd(ctx context.Context, qomType, objID string, args map[string]interface{}) error {
-	arguments := map[string]interface{}{
+func (q *qmpClient) ObjectAdd(ctx context.Context, qomType, objID string, args map[string]any) error {
+	arguments := map[string]any{
 		"qom-type": qomType,
 		"id":       objID,
 	}
@@ -742,7 +742,7 @@ func (q *qmpClient) ObjectAdd(ctx context.Context, qomType, objID string, args m
 
 // ObjectDel removes a QEMU object
 func (q *qmpClient) ObjectDel(ctx context.Context, objID string) error {
-	_, err := q.execute(ctx, "object-del", map[string]interface{}{
+	_, err := q.execute(ctx, "object-del", map[string]any{
 		"id": objID,
 	})
 	return err
@@ -769,7 +769,7 @@ func (q *qmpClient) HotplugMemory(ctx context.Context, slotID int, sizeBytes int
 	}
 
 	// Step 1: Create memory backend object
-	backendArgs := map[string]interface{}{
+	backendArgs := map[string]any{
 		"size": sizeBytes,
 	}
 
@@ -785,7 +785,7 @@ func (q *qmpClient) HotplugMemory(ctx context.Context, slotID int, sizeBytes int
 	}
 
 	// Step 2: Hotplug pc-dimm device
-	dimmArgs := map[string]interface{}{
+	dimmArgs := map[string]any{
 		"id":     dimmID,
 		"memdev": backendID,
 	}
