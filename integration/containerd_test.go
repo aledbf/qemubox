@@ -5,7 +5,8 @@
 // # Test Strategy
 //
 // These tests verify the complete stack:
-//   containerd → shim → QEMU → vminitd → crun → container process
+//
+//	containerd → shim → QEMU → vminitd → crun → container process
 //
 // Each test uses a real containerd instance and runs actual VMs. This catches
 // integration bugs that unit tests miss (network setup, vsock communication,
@@ -48,11 +49,11 @@
 // # Test Failures and Debugging
 //
 // If tests fail, check in order:
-//   1. containerd logs: journalctl -u qemubox-containerd
-//   2. VM logs: /var/log/qemubox/vm-*.log
-//   3. CNI state: ls -la /var/lib/cni/networks/
-//   4. Network devices: ip link show | grep tap
-//   5. QEMU processes: ps aux | grep qemu
+//  1. containerd logs: journalctl -u qemubox-containerd
+//  2. VM logs: /var/log/qemubox/vm-*.log
+//  3. CNI state: ls -la /var/lib/cni/networks/
+//  4. Network devices: ip link show | grep tap
+//  5. QEMU processes: ps aux | grep qemu
 //
 // Common failure modes:
 //   - "ttrpc: closed" - Normal during cleanup, ignore unless persistent
