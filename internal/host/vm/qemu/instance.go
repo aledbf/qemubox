@@ -616,7 +616,10 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	cmdlineArgs := q.buildKernelCommandLine(startOpts)
 
 	// Build QEMU command line (now uses the renamed TAP names)
-	qemuArgs := q.buildQemuCommandLine(cmdlineArgs)
+	qemuArgs, err := q.buildQemuCommandLine(cmdlineArgs)
+	if err != nil {
+		return err
+	}
 
 	// Print full command for manual testing
 	log.G(ctx).WithFields(log.Fields{
@@ -716,7 +719,7 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 }
 
 // buildQemuCommandLine constructs the QEMU command line arguments
-func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
+func (q *Instance) buildQemuCommandLine(cmdlineArgs string) ([]string, error) {
 	// Convert memory from bytes to MB
 	memoryMB := q.resourceCfg.MemorySize / (1024 * 1024)
 	memoryMaxMB := q.resourceCfg.MemoryHotplugSize / (1024 * 1024)
@@ -792,7 +795,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 		// (FDs 0,1,2 are stdin/stdout/stderr)
 		if nic.TapFile == nil {
 			// This should never happen - TAP FD must be opened before Start()
-			panic(fmt.Sprintf("NIC %s has no TAP file descriptor", nic.TapName))
+			return nil, fmt.Errorf("internal error: NIC %s has no TAP file descriptor (openTapFiles not called?)", nic.TapName)
 		}
 		fd := 3 + i
 		// Note: script= and downscript= are invalid with fd=
@@ -804,7 +807,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) []string {
 		)
 	}
 
-	return args
+	return args, nil
 }
 
 // Client returns the long-lived TTRPC client for communicating with the guest.
