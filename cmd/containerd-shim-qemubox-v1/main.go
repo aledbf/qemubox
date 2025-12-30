@@ -10,6 +10,7 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/config"
 	"github.com/aledbf/qemubox/containerd/internal/shim/manager"
 
+	// Register shim plugin with containerd runtime
 	_ "github.com/aledbf/qemubox/containerd/internal/shim"
 )
 
