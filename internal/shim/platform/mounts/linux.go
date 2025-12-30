@@ -272,68 +272,12 @@ func filterOptions(options []string) []string {
 	return filtered
 }
 
-// translateMountOptions translates standard mount options to virtiofs-compatible options.
-// Note: virtiofs is not currently implemented for QEMU (uses virtio-blk instead).
-// This function exists for potential future virtiofs support.
+// translateMountOptions will translate mount options when virtiofs is implemented.
+// TODO(virtiofs): Implement option translation when adding virtiofs support.
+// Current implementation uses virtio-blk, not virtiofs, so this function is not
+// exercised. When virtiofs is added, this should translate mount options appropriately.
 func translateMountOptions(ctx context.Context, options []string) []string {
-	var translated []string
-
-	// Map of mount options that are compatible with virtiofs
-	// or need translation
-	compatibleOptions := map[string]string{
-		"ro":       "ro",
-		"rw":       "rw",
-		"nodev":    "nodev",
-		"nosuid":   "nosuid",
-		"noexec":   "noexec",
-		"relatime": "relatime",
-		"noatime":  "noatime",
-	}
-
-	// Options that should be dropped (not supported by virtiofs)
-	droppedOptions := map[string]bool{
-		"rbind":       true,
-		"bind":        true,
-		"rprivate":    true,
-		"private":     true,
-		"rshared":     true,
-		"shared":      true,
-		"rslave":      true,
-		"slave":       true,
-		"remount":     true,
-		"strictatime": true,
-	}
-
-	for _, opt := range options {
-		// Check if it's a compatible option
-		if mappedOpt, ok := compatibleOptions[opt]; ok {
-			translated = append(translated, mappedOpt)
-			continue
-		}
-
-		// Check if it should be dropped
-		if droppedOptions[opt] {
-			log.G(ctx).WithField("option", opt).Debug("dropping incompatible virtiofs mount option")
-			continue
-		}
-
-		// For options with values (e.g., "uid=1000"), check the prefix
-		if strings.Contains(opt, "=") {
-			parts := strings.SplitN(opt, "=", 2)
-			switch parts[0] {
-			case "uid", "gid", "fmode", "dmode":
-				// These options might be supported, include them
-				translated = append(translated, opt)
-			default:
-				// Unknown option with value, log and skip
-				log.G(ctx).WithField("option", opt).Debug("skipping unknown virtiofs mount option")
-			}
-			continue
-		}
-
-		// Unknown option without value, log and skip
-		log.G(ctx).WithField("option", opt).Debug("skipping unknown virtiofs mount option")
-	}
-
-	return translated
+	// Pass through options unchanged for now
+	// AddFS() currently returns ErrNotImplemented, so this code path is not reached
+	return options
 }
