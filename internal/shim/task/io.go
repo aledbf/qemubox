@@ -348,16 +348,48 @@ func startStdinCopy(ctx context.Context, cwg *sync.WaitGroup, stream io.ReadWrit
 		defer iobuf.Put(p)
 
 		if _, err := io.CopyBuffer(stream, f, *p); err != nil {
-			log.G(ctx).WithError(err).Warn("error copying stdin")
+			// Ignore "use of closed network connection" - expected during shutdown
+			if !isClosedConnError(err) {
+				log.G(ctx).WithError(err).Warn("error copying stdin")
+			}
 		}
 		if err := stream.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("error closing stdin stream")
+			// Ignore "file already closed" - benign race during shutdown
+			if !isAlreadyClosedError(err) {
+				log.G(ctx).WithError(err).Warn("error closing stdin stream")
+			}
 		}
 		if err := f.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("error closing stdin fifo")
+			if !isAlreadyClosedError(err) {
+				log.G(ctx).WithError(err).Warn("error closing stdin fifo")
+			}
 		}
 	}()
 	return nil
+}
+
+// isClosedConnError checks if the error is a closed network connection error.
+// This is expected during normal shutdown when the vsock connection closes.
+func isClosedConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check for "use of closed network connection"
+	return err.Error() == "use of closed network connection" ||
+		err.Error() == "read: connection reset by peer"
+}
+
+// isAlreadyClosedError checks if the error is an "already closed" error.
+// This is expected during normal shutdown when multiple goroutines try to close the same resource.
+func isAlreadyClosedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check for "file already closed" or "close of closed"
+	errStr := err.Error()
+	return errStr == "file already closed" ||
+		errStr == "close of closed file" ||
+		errStr == "close of closed network connection"
 }
 
 // countingWriteCloser masks io.Closer() until close has been invoked a certain number of times.

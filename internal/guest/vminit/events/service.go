@@ -109,7 +109,8 @@ func (s *service) Stream(ctx context.Context, _ *emptypb.Empty, ss vmevents.TTRP
 			}
 			return err
 		case <-ctx.Done():
-			log.G(ctx).WithError(ctx.Err()).WithField("events_sent", eventCount).Warn("vmevents stream context cancelled")
+			// Context cancellation is expected during shutdown - don't log as warning
+			log.G(ctx).WithField("events_sent", eventCount).Debug("vmevents stream context cancelled")
 			return ctx.Err()
 		}
 	}
