@@ -387,12 +387,7 @@ func (q *Instance) openTapFiles(ctx context.Context, netns string) error {
 		tapFile, err := openTAPInNetNS(ctx, nic.TapName, netns)
 		if err != nil {
 			// Clean up any already-opened FDs on failure
-			for _, prevNic := range q.nets {
-				if prevNic.TapFile != nil {
-					_ = prevNic.TapFile.Close()
-					prevNic.TapFile = nil
-				}
-			}
+			q.closeTAPFiles()
 			return fmt.Errorf("failed to open tap %s in netns: %w", nic.TapName, err)
 		}
 		// Store the file descriptor
@@ -400,6 +395,18 @@ func (q *Instance) openTapFiles(ctx context.Context, netns string) error {
 	}
 	q.tapNetns = netns
 	return nil
+}
+
+// closeTAPFiles closes all TAP file descriptors and resets the netns tracking.
+// This centralizes TAP FD cleanup logic used in multiple error paths.
+func (q *Instance) closeTAPFiles() {
+	for _, nic := range q.nets {
+		if nic.TapFile != nil {
+			_ = nic.TapFile.Close()
+			nic.TapFile = nil
+		}
+	}
+	q.tapNetns = ""
 }
 
 func (q *Instance) startQemuProcess(ctx context.Context, qemuArgs []string) error {
@@ -551,13 +558,7 @@ func (q *Instance) rollbackStart(success *bool) {
 	}
 
 	// Close any opened TAP FDs on failure
-	for _, nic := range q.nets {
-		if nic.TapFile != nil {
-			_ = nic.TapFile.Close()
-			nic.TapFile = nil
-		}
-	}
-	q.tapNetns = ""
+	q.closeTAPFiles()
 }
 
 // Start starts the QEMU VM
@@ -909,11 +910,7 @@ func (q *Instance) cleanupAfterFailedKill() {
 		_ = q.qmpClient.Close()
 		q.qmpClient = nil
 	}
-	for _, nic := range q.nets {
-		if nic.TapFile != nil {
-			_ = nic.TapFile.Close()
-		}
-	}
+	q.closeTAPFiles()
 }
 
 func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error {
@@ -1012,15 +1009,7 @@ func (q *Instance) cleanupResources(logger *log.Entry) {
 	}
 
 	// Close TAP file descriptors
-	for _, nic := range q.nets {
-		if nic.TapFile != nil {
-			if err := nic.TapFile.Close(); err != nil {
-				logger.WithError(err).WithField("tap", nic.TapName).Debug("error closing TAP file descriptor")
-			}
-			nic.TapFile = nil
-		}
-	}
-	q.tapNetns = ""
+	q.closeTAPFiles()
 }
 
 // Shutdown gracefully shuts down the VM
