@@ -31,6 +31,13 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/paths"
 )
 
+const (
+	// defaultMemorySlots is the number of memory hotplug slots.
+	// 8 slots * 128MB min increment = 1GB max hotplug capacity
+	// Trade-off: More slots = more QEMU overhead, fewer = less flexibility
+	defaultMemorySlots = 8
+)
+
 // findQemu returns the path to the qemu-system-x86_64 binary
 func findQemu() (string, error) {
 	path := paths.QemuPath()
@@ -725,8 +732,8 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) ([]string, error) {
 	memoryMB := q.resourceCfg.MemorySize / (1024 * 1024)
 	memoryMaxMB := q.resourceCfg.MemoryHotplugSize / (1024 * 1024)
 
-	// Calculate memory hotplug slots needed (0-16 based on usage)
-	memorySlots := 8 // Reduced from 16 - adequate for most workloads
+	// Calculate memory hotplug slots needed
+	memorySlots := defaultMemorySlots
 	if q.resourceCfg.MemoryHotplugSize <= q.resourceCfg.MemorySize {
 		memorySlots = 0 // No hotplug needed if max equals initial
 	}
