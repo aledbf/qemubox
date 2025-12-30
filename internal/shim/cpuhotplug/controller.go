@@ -84,17 +84,51 @@ type Config struct {
 	EnableScaleDown bool // Allow removing CPUs (may fail on some kernels)
 }
 
+const (
+	// defaultMonitorInterval is how often to check CPU usage.
+	// 5 seconds provides responsive scaling without excessive polling.
+	defaultMonitorInterval = 5 * time.Second
+
+	// defaultScaleUpCooldown prevents thrashing by rate-limiting scale-up operations.
+	// 10 seconds allows new CPU to be utilized before considering another scale-up.
+	defaultScaleUpCooldown = 10 * time.Second
+
+	// defaultScaleDownCooldown is more conservative to avoid removing CPUs prematurely.
+	// 30 seconds ensures sustained low usage before removing resources.
+	defaultScaleDownCooldown = 30 * time.Second
+
+	// defaultScaleUpThreshold is the CPU usage percentage that triggers adding a vCPU.
+	// 80% provides headroom before hitting 100% utilization.
+	defaultScaleUpThreshold = 80.0
+
+	// defaultScaleDownThreshold is the projected CPU usage after removing one vCPU.
+	// 50% ensures removed vCPU was genuinely idle (not causing load redistribution issues).
+	defaultScaleDownThreshold = 50.0
+
+	// defaultThrottleLimit prevents scaling when already at CPU quota.
+	// If >5% of CPU time is throttled, adding vCPUs won't help (quota-limited, not CPU-limited).
+	defaultThrottleLimit = 5.0
+
+	// defaultScaleUpStability requires N consecutive high readings before scaling up.
+	// 2 readings = 10 seconds total (2 * 5s interval), filtering brief spikes.
+	defaultScaleUpStability = 2
+
+	// defaultScaleDownStability requires more sustained low usage before removing CPUs.
+	// 6 readings = 30 seconds total (6 * 5s interval), avoiding premature scale-down.
+	defaultScaleDownStability = 6
+)
+
 // DefaultConfig returns sensible defaults for CPU hotplug
 func DefaultConfig() Config {
 	return Config{
-		MonitorInterval:      5 * time.Second,
-		ScaleUpCooldown:      10 * time.Second,
-		ScaleDownCooldown:    30 * time.Second,
-		ScaleUpThreshold:     80.0,
-		ScaleDownThreshold:   50.0,
-		ScaleUpThrottleLimit: 5.0,  // Avoid scaling if throttling exceeds this %
-		ScaleUpStability:     2,    // Need 2 consecutive high readings (10s total)
-		ScaleDownStability:   6,    // Need 6 consecutive low readings (30s total)
+		MonitorInterval:      defaultMonitorInterval,
+		ScaleUpCooldown:      defaultScaleUpCooldown,
+		ScaleDownCooldown:    defaultScaleDownCooldown,
+		ScaleUpThreshold:     defaultScaleUpThreshold,
+		ScaleDownThreshold:   defaultScaleDownThreshold,
+		ScaleUpThrottleLimit: defaultThrottleLimit,
+		ScaleUpStability:     defaultScaleUpStability,
+		ScaleDownStability:   defaultScaleDownStability,
 		EnableScaleDown:      true, // Enabled by default (some kernels may not support CPU unplug)
 	}
 }
