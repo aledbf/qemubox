@@ -17,22 +17,33 @@ service System {
 }
 
 message InfoResponse {
+	// version is the qemubox vminitd version (e.g., "1.0.0").
 	string version = 1;
+
+	// kernel_version is the Linux kernel version running in the VM (e.g., "6.1.0").
 	string kernel_version = 2;
 }
 
 message OfflineCPURequest {
+	// cpu_id is the logical CPU ID to offline (zero-indexed, e.g., 0, 1, 2).
+	// This corresponds to /sys/devices/system/cpu/cpu{N}.
 	uint32 cpu_id = 1;
 }
 
 message OnlineCPURequest {
+	// cpu_id is the logical CPU ID to online (zero-indexed, e.g., 0, 1, 2).
+	// This corresponds to /sys/devices/system/cpu/cpu{N}.
 	uint32 cpu_id = 1;
 }
 
 message OfflineMemoryRequest {
+	// memory_id is the memory block ID to offline (zero-indexed).
+	// This corresponds to the QMP memory slot number.
 	uint32 memory_id = 1;
 }
 
 message OnlineMemoryRequest {
+	// memory_id is the memory block ID to online (zero-indexed).
+	// This corresponds to the QMP memory slot number.
 	uint32 memory_id = 1;
 }

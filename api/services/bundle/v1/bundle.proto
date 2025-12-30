@@ -11,10 +11,16 @@ service Bundle {
 }
 
 message CreateRequest {
+	// id is the unique identifier for the bundle to create.
 	string id = 1;
+
+	// files is a map of filename to file contents.
+	// Keys are relative paths within the bundle (e.g., "config.json", "hosts", "resolv.conf").
+	// Values are the file contents as raw bytes.
 	map<string, bytes> files = 2;
 }
 
 message CreateResponse {
+	// bundle is the absolute path to the created bundle directory on the VM filesystem.
 	string bundle = 1;
 }
