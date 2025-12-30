@@ -215,6 +215,42 @@ func TestValidate_InvalidVMM(t *testing.T) {
 	t.Logf("Error message: %s", err)
 }
 
+func TestGet_Singleton(t *testing.T) {
+	// Get() should return the same instance on multiple calls (singleton pattern)
+	// This test verifies the sync.Once behavior
+
+	// Note: We can't reliably test Get() in isolation because it uses a global
+	// sync.Once that can't be reset between tests. However, we can verify that
+	// multiple calls within the same test return the same instance.
+
+	cfg1, err1 := Get()
+	cfg2, err2 := Get()
+
+	// Both calls should return the same error state
+	if (err1 == nil) != (err2 == nil) {
+		t.Fatalf("Get() returned different error states: err1=%v, err2=%v", err1, err2)
+	}
+
+	// If no error, verify same instance (pointer equality)
+	if err1 == nil && err2 == nil {
+		if cfg1 != cfg2 {
+			t.Errorf("Get() returned different instances: want same pointer, got cfg1=%p cfg2=%p", cfg1, cfg2)
+		}
+	}
+
+	// Call again to ensure sync.Once doesn't run multiple times
+	cfg3, err3 := Get()
+	if (err1 == nil) != (err3 == nil) {
+		t.Fatalf("Get() returned different error states on third call: err1=%v, err3=%v", err1, err3)
+	}
+
+	if err1 == nil && err3 == nil {
+		if cfg1 != cfg3 {
+			t.Errorf("Get() returned different instance on third call: want same pointer, got cfg1=%p cfg3=%p", cfg1, cfg3)
+		}
+	}
+}
+
 func TestValidate_InvalidThresholds(t *testing.T) {
 	tests := []struct {
 		name      string
