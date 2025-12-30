@@ -265,7 +265,7 @@ func isVethConflictError(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
+	msg := strings.ToLower(err.Error())
 	// Check for common error patterns (case-insensitive for robustness)
 	return (strings.Contains(msg, "already exists") ||
 		strings.Contains(msg, "file exists")) &&
