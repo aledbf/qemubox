@@ -36,6 +36,22 @@ import (
 	_ "github.com/aledbf/qemubox/containerd/internal/guest/vminit/streaming"
 )
 
+const (
+	// maxGOMAXPROCS limits scheduler overhead in VM environment.
+	// Value of 2 provides parallelism while maintaining cache locality.
+	maxGOMAXPROCS = 2
+
+	// blockDeviceTimeout is how long to wait for virtio block devices.
+	// 5 seconds is sufficient for QEMU virtio device initialization.
+	blockDeviceTimeout = 5 * time.Second
+
+	// blockDevicePollInterval is the polling frequency for device detection.
+	blockDevicePollInterval = 10 * time.Millisecond
+
+	// maxDeviceNodeRetries is how many times to check for /dev nodes.
+	maxDeviceNodeRetries = 10
+)
+
 // loadConfig loads configuration from a JSON file and merges it with the provided config.
 // Command-line flags take precedence over file configuration.
 func loadConfig(path string, config *ServiceConfig, setFlags map[string]bool) error {
@@ -185,8 +201,8 @@ func run(ctx context.Context, config ServiceConfig) error {
 	log.G(ctx).WithField("t", time.Since(t1)).Debug("initialized vminitd")
 
 	// Limit GOMAXPROCS for VM environment to prevent scheduler overhead
-	// Cap at 2 to improve cache locality, but respect available CPUs
-	maxProcs := min(runtime.NumCPU(), 2)
+	// Cap at maxGOMAXPROCS to improve cache locality, but respect available CPUs
+	maxProcs := min(runtime.NumCPU(), maxGOMAXPROCS)
 	runtime.GOMAXPROCS(maxProcs)
 	log.G(ctx).WithField("GOMAXPROCS", maxProcs).Debug("configured Go runtime")
 
@@ -288,7 +304,7 @@ func findVirtioBlockDevices() ([]string, error) {
 // waitForDevNodes polls for device nodes to appear in /dev
 // Returns true if all device nodes are ready, false otherwise
 func waitForDevNodes(ctx context.Context, devices []string) bool {
-	for range 10 {
+	for range maxDeviceNodeRetries {
 		var devNodes []string
 		for _, dev := range devices {
 			devPath := "/dev/" + dev
@@ -311,8 +327,8 @@ func waitForDevNodes(ctx context.Context, devices []string) bool {
 // The kernel needs time to probe PCI devices and create device nodes
 // This is a best-effort operation - if devices don't appear, we continue anyway
 func waitForBlockDevices(ctx context.Context) {
-	timeout := 5 * time.Second
-	pollInterval := 10 * time.Millisecond
+	timeout := blockDeviceTimeout
+	pollInterval := blockDevicePollInterval
 
 	log.G(ctx).Debug("waiting for virtio block devices to appear")
 
