@@ -1,6 +1,41 @@
 //go:build linux
 
 // Package network provides host networking orchestration.
+//
+// # Synchronization Model
+//
+// The cniNetworkManager coordinates CNI network setup across multiple concurrent
+// container creation requests. Thread safety is achieved through two separate
+// synchronization mechanisms:
+//
+// 1. Result Cache (cniResults map, protected by cniMu RWMutex):
+//   - Stores completed CNI setup results for cleanup
+//   - Read lock for checking if already configured (fast path)
+//   - Write lock only when storing/removing results
+//
+// 2. In-Flight Coordination (inFlight map, protected by inflightMu Mutex):
+//   - Prevents duplicate CNI setup for the same container ID
+//   - First caller becomes the "worker" and performs setup
+//   - Subsequent callers block on a channel until worker completes
+//   - Worker shares result/error with all waiters via the channel
+//
+// Locking Order (when holding multiple locks):
+//   1. inflightMu (always acquire first if needed)
+//   2. cniMu (acquire second)
+//   Never hold inflightMu during CNI operations (expensive I/O)
+//
+// Goroutine Ownership:
+//   - Each ensureNetworkResourcesCNI call runs in caller's goroutine
+//   - The first caller for a container ID owns the CNI setup operation
+//   - Other concurrent callers become waiters (block on done channel)
+//   - No background goroutines - all operations are synchronous
+//
+// Resource Lifecycle:
+//   - Network namespace: Created during setup, deleted during teardown
+//   - TAP device: Created by CNI plugins, destroyed during teardown
+//   - IP allocation: Managed by CNI IPAM plugin, released during teardown
+//   - cniResults entry: Stored after successful setup, removed during teardown
+//   - inFlight entry: Created when setup starts, removed when setup completes
 package network
 
 import (

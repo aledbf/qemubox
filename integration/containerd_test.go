@@ -1,5 +1,64 @@
 //go:build linux
 
+// Package integration provides end-to-end tests for the qemubox runtime.
+//
+// # Test Strategy
+//
+// These tests verify the complete stack:
+//   containerd → shim → QEMU → vminitd → crun → container process
+//
+// Each test uses a real containerd instance and runs actual VMs. This catches
+// integration bugs that unit tests miss (network setup, vsock communication,
+// resource cleanup, error propagation across process boundaries).
+//
+// # Test Environment Requirements
+//
+// - Running containerd configured with qemubox runtime
+// - KVM access (/dev/kvm readable by test user)
+// - CNI plugins installed (/opt/cni/bin)
+// - CNI configuration present (/etc/cni/net.d)
+// - Test image available (configurable via QEMUBOX_IMAGE)
+//
+// Default configuration expects:
+//   - Socket: /var/run/qemubox/containerd.sock
+//   - Runtime: io.containerd.qemubox.v1
+//   - Snapshotter: erofs
+//   - Namespace: default
+//
+// Override via environment variables (see loadTestConfig).
+//
+// # What These Tests Verify
+//
+// Currently tested:
+//   - Container lifecycle (create, start, wait, cleanup)
+//   - Exit code propagation (success and failure cases)
+//   - stdout/stderr capture through VM boundary
+//   - Multiple containers sequentially (resource cleanup)
+//   - Namespace isolation (containers don't leak across namespaces)
+//   - OCI spec preservation (resource limits appear in spec)
+//
+// NOT currently tested (but should be):
+//   - Resource limit enforcement (memory OOM, CPU throttling)
+//   - Network connectivity (ping between containers, outbound traffic)
+//   - Concurrent container creation (stress test for race conditions)
+//   - VM crash handling (kill -9 QEMU, verify cleanup)
+//   - Long-running containers (multi-hour stability)
+//   - Large I/O workloads (GB of logs, verify no corruption)
+//
+// # Test Failures and Debugging
+//
+// If tests fail, check in order:
+//   1. containerd logs: journalctl -u qemubox-containerd
+//   2. VM logs: /var/log/qemubox/vm-*.log
+//   3. CNI state: ls -la /var/lib/cni/networks/
+//   4. Network devices: ip link show | grep tap
+//   5. QEMU processes: ps aux | grep qemu
+//
+// Common failure modes:
+//   - "ttrpc: closed" - Normal during cleanup, ignore unless persistent
+//   - "CNI setup failed" - Check CNI plugin installation and config
+//   - "KVM unavailable" - Verify /dev/kvm permissions
+//   - "Image pull failed" - Network issue or wrong image name
 package integration
 
 import (

@@ -1,5 +1,65 @@
 // Package task implements the containerd task service for qemubox runtime.
 // It orchestrates VM lifecycle, container creation, and I/O streams within the shim.
+//
+// # Synchronization Model
+//
+// The service struct coordinates multiple concurrent operations (container creation,
+// exec processes, shutdown, hotplug operations). Thread safety is achieved through
+// a combination of mutexes and atomics:
+//
+// Locks (must be acquired in this order to prevent deadlocks):
+//   1. containerMu - Protects container field and containerID
+//   2. controllerMu - Protects hotplug controller maps
+//
+// Lock Usage:
+//   - containerMu: Hold when reading/writing container or containerID
+//   - controllerMu: Hold when reading/writing hotplug controller maps
+//   - NEVER hold both locks simultaneously unless absolutely necessary
+//   - NEVER hold locks during slow operations (VM start, network setup, TTRPC calls)
+//
+// Atomics (lock-free state):
+//   - eventsClosed: Set when event channel is closed (shutdown signal)
+//   - intentionalShutdown: Distinguishes clean shutdown from VM crash
+//   - deletionInProgress: Prevents new Create() calls during Delete()
+//   - inflight: Counts in-flight RPC operations for graceful shutdown
+//
+// Goroutine Ownership:
+//   - Main goroutine: Handles TTRPC service calls (Create, Start, Delete, etc.)
+//   - Event forwarder: Single goroutine forwards events from VM to containerd
+//     (spawned in NewTaskService, runs until events channel is closed)
+//   - Hotplug controllers: Each container gets CPU and memory hotplug goroutines
+//     (spawned on Create, stopped on Delete or shutdown)
+//
+// Channel Usage:
+//   - events channel (buffered, size 128):
+//     * Producers: VM event stream, task service operations
+//     * Consumer: Event forwarder goroutine
+//     * Closed during shutdown to signal forwarder to exit
+//     * Buffer size prevents event loss during brief containerd unavailability
+//
+// Resource Lifecycle:
+//   - VM instance: Created in Create(), started in Create(), stopped in shutdown()
+//   - Network resources: Allocated in Create(), released in shutdown()
+//   - Hotplug controllers: Started after VM boot, stopped in shutdown()
+//   - Event forwarder: Started in NewTaskService(), stopped when events channel closes
+//   - I/O streams: Created per container/exec, closed in shutdown()
+//
+// Shutdown Sequence:
+//   1. shutdown() called (via Delete or process exit)
+//   2. Lock containerMu and controllerMu
+//   3. Stop all hotplug controllers (graceful stop)
+//   4. Close all I/O streams (exec processes, then container)
+//   5. Shutdown VM (sends SIGTERM to QEMU, waits for exit)
+//   6. Release network resources (CNI teardown)
+//   7. Close network manager
+//   8. Close events channel (signals forwarder to exit)
+//
+// Concurrency Invariants:
+//   - Only one container per service (enforced in Create)
+//   - Create() and Delete() never run concurrently (enforced by containerd)
+//   - Multiple Exec() calls may run concurrently (each gets unique exec ID)
+//   - shutdown() may run concurrently with other operations (uses locks)
+//   - Event forwarder runs independently, tolerates slow consumers
 package task
 
 import (
@@ -40,9 +100,35 @@ import (
 )
 
 const (
-	// eventChannelBuffer is the size of the event channel buffer
+	// eventChannelBuffer is the size of the event channel buffer.
+	//
+	// This buffer prevents event loss when containerd briefly can't consume events
+	// (e.g., during GC pauses). Size chosen to handle typical burst scenarios:
+	//   - Container exit + log flush: ~10-20 events
+	//   - Multiple exec processes exiting: ~5 events per process
+	//   - Hotplug operations: ~2-5 events per operation
+	//
+	// 128 provides headroom for multiple concurrent operations. If this buffer
+	// fills, the event producer will block, which is acceptable - it means
+	// containerd is genuinely overloaded.
+	//
+	// NOTE: This is not configurable because event loss would break container
+	// lifecycle guarantees. If you need to tune this, you have bigger problems.
 	eventChannelBuffer = 128
-	// eventStreamShutdownDelay gives the guest time to emit logs before we tear down the VM.
+
+	// eventStreamShutdownDelay gives the guest time to emit final logs before VM teardown.
+	//
+	// During shutdown, the VM may have buffered logs that haven't been flushed yet.
+	// This delay ensures those logs make it to containerd before we kill the VM.
+	//
+	// 2 seconds is chosen to handle:
+	//   - Typical log buffer flush: ~100-500ms
+	//   - Application cleanup handlers: ~500ms-1s
+	//   - Guest kernel shutdown logging: ~200-500ms
+	//
+	// This is pure overhead on every container stop, so it should be as short as
+	// possible while still catching most logs. Logs lost after this timeout are
+	// considered acceptable data loss (VM is shutting down anyway).
 	eventStreamShutdownDelay = 2 * time.Second
 )
 
@@ -104,33 +190,43 @@ type container struct {
 
 // service is the shim implementation of a remote shim over TTRPC.
 type service struct {
-	// Separate mutexes for different concerns to avoid contention
-	containerMu  sync.Mutex // Protects container field
-	controllerMu sync.Mutex // Protects hotplug controllers
+	// === Synchronization Primitives ===
+	// LOCK ORDER: Always acquire containerMu before controllerMu if you need both
 
-	// Dependency managers (injected)
-	vmLifecycle     *lifecycle.Manager
-	networkManager  network.NetworkManager
-	platformMounts  platformMounts.Manager
-	platformNetwork platformNetwork.Manager
+	containerMu  sync.Mutex // Protects: container, containerID
+	controllerMu sync.Mutex // Protects: cpuHotplugControllers, memoryHotplugControllers
 
-	// Single container (qemubox enforces 1 container per VM per shim)
-	container   *container
-	containerID string
+	// === Dependency Managers (thread-safe, injected at construction) ===
+	vmLifecycle     *lifecycle.Manager        // VM process management (internal locking)
+	networkManager  network.NetworkManager    // CNI network operations (internal locking)
+	platformMounts  platformMounts.Manager    // Mount configuration (stateless)
+	platformNetwork platformNetwork.Manager   // Network namespace setup (stateless)
 
-	// Per-container hotplug controllers (QEMU only)
+	// === Container State (protected by containerMu) ===
+	// qemubox enforces 1 container per VM per shim - Create() rejects if already set
+	container   *container // Container metadata and I/O shutdown functions
+	containerID string     // Container ID (empty string means no container)
+
+	// === Hotplug Controllers (protected by controllerMu) ===
+	// Map key is container ID. Controllers are goroutines that monitor and adjust
+	// CPU/memory based on usage. Started after VM boot, stopped during shutdown.
 	cpuHotplugControllers    map[string]cpuhotplug.CPUHotplugController
 	memoryHotplugControllers map[string]memhotplug.MemoryHotplugController
 
+	// === Event Channel (multi-producer, single-consumer) ===
+	// Producers: VM event stream, task operations (Create, Start, Delete, etc.)
+	// Consumer: forward() goroutine (started in NewTaskService)
+	// Closed during shutdown() to signal forward() to exit
 	events chan any
 
-	initiateShutdown    func()
-	eventsClosed        atomic.Bool
-	eventsCloseOnce     sync.Once
-	intentionalShutdown atomic.Bool
-	deletionInProgress  atomic.Bool
+	// === Shutdown Coordination ===
+	initiateShutdown    func()       // Callback to trigger shutdown service
+	eventsClosed        atomic.Bool  // True when events channel is closed
+	eventsCloseOnce     sync.Once    // Ensures events channel closed exactly once
+	intentionalShutdown atomic.Bool  // True for clean shutdown, false for VM crash
+	deletionInProgress  atomic.Bool  // True during Delete() to reject concurrent Create()
 	shutdownSvc         shutdown.Service
-	inflight            atomic.Int64
+	inflight            atomic.Int64 // Count of in-flight RPC calls for graceful shutdown
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
