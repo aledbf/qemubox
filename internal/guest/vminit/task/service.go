@@ -184,10 +184,12 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		Pid:        uint32(container.Pid()),
 	})
 
-	// The following line cannot return an error as the only state in which that
-	// could happen would also cause the container.Pid() call above to
-	// nil-deference panic.
-	proc, _ := container.Process("")
+	// Get the init process. Should always succeed if Pid() returned non-zero.
+	proc, err := container.Process("")
+	if err != nil {
+		log.G(ctx).WithError(err).Error("BUG: container has PID but no init process")
+		return nil, errgrpc.ToGRPCf(errdefs.ErrInternal, "container in inconsistent state")
+	}
 	handleStarted(container, proc)
 
 	return &taskAPI.CreateTaskResponse{
