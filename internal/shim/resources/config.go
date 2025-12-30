@@ -36,8 +36,12 @@ func ComputeConfig(ctx context.Context, spec *specs.Spec) (*vm.VMResourceConfig,
 	hostCPUs := getHostCPUCount()
 	hostMemory, err := getHostMemoryTotal()
 	if err != nil {
-		log.G(ctx).WithError(err).Warn("failed to get host memory total, using 256GB default")
-		hostMemory = 256 * 1024 * 1024 * 1024 // 256GB default
+		// Can't determine host memory - use conservative default
+		// 4GB is reasonable for most scenarios and won't cause OOM
+		const conservativeDefault = 4 * 1024 * 1024 * 1024
+		log.G(ctx).WithError(err).WithField("default_gb", 4).
+			Error("failed to get host memory total, using conservative 4GB default")
+		hostMemory = conservativeDefault
 	}
 
 	// Align memory values to 128MB for virtio-mem requirement
