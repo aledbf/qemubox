@@ -164,13 +164,13 @@ func NewController(containerID string, cpuHotplugger vm.CPUHotplugger, stats Sta
 // Start begins the monitoring loop
 func (c *Controller) Start(ctx context.Context) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.stopCh != nil {
-		c.mu.Unlock()
 		return // Already started
 	}
 	c.stopCh = make(chan struct{})
 	c.stoppedCh = make(chan struct{})
-	c.mu.Unlock()
 
 	log.G(ctx).WithFields(log.Fields{
 		"container_id":       c.containerID,
