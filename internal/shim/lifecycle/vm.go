@@ -4,6 +4,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -164,15 +165,21 @@ func isTransientVsockError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Import io and errors packages if needed for these checks
-	msg := err.Error()
+
+	// Check typed errors first
 	if errdefs.IsFailedPrecondition(err) || errdefs.IsUnavailable(err) {
 		return true
 	}
-	// Additional string-based checks for vsock-specific errors
-	return msg == "ttrpc: closed" ||
-		msg == "broken pipe" ||
-		msg == "dial vsock: no such device" ||
-		msg == "dial vsock: connection reset" ||
-		msg == "dial vsock: connection refused"
+
+	// Check for syscall errors
+	if errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ENODEV) ||
+		errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+
+	// Fallback to string matching only for ttrpc-specific errors
+	msg := err.Error()
+	return msg == "ttrpc: closed"
 }
