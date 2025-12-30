@@ -208,10 +208,7 @@ func (c *Controller) checkAndAdjust(ctx context.Context) error {
 		c.currentCPUs = actualCPUs
 	}
 
-	// For now, use a simple heuristic based on CPU count vs max
-	// In the full implementation, this would read cgroup stats via TTRPC
-	// and calculate actual CPU usage percentage
-
+	// Calculate target vCPU count based on actual CPU usage from cgroup stats
 	targetCPUs := c.calculateTargetCPUs(ctx)
 
 	// Check if we should adjust
