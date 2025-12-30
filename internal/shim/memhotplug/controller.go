@@ -12,6 +12,13 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
 )
 
+const (
+	// maxMemorySlots is the number of memory hotplug slots configured in QEMU.
+	// This must match the "-device pc-dimm,memdev=mem,id=dimm,slot=N" config
+	// and the vm.defaultMemorySlots value used when starting QEMU.
+	maxMemorySlots = 8
+)
+
 // qmpMemoryClient defines the interface for QMP memory operations.
 // This interface exists to enable testing with mocks.
 type qmpMemoryClient interface {
@@ -451,8 +458,7 @@ func (c *Controller) scaleDown(ctx context.Context, targetMemory int64) error {
 
 // findFreeSlot finds the first available memory slot (0-7)
 func (c *Controller) findFreeSlot() int {
-	const maxSlots = 8 // QEMU configured with slots=8
-	for i := range maxSlots {
+	for i := range maxMemorySlots {
 		if !c.usedSlots[i] {
 			return i
 		}
@@ -462,8 +468,7 @@ func (c *Controller) findFreeSlot() int {
 
 // findUsedSlot finds a used memory slot (LIFO - last added first)
 func (c *Controller) findUsedSlot() int {
-	const maxSlots = 8
-	for i := maxSlots - 1; i >= 0; i-- {
+	for i := maxMemorySlots - 1; i >= 0; i-- {
 		if c.usedSlots[i] {
 			return i
 		}
