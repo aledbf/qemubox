@@ -141,8 +141,8 @@ func (q *qmpClient) execute(ctx context.Context, command string, args map[string
 }
 
 func (q *qmpClient) sendCommand(ctx context.Context, command string, args map[string]any) (*qmpResponse, error) {
-	if q.closed.Load() {
-		return nil, fmt.Errorf("QMP client closed")
+	if err := q.checkClosed(); err != nil {
+		return nil, err
 	}
 
 	id := q.nextID.Add(1)
@@ -343,8 +343,8 @@ func (q *qmpClient) Quit(ctx context.Context) error {
 
 // QueryStatus returns the current VM status (running, paused, shutdown, etc).
 func (q *qmpClient) QueryStatus(ctx context.Context) (*qmpStatus, error) {
-	if q.closed.Load() {
-		return nil, fmt.Errorf("QMP client closed")
+	if err := q.checkClosed(); err != nil {
+		return nil, err
 	}
 
 	id := q.nextID.Add(1)
@@ -606,8 +606,8 @@ type MemorySizeSummary struct {
 
 // QueryMemoryDevices returns all hotplugged memory devices
 func (q *qmpClient) QueryMemoryDevices(ctx context.Context) ([]MemoryDeviceInfo, error) {
-	if q.closed.Load() {
-		return nil, fmt.Errorf("QMP client closed")
+	if err := q.checkClosed(); err != nil {
+		return nil, err
 	}
 
 	id := q.nextID.Add(1)
@@ -667,8 +667,8 @@ func (q *qmpClient) QueryMemoryDevices(ctx context.Context) ([]MemoryDeviceInfo,
 
 // QueryMemorySizeSummary returns memory usage summary
 func (q *qmpClient) QueryMemorySizeSummary(ctx context.Context) (*MemorySizeSummary, error) {
-	if q.closed.Load() {
-		return nil, fmt.Errorf("QMP client closed")
+	if err := q.checkClosed(); err != nil {
+		return nil, err
 	}
 
 	id := q.nextID.Add(1)
@@ -872,4 +872,13 @@ func (q *qmpClient) Close() error {
 	q.mu.Unlock()
 
 	return q.conn.Close()
+}
+
+// checkClosed returns an error if the QMP client is closed.
+// This helper reduces duplicate closed-check boilerplate across methods.
+func (q *qmpClient) checkClosed() error {
+	if q.closed.Load() {
+		return fmt.Errorf("QMP client closed")
+	}
+	return nil
 }
