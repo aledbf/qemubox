@@ -30,17 +30,17 @@ func getCPUStats(ctx context.Context, dialClient func(context.Context) (*ttrpc.C
 		return 0, 0, err
 	}
 	if resp.GetStats() == nil {
-		return 0, 0, fmt.Errorf("missing stats payload")
+		return 0, 0, fmt.Errorf("container %s: missing CPU stats payload", containerID)
 	}
 
 	var metrics cgroup2stats.Metrics
 	if err := typeurl.UnmarshalTo(resp.Stats, &metrics); err != nil {
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("container %s: failed to unmarshal stats: %w", containerID, err)
 	}
 
 	cpu := metrics.GetCPU()
 	if cpu == nil {
-		return 0, 0, fmt.Errorf("missing CPU stats")
+		return 0, 0, fmt.Errorf("container %s: missing CPU stats in metrics", containerID)
 	}
 
 	return cpu.GetUsageUsec(), cpu.GetThrottledUsec(), nil
@@ -95,17 +95,17 @@ func getMemoryStats(ctx context.Context, dialClient func(context.Context) (*ttrp
 		return 0, err
 	}
 	if resp.GetStats() == nil {
-		return 0, fmt.Errorf("missing stats payload")
+		return 0, fmt.Errorf("container %s: missing memory stats payload", containerID)
 	}
 
 	var metrics cgroup2stats.Metrics
 	if err := typeurl.UnmarshalTo(resp.Stats, &metrics); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("container %s: failed to unmarshal stats: %w", containerID, err)
 	}
 
 	mem := metrics.GetMemory()
 	if mem == nil {
-		return 0, fmt.Errorf("missing memory stats")
+		return 0, fmt.Errorf("container %s: missing memory stats in metrics", containerID)
 	}
 
 	return int64(mem.GetUsage()), nil
