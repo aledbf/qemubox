@@ -126,7 +126,7 @@ func newQMPClient(ctx context.Context, socketPath string) (*qmpClient, error) {
 	go qmp.eventLoop(ctx)
 
 	// Enter command mode
-	if err := qmp.execute(ctx, "qmp_capabilities", nil); err != nil {
+	if _, err := qmp.execute(ctx, "qmp_capabilities", nil); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("failed to negotiate QMP capabilities: %w", err)
 	}
@@ -134,10 +134,10 @@ func newQMPClient(ctx context.Context, socketPath string) (*qmpClient, error) {
 	return qmp, nil
 }
 
-// execute sends a QMP command and waits for response
-func (q *qmpClient) execute(ctx context.Context, command string, args map[string]interface{}) error {
-	_, err := q.sendCommand(ctx, command, args)
-	return err
+// execute sends a QMP command and waits for response.
+// Returns the response and any error. Most callers ignore the response.
+func (q *qmpClient) execute(ctx context.Context, command string, args map[string]interface{}) (*qmpResponse, error) {
+	return q.sendCommand(ctx, command, args)
 }
 
 func (q *qmpClient) sendCommand(ctx context.Context, command string, args map[string]interface{}) (*qmpResponse, error) {
@@ -323,19 +323,22 @@ func (q *qmpClient) SendCtrlAltDelete(ctx context.Context) error {
 		map[string]interface{}{"type": "qcode", "data": "alt"},
 		map[string]interface{}{"type": "qcode", "data": "delete"},
 	}
-	return q.execute(ctx, "send-key", map[string]interface{}{
+	_, err := q.execute(ctx, "send-key", map[string]interface{}{
 		"keys": keys,
 	})
+	return err
 }
 
 // Shutdown gracefully shuts down the VM using ACPI powerdown
 func (q *qmpClient) Shutdown(ctx context.Context) error {
-	return q.execute(ctx, "system_powerdown", nil)
+	_, err := q.execute(ctx, "system_powerdown", nil)
+	return err
 }
 
 // Quit instructs QEMU to exit immediately
 func (q *qmpClient) Quit(ctx context.Context) error {
-	return q.execute(ctx, "quit", nil)
+	_, err := q.execute(ctx, "quit", nil)
+	return err
 }
 
 // QueryStatus returns the current VM status (running, paused, shutdown, etc).
@@ -396,14 +399,16 @@ func (q *qmpClient) DeviceAdd(ctx context.Context, driver string, args map[strin
 		args = make(map[string]interface{})
 	}
 	args["driver"] = driver
-	return q.execute(ctx, "device_add", args)
+	_, err := q.execute(ctx, "device_add", args)
+	return err
 }
 
 // DeviceDelete removes a device
 func (q *qmpClient) DeviceDelete(ctx context.Context, deviceID string) error {
-	return q.execute(ctx, "device_del", map[string]interface{}{
+	_, err := q.execute(ctx, "device_del", map[string]interface{}{
 		"id": deviceID,
 	})
+	return err
 }
 
 // HotpluggableCPU describes an available CPU hotplug slot.
@@ -731,14 +736,16 @@ func (q *qmpClient) ObjectAdd(ctx context.Context, qomType, objID string, args m
 		arguments[k] = v
 	}
 
-	return q.execute(ctx, "object-add", arguments)
+	_, err := q.execute(ctx, "object-add", arguments)
+	return err
 }
 
 // ObjectDel removes a QEMU object
 func (q *qmpClient) ObjectDel(ctx context.Context, objID string) error {
-	return q.execute(ctx, "object-del", map[string]interface{}{
+	_, err := q.execute(ctx, "object-del", map[string]interface{}{
 		"id": objID,
 	})
+	return err
 }
 
 // HotplugMemory adds memory to the VM using pc-dimm
