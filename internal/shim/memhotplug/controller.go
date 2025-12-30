@@ -426,7 +426,7 @@ func (c *Controller) scaleDown(ctx context.Context, targetMemory int64) error {
 		// Try to bring memory back online if unplug failed
 		if onlineErr := c.onlineMemory(ctx, slotID); onlineErr != nil {
 			log.G(ctx).WithError(onlineErr).WithField("slot_id", slotID).
-				Warn("memory-hotplug: failed to re-online memory after unplug failure")
+				Error("memory-hotplug: CRITICAL - failed to re-online memory after unplug failure, guest may have offline memory")
 		}
 		return fmt.Errorf("failed to unplug memory: %w", err)
 	}
