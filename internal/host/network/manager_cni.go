@@ -172,10 +172,14 @@ func (nm *cniNetworkManager) releaseNetworkResourcesCNI(ctx context.Context, env
 	// The netns should still exist from when we called ensureNetworkResourcesCNI
 	netnsPath := cni.GetNetNSPath(env.ID)
 
+	// Track if any errors occurred during teardown
+	hadErrors := false
+
 	// Check if the netns exists
 	if !cni.NetNSExists(env.ID) {
 		log.G(ctx).WithField("vmID", env.ID).
 			Warn("Netns does not exist, creating temporary one for CNI teardown")
+		hadErrors = true
 		// Create a temporary netns for cleanup if the original is gone
 		// This can happen if the host was rebooted or the netns was manually deleted
 		tmpNetns, err := cni.CreateNetNS(env.ID)
@@ -194,6 +198,7 @@ func (nm *cniNetworkManager) releaseNetworkResourcesCNI(ctx context.Context, env
 	// IMPORTANT: Always attempt teardown even without netns, as some CNI plugins
 	// (especially IPAM plugins) can clean up IP allocations without netns
 	if err := nm.cniManager.Teardown(ctx, env.ID, netnsPath); err != nil {
+		hadErrors = true
 		if netnsPath == "" {
 			// Expected to have some errors without netns, but IPAM cleanup might still work
 			log.G(ctx).WithError(err).WithField("vmID", env.ID).
@@ -205,11 +210,12 @@ func (nm *cniNetworkManager) releaseNetworkResourcesCNI(ctx context.Context, env
 		// Continue with cleanup - we still want to remove state
 	} else if netnsPath == "" {
 		log.G(ctx).WithField("vmID", env.ID).
-			Info("CNI teardown succeeded without netns (IPAM cleanup likely successful)")
+			Debug("CNI teardown completed without netns (IPAM cleanup may have succeeded)")
 	}
 
 	// Clean up netns (whether it's the original or temporary)
 	if err := cni.DeleteNetNS(env.ID); err != nil {
+		hadErrors = true
 		log.G(ctx).WithError(err).WithField("vmID", env.ID).
 			Warn("Failed to delete netns")
 	}
@@ -219,14 +225,23 @@ func (nm *cniNetworkManager) releaseNetworkResourcesCNI(ctx context.Context, env
 	delete(nm.cniResults, env.ID)
 	nm.cniMu.Unlock()
 
+	// Log final status - use Debug level if errors occurred to avoid misleading success messages
 	if exists {
-		log.G(ctx).WithFields(log.Fields{
+		fields := log.Fields{
 			"vmID": env.ID,
 			"tap":  result.TAPDevice,
-		}).Info("CNI network released")
+		}
+		if hadErrors {
+			log.G(ctx).WithFields(fields).Debug("CNI network cleanup completed (with errors)")
+		} else {
+			log.G(ctx).WithFields(fields).Info("CNI network released")
+		}
 	} else {
-		log.G(ctx).WithField("vmID", env.ID).
-			Info("CNI network cleanup attempted")
+		if hadErrors {
+			log.G(ctx).WithField("vmID", env.ID).Debug("CNI network cleanup attempted (with errors)")
+		} else {
+			log.G(ctx).WithField("vmID", env.ID).Info("CNI network cleanup attempted")
+		}
 	}
 
 	// Clear environment network info
