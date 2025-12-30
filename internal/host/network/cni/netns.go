@@ -177,7 +177,7 @@ func bindMountNetNS(source, target string) error {
 	}
 
 	// Bind mount the namespace using MS_BIND | MS_REC flags
-	if err := mount(source, target, "", uintptr(unix.MS_BIND|unix.MS_REC), ""); err != nil {
+	if err := unix.Mount(source, target, "", uintptr(unix.MS_BIND|unix.MS_REC), ""); err != nil {
 		if removeErr := os.Remove(target); removeErr != nil && !os.IsNotExist(removeErr) {
 			log.L.WithError(removeErr).Warn("failed to remove netns file after mount error")
 		}
@@ -190,7 +190,7 @@ func bindMountNetNS(source, target string) error {
 // unmountNetNS unmounts a network namespace.
 func unmountNetNS(target string) error {
 	// Use MNT_DETACH for lazy unmount
-	if err := unmount(target, unix.MNT_DETACH); err != nil {
+	if err := unix.Unmount(target, unix.MNT_DETACH); err != nil {
 		return fmt.Errorf("failed to unmount netns: %w", err)
 	}
 
