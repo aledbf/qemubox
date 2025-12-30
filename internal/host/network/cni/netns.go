@@ -140,10 +140,8 @@ func DeleteNetNS(vmID string) error {
 	netnsPath := filepath.Join(netnsBasePath, vmID)
 
 	// Unmount the namespace
-	if err := unmountNetNS(netnsPath); err != nil {
-		// Continue with deletion even if unmount fails
-		_ = err // Ignore unmount errors
-	}
+	// Continue with deletion even if unmount fails
+	_ = unmountNetNS(netnsPath)
 
 	// Remove the file
 	if err := os.Remove(netnsPath); err != nil && !os.IsNotExist(err) {
