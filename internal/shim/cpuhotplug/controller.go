@@ -262,7 +262,9 @@ func (c *Controller) checkAndAdjust(ctx context.Context) error {
 			return nil
 		}
 
-		c.scaleDown(ctx, targetCPUs)
+		if err := c.scaleDown(ctx, targetCPUs); err != nil {
+			return fmt.Errorf("failed to scale down CPUs: %w", err)
+		}
 		return nil
 	}
 
@@ -443,7 +445,7 @@ func (c *Controller) scaleUp(ctx context.Context, targetCPUs int) error {
 }
 
 // scaleDown removes vCPUs to reach target
-func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) {
+func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) error {
 	log.G(ctx).WithFields(log.Fields{
 		"container_id": c.containerID,
 		"current":      c.currentCPUs,
@@ -459,7 +461,8 @@ func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) {
 					"container_id": c.containerID,
 					"cpu_id":       i,
 				}).Warn("cpu-hotplug: failed to offline vCPU in guest")
-				break
+				// CPU hot-unplug is best-effort - return error but don't crash
+				return fmt.Errorf("failed to offline CPU %d: %w", i, err)
 			}
 		}
 
@@ -468,8 +471,8 @@ func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) {
 				"container_id": c.containerID,
 				"cpu_id":       i,
 			}).Warn("cpu-hotplug: failed to remove vCPU (may not be supported by guest kernel)")
-			// Don't fail the entire operation - CPU hot-unplug is best-effort
-			break
+			// CPU hot-unplug is best-effort - return error but don't crash
+			return fmt.Errorf("failed to unplug CPU %d: %w", i, err)
 		}
 
 		log.G(ctx).WithFields(log.Fields{
@@ -481,4 +484,5 @@ func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) {
 	c.currentCPUs = targetCPUs
 	c.lastScaleDown = time.Now()
 	c.consecutiveLowUsage = 0
+	return nil
 }
