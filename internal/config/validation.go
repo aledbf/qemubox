@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // Validate validates the entire configuration.
@@ -231,17 +233,10 @@ func validateDirectoryWritable(path, fieldName string) error {
 		return err
 	}
 
-	// Check write permission by creating a temp file
-	testFile := filepath.Join(path, ".qemubox-write-test")
-	f, err := os.Create(testFile)
-	if err != nil {
-		return fmt.Errorf("%s directory is not writable: %s (permission denied)", fieldName, path)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("%s directory write test failed: %s (%w)", fieldName, path, err)
-	}
-	if err := os.Remove(testFile); err != nil {
-		return fmt.Errorf("%s directory write test cleanup failed: %s (%w)", fieldName, path, err)
+	// Check write permission using access() syscall
+	// This avoids creating files and potential symlink security issues
+	if err := unix.Access(path, unix.W_OK); err != nil {
+		return fmt.Errorf("%s directory is not writable: %s", fieldName, path)
 	}
 
 	return nil
