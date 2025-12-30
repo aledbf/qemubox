@@ -8,11 +8,48 @@ import "google/protobuf/empty.proto";
 
 option go_package = "github.com/aledbf/qemubox/containerd/api/services/system/v1;system";
 
+// System service provides VM system information and CPU/memory hotplug operations.
+// This service is exposed by vminitd over vsock to the host shim for dynamic
+// resource management.
 service System {
+	// Info returns VM system information (vminitd version, kernel version).
+	// This is called during VM initialization to verify the guest is ready.
 	rpc Info(google.protobuf.Empty) returns (InfoResponse);
+
+	// OfflineCPU takes a CPU offline via sysfs before hot-unplug.
+	// The CPU must have been previously onlined and cannot be CPU 0 (boot CPU).
+	//
+	// Returns:
+	//   - INVALID_ARGUMENT: cpu_id is 0 (cannot offline boot CPU)
+	//   - NOT_FOUND: cpu_id does not exist in /sys/devices/system/cpu/
+	//   - FAILED_PRECONDITION: CPU is already offline or in use
+	//   - INTERNAL: failed to write to sysfs
 	rpc OfflineCPU(OfflineCPURequest) returns (google.protobuf.Empty);
+
+	// OnlineCPU brings a CPU online via sysfs after hot-plug.
+	// The CPU must have been previously hot-plugged via QEMU QMP.
+	//
+	// Returns:
+	//   - NOT_FOUND: cpu_id does not exist (not yet hot-plugged via QMP)
+	//   - FAILED_PRECONDITION: CPU is already online
+	//   - INTERNAL: failed to write to sysfs
 	rpc OnlineCPU(OnlineCPURequest) returns (google.protobuf.Empty);
+
+	// OfflineMemory takes a memory block offline via sysfs before hot-unplug.
+	//
+	// Returns:
+	//   - NOT_FOUND: memory_id does not exist in /sys/devices/system/memory/
+	//   - FAILED_PRECONDITION: memory block is already offline or contains kernel memory
+	//   - INTERNAL: failed to write to sysfs
 	rpc OfflineMemory(OfflineMemoryRequest) returns (google.protobuf.Empty);
+
+	// OnlineMemory brings a memory block online via sysfs after hot-plug.
+	// The memory block must have been previously hot-plugged via QEMU QMP.
+	//
+	// Returns:
+	//   - NOT_FOUND: memory_id does not exist (not yet hot-plugged via QMP)
+	//   - FAILED_PRECONDITION: memory block is already online
+	//   - INTERNAL: failed to write to sysfs
 	rpc OnlineMemory(OnlineMemoryRequest) returns (google.protobuf.Empty);
 }
 

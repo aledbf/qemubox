@@ -6,7 +6,19 @@ package containerd.vminitd.services.bundle.v1;
 
 option go_package = "github.com/aledbf/qemubox/containerd/api/services/bundle/v1;bundle";
 
+// Bundle service manages OCI bundle creation inside the VM.
+// This service is exposed by vminitd over vsock to the host shim.
 service Bundle {
+	// Create creates an OCI bundle from the provided files.
+	//
+	// The bundle directory is created at /run/qemubox/{namespace}/{id}/
+	// and populated with the files from the request (e.g., config.json,
+	// hostname, hosts, resolv.conf).
+	//
+	// Returns:
+	//   - INVALID_ARGUMENT: id is empty or files map is empty
+	//   - ALREADY_EXISTS: bundle with this id already exists
+	//   - INTERNAL: failed to create bundle directory or write files
 	rpc Create(CreateRequest) returns (CreateResponse);
 }
 
