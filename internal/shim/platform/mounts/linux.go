@@ -25,15 +25,22 @@ func newManager() Manager {
 	return &linuxManager{}
 }
 
+// truncateID ensures disk/tag IDs don't exceed QEMU's limits.
+// QEMU restricts device IDs to 36 characters for internal tracking.
+func truncateID(prefix, id string) string {
+	const maxIDLen = 36
+	tag := fmt.Sprintf("%s-%s", prefix, id)
+	if len(tag) > maxIDLen {
+		return tag[:maxIDLen]
+	}
+	return tag
+}
+
 func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, rootfsMounts []*types.Mount, bundleRootfs string, mountDir string) ([]*types.Mount, error) {
 	// Try virtiofs first (not currently implemented for QEMU), fall back to block devices
 
 	if len(rootfsMounts) == 1 && (rootfsMounts[0].Type == "overlay" || rootfsMounts[0].Type == "bind") {
-		tag := fmt.Sprintf("rootfs-%s", id)
-		// Keep disk ID reasonably short for logging and tracking
-		if len(tag) > 36 {
-			tag = tag[:36]
-		}
+		tag := truncateID("rootfs", id)
 		mnt := mount.Mount{
 			Type:    rootfsMounts[0].Type,
 			Source:  rootfsMounts[0].Source,
@@ -51,11 +58,7 @@ func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, ro
 			Options: translateMountOptions(ctx, rootfsMounts[0].Options),
 		}}, nil
 	} else if len(rootfsMounts) == 0 {
-		tag := fmt.Sprintf("rootfs-%s", id)
-		// Keep disk ID reasonably short for logging and tracking
-		if len(tag) > 36 {
-			tag = tag[:36]
-		}
+		tag := truncateID("rootfs", id)
 		if err := vmi.AddFS(ctx, tag, bundleRootfs); err != nil {
 			return nil, err
 		}
@@ -71,11 +74,7 @@ func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, ro
 		}
 
 		// Fallback to original rootfs mount
-		tag := fmt.Sprintf("rootfs-%s", id)
-		// Keep disk ID reasonably short for logging and tracking
-		if len(tag) > 36 {
-			tag = tag[:36]
-		}
+		tag := truncateID("rootfs", id)
 		if err := vmi.AddFS(ctx, tag, bundleRootfs); err != nil {
 			return nil, err
 		}
@@ -140,11 +139,7 @@ func (m *linuxManager) transformMount(ctx context.Context, id string, disks *byt
 }
 
 func (m *linuxManager) handleEROFS(ctx context.Context, id string, disks *byte, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
-	disk := fmt.Sprintf("disk-%d-%s", *disks, id)
-	// Keep disk ID reasonably short for logging and tracking
-	if len(disk) > 36 {
-		disk = disk[:36]
-	}
+	disk := truncateID(fmt.Sprintf("disk-%d", *disks), id)
 
 	var options []string
 	devices := []string{mnt.Source}
@@ -191,11 +186,7 @@ func (m *linuxManager) handleEROFS(ctx context.Context, id string, disks *byte, 
 }
 
 func (m *linuxManager) handleExt4(id string, disks *byte, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
-	disk := fmt.Sprintf("disk-%d-%s", *disks, id)
-	// Keep disk ID reasonably short for logging and tracking
-	if len(disk) > 36 {
-		disk = disk[:36]
-	}
+	disk := truncateID(fmt.Sprintf("disk-%d", *disks), id)
 	// Check if mount should be read-only
 	readOnly := false
 	for _, opt := range mnt.Options {
