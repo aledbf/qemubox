@@ -375,10 +375,18 @@ func (c *Controller) scaleUp(ctx context.Context, targetMemory int64) error {
 	// Mark slot as used
 	c.usedSlots[slotID] = true
 
-	// Online memory in guest (may not be needed if auto_online is enabled)
+	// Online memory in guest - required for memory to be usable
 	if err := c.onlineMemory(ctx, slotID); err != nil {
 		log.G(ctx).WithError(err).WithField("slot_id", slotID).
-			Warn("memory-hotplug: failed to online memory in guest (non-fatal)")
+			Error("memory-hotplug: failed to online memory in guest")
+		// Memory was allocated via QMP but is not usable by guest
+		// Try to unplug it to avoid wasting resources
+		if unplugErr := c.qmpClient.UnplugMemory(ctx, slotID); unplugErr != nil {
+			log.G(ctx).WithError(unplugErr).WithField("slot_id", slotID).
+				Warn("memory-hotplug: failed to unplug unusable memory")
+		}
+		delete(c.usedSlots, slotID)
+		return fmt.Errorf("memory allocated but failed to online in guest: %w", err)
 	}
 
 	c.lastScaleUp = time.Now()
