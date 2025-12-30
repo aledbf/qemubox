@@ -378,7 +378,7 @@ func systemMounts() error {
 		},
 		{
 			Type:    "tmpfs",
-			Source:  "tmpsfs",
+			Source:  "tmpfs",
 			Target:  "/tmp",
 			Options: []string{"nosuid", "noexec", "nodev"},
 		},
