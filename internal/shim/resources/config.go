@@ -151,7 +151,16 @@ func extractMemoryRequest(spec *specs.Spec) int64 {
 
 // alignMemory rounds up the given memory value to the nearest multiple of alignment.
 // This is required for virtio-mem which needs memory sizes aligned to 128MB.
+// Panics if alignment is invalid (<=0 or not a power of 2).
 func alignMemory(memory, alignment int64) int64 {
+	if alignment <= 0 {
+		panic(fmt.Sprintf("alignMemory: invalid alignment %d (must be > 0)", alignment))
+	}
+	// Check if alignment is power of 2 (virtio-mem requirement)
+	if alignment&(alignment-1) != 0 {
+		panic(fmt.Sprintf("alignMemory: alignment %d is not a power of 2", alignment))
+	}
+
 	if memory%alignment == 0 {
 		return memory
 	}
