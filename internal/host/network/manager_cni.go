@@ -27,14 +27,18 @@ func newCNINetworkManager(config NetworkConfig) (*cniNetworkManager, error) {
 		config:     config,
 		cniManager: cniMgr,
 		cniResults: make(map[string]*cni.CNIResult),
+		inFlight:   make(map[string]*setupInFlight),
 	}
 
 	return nm, nil
 }
 
 // ensureNetworkResourcesCNI allocates and configures network resources using CNI plugins.
+// If multiple goroutines call this concurrently for the same container ID, only one will
+// perform the actual CNI setup. The others will block until setup completes, then return
+// the same result or error.
 func (nm *cniNetworkManager) ensureNetworkResourcesCNI(ctx context.Context, env *Environment) error {
-	// Fast path: check if already configured with read lock
+	// Fast path: check if already configured
 	nm.cniMu.RLock()
 	if result, exists := nm.cniResults[env.ID]; exists {
 		nm.cniMu.RUnlock()
@@ -42,54 +46,56 @@ func (nm *cniNetworkManager) ensureNetworkResourcesCNI(ctx context.Context, env 
 			"vmID": env.ID,
 			"tap":  result.TAPDevice,
 		}).Debug("CNI resources already allocated")
+		nm.updateEnvironment(env, result)
 		return nil
 	}
 	nm.cniMu.RUnlock()
 
-	// Slow path: acquire write lock and double-check to prevent race
-	nm.cniMu.Lock()
-	// Double-check after acquiring write lock
-	if result, exists := nm.cniResults[env.ID]; exists {
-		nm.cniMu.Unlock()
-		log.G(ctx).WithFields(log.Fields{
-			"vmID": env.ID,
-			"tap":  result.TAPDevice,
-		}).Debug("CNI resources already allocated (double-check)")
+	// Check if another goroutine is already setting up this container
+	nm.inflightMu.Lock()
+	if inflight, exists := nm.inFlight[env.ID]; exists {
+		// Another goroutine is doing the setup - wait for it
+		nm.inflightMu.Unlock()
+		log.G(ctx).WithField("vmID", env.ID).Debug("waiting for in-flight CNI setup to complete")
+		<-inflight.done
+
+		// Check the result
+		if inflight.err != nil {
+			return inflight.err
+		}
+		nm.updateEnvironment(env, inflight.result)
 		return nil
 	}
-	// Release lock before slow CNI operations to avoid blocking other operations
+
+	// We're the first - create an in-flight tracker so others will wait
+	inflight := &setupInFlight{
+		done: make(chan struct{}),
+	}
+	nm.inFlight[env.ID] = inflight
+	nm.inflightMu.Unlock()
+
+	// Ensure we clean up the in-flight tracker and wake waiters when done
+	defer func() {
+		close(inflight.done)
+		nm.inflightMu.Lock()
+		delete(nm.inFlight, env.ID)
+		nm.inflightMu.Unlock()
+	}()
+
+	// Perform the actual CNI setup (without holding locks)
+	result, err := nm.performCNISetup(ctx, env.ID)
+	if err != nil {
+		inflight.err = err
+		return err
+	}
+
+	// Store result
+	nm.cniMu.Lock()
+	nm.cniResults[env.ID] = result
 	nm.cniMu.Unlock()
 
-	// Create network namespace for CNI execution
-	netnsPath, err := cni.CreateNetNS(env.ID)
-	if err != nil {
-		return fmt.Errorf("failed to create netns for CNI: %w", err)
-	}
-
-	// Execute CNI plugin chain
-	result, err := nm.cniManager.Setup(ctx, env.ID, netnsPath)
-	if err != nil {
-		// Clean up netns on failure
-		_ = cni.DeleteNetNS(env.ID)
-
-		// Check if this is a veth name conflict error
-		if isVethConflictError(err) {
-			log.G(ctx).WithError(err).WithField("vmID", env.ID).
-				Warn("CNI setup failed due to existing veth pair, attempting cleanup")
-
-			// Try to clean up any orphaned resources for this container ID
-			// Create a temporary netns for cleanup
-			cleanupNetns, cleanupErr := cni.CreateNetNS(env.ID)
-			if cleanupErr == nil {
-				_ = nm.cniManager.Teardown(ctx, env.ID, cleanupNetns)
-				_ = cni.DeleteNetNS(env.ID)
-			}
-
-			return fmt.Errorf("failed to setup CNI network (veth conflict - orphaned resources from previous run?): %w", err)
-		}
-
-		return fmt.Errorf("failed to setup CNI network: %w", err)
-	}
+	inflight.result = result
+	nm.updateEnvironment(env, result)
 
 	log.G(ctx).WithFields(log.Fields{
 		"vmID":    env.ID,
@@ -98,22 +104,47 @@ func (nm *cniNetworkManager) ensureNetworkResourcesCNI(ctx context.Context, env 
 		"gateway": result.Gateway,
 	}).Info("CNI network configured")
 
-	// Store CNI result for teardown with exclusive lock
-	nm.cniMu.Lock()
-	// Final check in case another goroutine beat us to it
-	if _, exists := nm.cniResults[env.ID]; exists {
-		nm.cniMu.Unlock()
-		// Another goroutine already configured this - clean up our resources
-		_ = nm.cniManager.Teardown(ctx, env.ID, netnsPath)
-		_ = cni.DeleteNetNS(env.ID)
-		log.G(ctx).WithField("vmID", env.ID).
-			Debug("CNI resources already allocated by another goroutine, cleaned up duplicate")
-		return nil
-	}
-	nm.cniResults[env.ID] = result
-	nm.cniMu.Unlock()
+	return nil
+}
 
-	// Update environment with network info
+// performCNISetup executes the actual CNI plugin chain setup.
+// This is extracted to a separate function to keep the synchronization logic clear.
+func (nm *cniNetworkManager) performCNISetup(ctx context.Context, containerID string) (*cni.CNIResult, error) {
+	// Create network namespace for CNI execution
+	netnsPath, err := cni.CreateNetNS(containerID)
+	if err != nil {
+		return nil, fmt.Errorf("create netns for CNI: %w", err)
+	}
+
+	// Execute CNI plugin chain
+	result, err := nm.cniManager.Setup(ctx, containerID, netnsPath)
+	if err != nil {
+		// Clean up netns on failure
+		_ = cni.DeleteNetNS(containerID)
+
+		// Check if this is a veth name conflict error
+		if isVethConflictError(err) {
+			log.G(ctx).WithError(err).WithField("containerID", containerID).
+				Warn("CNI setup failed due to veth conflict, attempting cleanup")
+
+			// Try to clean up orphaned resources
+			cleanupNetns, cleanupErr := cni.CreateNetNS(containerID)
+			if cleanupErr == nil {
+				_ = nm.cniManager.Teardown(ctx, containerID, cleanupNetns)
+				_ = cni.DeleteNetNS(containerID)
+			}
+
+			return nil, fmt.Errorf("setup CNI network (veth conflict - orphaned resources from previous run?): %w", err)
+		}
+
+		return nil, fmt.Errorf("setup CNI network: %w", err)
+	}
+
+	return result, nil
+}
+
+// updateEnvironment updates the environment with network information from a CNI result.
+func (nm *cniNetworkManager) updateEnvironment(env *Environment, result *cni.CNIResult) {
 	env.NetworkInfo = &NetworkInfo{
 		TapName: result.TAPDevice,
 		MAC:     result.TAPMAC,
@@ -121,8 +152,6 @@ func (nm *cniNetworkManager) ensureNetworkResourcesCNI(ctx context.Context, env 
 		Netmask: result.Netmask,
 		Gateway: result.Gateway,
 	}
-
-	return nil
 }
 
 // releaseNetworkResourcesCNI releases network resources using CNI plugins.

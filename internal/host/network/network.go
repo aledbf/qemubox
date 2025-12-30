@@ -88,6 +88,15 @@ type NetworkManager interface {
 	ReleaseNetworkResources(ctx context.Context, env *Environment) error
 }
 
+// setupInFlight tracks an in-progress CNI setup operation.
+// Multiple goroutines attempting to setup the same container ID will coordinate
+// through this struct - the first one does the work, others wait on the channel.
+type setupInFlight struct {
+	done   chan struct{} // closed when setup completes (success or failure)
+	result *cni.CNIResult
+	err    error
+}
+
 // cniNetworkManager manages lifecycle of host networking resources using CNI.
 type cniNetworkManager struct {
 	config NetworkConfig
@@ -98,6 +107,11 @@ type cniNetworkManager struct {
 	// CNI state storage (maps VM ID to CNI result for cleanup)
 	cniResults map[string]*cni.CNIResult
 	cniMu      sync.RWMutex
+
+	// Tracks in-flight setup operations to avoid duplicate work
+	// Multiple concurrent calls for the same ID will coordinate through this map
+	inFlight   map[string]*setupInFlight
+	inflightMu sync.Mutex
 }
 
 // NewNetworkManager creates a network manager for the configured mode.
