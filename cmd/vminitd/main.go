@@ -242,9 +242,9 @@ func systemInit(ctx context.Context) error {
 	// This allows vminitd to catch the signal and perform a clean shutdown
 	// Default behavior (1) causes immediate kernel reboot without notifying init
 	if err := os.WriteFile("/proc/sys/kernel/ctrl-alt-del", []byte("0"), 0644); err != nil {
-		log.G(ctx).WithError(err).Warn("failed to configure ctrl-alt-del behavior")
-	} else {
-		log.G(ctx).Debug("configured kernel to send SIGINT on CTRL+ALT+DELETE")
+		// In production, unexpected reboots could be a security concern
+		// Log at error level but continue - the setting may not be available in all kernels
+		log.G(ctx).WithError(err).Error("failed to configure ctrl-alt-del behavior - VM may reboot unexpectedly on CTRL+ALT+DEL")
 	}
 
 	// Wait for virtio block devices to appear
