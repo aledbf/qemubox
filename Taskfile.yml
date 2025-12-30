@@ -544,6 +544,29 @@ tasks:
   # Utility Tasks
   # ==========================================================================
 
+  setup:buildx:
+    desc: Setup Docker Buildx builder for qemubox
+    cmds:
+      - |
+        set -eou pipefail
+        BUILDER_NAME="qemubox-builder"
+
+        if docker buildx inspect "${BUILDER_NAME}" &>/dev/null; then
+          echo "✓ Builder '${BUILDER_NAME}' already exists"
+          docker buildx use "${BUILDER_NAME}"
+        else
+          echo "→ Creating builder '${BUILDER_NAME}'..."
+          docker buildx create \
+            --name "${BUILDER_NAME}" \
+            --driver docker-container \
+            --driver-opt network=host \
+            --driver-opt image=moby/buildkit:latest \
+            --buildkitd-flags '--allow-insecure-entitlement security.insecure --allow-insecure-entitlement network.host' \
+            --use
+          docker buildx inspect --bootstrap
+          echo "✓ Builder '${BUILDER_NAME}' created and active"
+        fi
+
   verify:vendor:
     desc: Verify go.mod/go.sum are up to date
     cmds:
