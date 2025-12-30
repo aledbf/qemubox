@@ -58,6 +58,7 @@ type Controller struct {
 
 	// State management
 	mu        sync.Mutex
+	started   bool          // Track if Start() has been called
 	stopCh    chan struct{}
 	stoppedCh chan struct{}
 }
@@ -163,6 +164,14 @@ func NewController(
 
 // Start begins monitoring memory usage and managing hotplug
 func (c *Controller) Start(ctx context.Context) {
+	c.mu.Lock()
+	if c.started {
+		c.mu.Unlock()
+		return // Already started
+	}
+	c.started = true
+	c.mu.Unlock()
+
 	go func() {
 		defer close(c.stoppedCh)
 
