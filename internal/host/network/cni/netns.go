@@ -73,6 +73,8 @@ func CreateNetNS(vmID string) (string, error) {
 	nsFdPath := fmt.Sprintf("/proc/self/fd/%d", newNS)
 	if err := bindMountNetNS(nsFdPath, netnsPath); err != nil {
 		if restoreErr := netns.Set(origNS); restoreErr != nil {
+			// Best effort cleanup of netns file on catastrophic failure
+			_ = os.Remove(netnsPath)
 			return "", fmt.Errorf("failed to restore original netns after bind mount error: %w", restoreErr)
 		}
 		return "", fmt.Errorf("failed to bind mount netns: %w", err)
