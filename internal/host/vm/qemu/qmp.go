@@ -32,16 +32,16 @@ type qmpClient struct {
 }
 
 type qmpCommand struct {
-	Execute   string                 `json:"execute"`
+	Execute   string         `json:"execute"`
 	Arguments map[string]any `json:"arguments,omitempty"`
-	ID        uint64                 `json:"id,omitempty"`
+	ID        uint64         `json:"id,omitempty"`
 }
 
 type qmpResponse struct {
 	Return any            `json:"return,omitempty"`
-	Error  *qmpError              `json:"error,omitempty"`
-	ID     uint64                 `json:"id,omitempty"`
-	Event  string                 `json:"event,omitempty"`
+	Error  *qmpError      `json:"error,omitempty"`
+	ID     uint64         `json:"id,omitempty"`
+	Event  string         `json:"event,omitempty"`
 	Data   map[string]any `json:"data,omitempty"`
 }
 
@@ -413,10 +413,10 @@ func (q *qmpClient) DeviceDelete(ctx context.Context, deviceID string) error {
 
 // HotpluggableCPU describes an available CPU hotplug slot.
 type HotpluggableCPU struct {
-	Type       string                 `json:"type"`
-	QOMPath    string                 `json:"qom-path"`
+	Type       string         `json:"type"`
+	QOMPath    string         `json:"qom-path"`
 	Props      map[string]any `json:"props"`
-	VCPUsCount int                    `json:"vcpus-count"`
+	VCPUsCount int            `json:"vcpus-count"`
 }
 
 // QueryCPUs returns information about all vCPUs in the VM
@@ -594,7 +594,7 @@ func (q *qmpClient) UnplugCPU(ctx context.Context, cpuID int) error {
 
 // MemoryDeviceInfo represents a hotplugged memory device
 type MemoryDeviceInfo struct {
-	Type string                 `json:"type"` // "dimm" or "virtio-mem"
+	Type string         `json:"type"` // "dimm" or "virtio-mem"
 	Data map[string]any `json:"data"`
 }
 
