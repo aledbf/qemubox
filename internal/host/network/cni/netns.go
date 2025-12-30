@@ -37,8 +37,10 @@ func CreateNetNS(vmID string) (string, error) {
 
 	// Check if netns already exists (from previous run)
 	if NetNSExists(vmID) {
-		// Clean up existing netns first
-		_ = DeleteNetNS(vmID)
+		log.L.WithField("vmID", vmID).Warn("netns already exists from previous run, attempting cleanup")
+		if err := DeleteNetNS(vmID); err != nil {
+			return "", fmt.Errorf("failed to clean up existing netns: %w", err)
+		}
 	}
 
 	// Lock OS thread to ensure namespace operations work correctly
