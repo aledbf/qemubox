@@ -95,7 +95,7 @@ func DefaultConfig() Config {
 		ScaleUpThrottleLimit: 5.0,  // Avoid scaling if throttling exceeds this %
 		ScaleUpStability:     2,    // Need 2 consecutive high readings (10s total)
 		ScaleDownStability:   6,    // Need 6 consecutive low readings (30s total)
-		EnableScaleDown:      true, // Disabled by default (many kernels don't support CPU unplug)
+		EnableScaleDown:      true, // Enabled by default (some kernels may not support CPU unplug)
 	}
 }
 
