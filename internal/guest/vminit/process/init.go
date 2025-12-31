@@ -5,6 +5,7 @@ package process
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -263,6 +264,9 @@ func (p *Init) Start(ctx context.Context) error {
 }
 
 func (p *Init) start(ctx context.Context) error {
+	if p.runtime == nil {
+		return errors.New("runtime not initialized")
+	}
 	log.G(ctx).WithFields(log.Fields{
 		"container_id": p.id,
 		"bundle":       p.Bundle,
