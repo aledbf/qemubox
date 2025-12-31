@@ -549,11 +549,7 @@ type MemoryDeviceInfo struct {
 	Data map[string]any `json:"data"`
 }
 
-// MemorySizeSummary from query-memory-size-summary
-type MemorySizeSummary struct {
-	BaseMemory    int64 `json:"base-memory"`    // Boot memory in bytes
-	PluggedMemory int64 `json:"plugged-memory"` // Hotplugged memory in bytes
-}
+// MemorySizeSummary is defined in types.go (platform-independent)
 
 // QueryMemoryDevices returns all hotplugged memory devices
 func (q *qmpClient) QueryMemoryDevices(ctx context.Context) ([]MemoryDeviceInfo, error) {

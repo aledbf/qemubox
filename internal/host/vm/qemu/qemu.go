@@ -109,17 +109,4 @@ type Instance struct {
 	networkCfg *vm.NetworkConfig // CNI network configuration
 }
 
-// DiskConfig represents a virtio-blk device
-type DiskConfig struct {
-	ID       string
-	Path     string
-	Readonly bool
-}
-
-// NetConfig represents a virtio-net device
-type NetConfig struct {
-	ID      string
-	TapName string   // TAP device name (stays in sandbox netns)
-	TapFile *os.File // TAP device file descriptor (opened in sandbox netns)
-	MAC     string
-}
+// DiskConfig and NetConfig are defined in types.go (platform-independent)

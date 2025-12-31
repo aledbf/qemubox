@@ -391,7 +391,7 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// We use context.Background() here because the background monitors need to outlive
 	// the Start() call and continue running until explicit Shutdown().
 	runCtx, runCancel := context.WithCancel(context.WithoutCancel(ctx))
-	// Note: q.mu is already held (locked at line 200), so we can set these fields directly
+	// Note: q.mu is already held, so we can set these fields directly
 	q.runCtx = runCtx
 	q.runCancel = runCancel
 
