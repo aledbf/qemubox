@@ -101,7 +101,7 @@ chmod +x "${RELEASE_DIR}/uninstall.sh"
 echo "  ok: install/uninstall scripts"
 
 echo "Downloading nerdctl..."
-NERDCTL_VERSION="${NERDCTL_VERSION:-2.2.0}"
+NERDCTL_VERSION="${NERDCTL_VERSION:-2.2.1}"
 NERDCTL_URL="https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
 NERDCTL_TARBALL="${OUTPUT_DIR}/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
 
@@ -126,13 +126,10 @@ tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/libexec/cni" 
   libexec/cni/firewall \
   libexec/cni/host-device \
   libexec/cni/host-local \
-  libexec/cni/ipvlan \
   libexec/cni/loopback \
-  libexec/cni/macvlan \
   libexec/cni/portmap \
   libexec/cni/ptp \
-  libexec/cni/tuning \
-  libexec/cni/vlan
+  libexec/cni/tuning
 echo "  ok: CNI plugins"
 
 echo "Building tc-redirect-tap CNI plugin..."
@@ -142,7 +139,10 @@ if [ ! -d "${TC_REDIRECT_TAP_DIR}" ]; then
 fi
 
 (cd "${TC_REDIRECT_TAP_DIR}" && \
-  env GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o tc-redirect-tap ./cmd/tc-redirect-tap)
+  env GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags '-extldflags "-static" -s -w' \
+    -tags 'osusergo netgo static_build' \
+    -o tc-redirect-tap ./cmd/tc-redirect-tap)
 
 cp "${TC_REDIRECT_TAP_DIR}/tc-redirect-tap" \
   "${RELEASE_DIR}/usr/share/qemubox/libexec/cni/"

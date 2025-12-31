@@ -23,7 +23,11 @@ TC_REDIRECT_TAP_DIR=$(mktemp -d)
 git clone --depth=1 https://github.com/awslabs/tc-redirect-tap "${TC_REDIRECT_TAP_DIR}"
 
 # Build tc-redirect-tap (disable workspace mode to avoid module conflicts)
-(cd "${TC_REDIRECT_TAP_DIR}" && env GOWORK=off GOOS=linux GOARCH=amd64 go build -o tc-redirect-tap ./cmd/tc-redirect-tap)
+(cd "${TC_REDIRECT_TAP_DIR}" && \
+  env GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags '-extldflags "-static" -s -w' \
+    -tags 'osusergo netgo static_build' \
+    -o tc-redirect-tap ./cmd/tc-redirect-tap)
 
 # Install to /opt/cni/bin (requires sudo on most systems)
 if [ -d /opt/cni/bin ] && [ -w /opt/cni/bin ]; then
