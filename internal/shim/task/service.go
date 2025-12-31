@@ -353,6 +353,11 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim already running a container; requires fresh shim per container")
 	}
 
+	// Validate container ID doesn't contain path separators (security: prevent path traversal)
+	if strings.ContainsAny(r.ID, "/\\") {
+		return nil, errgrpc.ToGRPCf(errdefs.ErrInvalidArgument, "container ID contains invalid path separators: %q", r.ID)
+	}
+
 	presetup := time.Now()
 
 	// Check KVM availability
