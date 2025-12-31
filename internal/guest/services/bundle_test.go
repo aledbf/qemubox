@@ -126,6 +126,88 @@ func TestServiceCreate(t *testing.T) {
 			wantErrType: errdefs.ErrInvalidArgument,
 		},
 		{
+			name:     "file path with nested path traversal",
+			bundleID: "test-bundle-nested-traversal",
+			files: map[string][]byte{
+				"foo/../../etc/passwd": []byte("evil"),
+			},
+			wantErr:     true,
+			wantErrType: errdefs.ErrInvalidArgument,
+		},
+		{
+			name:     "file path with deeply nested traversal",
+			bundleID: "test-bundle-deep-traversal",
+			files: map[string][]byte{
+				"a/b/c/../../../../../../../etc/passwd": []byte("evil"),
+			},
+			wantErr:     true,
+			wantErrType: errdefs.ErrInvalidArgument,
+		},
+		{
+			name:     "empty filename",
+			bundleID: "test-bundle-empty-filename",
+			files: map[string][]byte{
+				"": []byte("content"),
+			},
+			wantErr:     true,
+			wantErrType: errdefs.ErrInvalidArgument,
+		},
+		{
+			name:     "valid filename with double dots (not traversal)",
+			bundleID: "test-bundle-double-dots",
+			files: map[string][]byte{
+				"file..txt":      []byte("content1"),
+				"config..json":   []byte("content2"),
+				"..hidden.file":  []byte("content3"),
+			},
+			wantErr: false,
+			validate: func(t *testing.T, bundlePath string) {
+				// Verify all files were created
+				for _, name := range []string{"file..txt", "config..json", "..hidden.file"} {
+					path := filepath.Join(bundlePath, name)
+					if _, err := os.Stat(path); err != nil {
+						t.Errorf("file %q not created: %v", name, err)
+					}
+				}
+			},
+		},
+		{
+			name:     "subdirectory paths not allowed",
+			bundleID: "test-bundle-subdir",
+			files: map[string][]byte{
+				"subdir/config.json": []byte(`{"test": true}`),
+			},
+			wantErr:     true,
+			wantErrType: errdefs.ErrInvalidArgument,
+		},
+		{
+			name:     "backslash paths not allowed",
+			bundleID: "test-bundle-backslash",
+			files: map[string][]byte{
+				"subdir\\config.json": []byte(`{"test": true}`),
+			},
+			wantErr:     true,
+			wantErrType: errdefs.ErrInvalidArgument,
+		},
+		{
+			name:     "bare dot-dot not allowed",
+			bundleID: "test-bundle-bare-dotdot",
+			files: map[string][]byte{
+				"..": []byte("evil"),
+			},
+			wantErr:     true,
+			wantErrType: errdefs.ErrInvalidArgument,
+		},
+		{
+			name:     "bare dot not allowed",
+			bundleID: "test-bundle-bare-dot",
+			files: map[string][]byte{
+				".": []byte("evil"),
+			},
+			wantErr:     true,
+			wantErrType: errdefs.ErrInvalidArgument,
+		},
+		{
 			name:     "cleanup on rootfs mkdir failure",
 			bundleID: "test-bundle-5",
 			files:    map[string][]byte{},

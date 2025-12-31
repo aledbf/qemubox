@@ -70,15 +70,39 @@ func (s *service) Create(ctx context.Context, r *api.CreateRequest) (_ *api.Crea
 		return nil, errgrpc.ToGRPCf(errdefs.ErrInvalidArgument, "invalid bundle ID: %q", r.ID)
 	}
 
-	// Validate file paths to prevent directory traversal
+	d := filepath.Join(s.bundleRoot, r.ID)
+
+	// Validate file paths to prevent directory traversal and other attacks.
+	// Bundle files must be simple filenames without path components.
+	// This prevents attacks like:
+	//   - "../../../etc/passwd" (parent traversal)
+	//   - "/etc/passwd" (absolute paths)
+	//   - "foo/bar" (subdirectory creation - not supported)
 	for filename := range r.Files {
-		if filepath.IsAbs(filename) || strings.Contains(filename, "..") {
+		if filename == "" {
 			return nil, errgrpc.ToGRPCf(errdefs.ErrInvalidArgument,
-				"invalid file path in bundle: %q", filename)
+				"empty filename in bundle files")
+		}
+
+		// Reject absolute paths
+		if filepath.IsAbs(filename) {
+			return nil, errgrpc.ToGRPCf(errdefs.ErrInvalidArgument,
+				"absolute path not allowed in bundle: %q", filename)
+		}
+
+		// Reject paths with directory separators - bundle files must be simple filenames
+		if strings.ContainsAny(filename, "/\\") {
+			return nil, errgrpc.ToGRPCf(errdefs.ErrInvalidArgument,
+				"path separators not allowed in bundle filename: %q", filename)
+		}
+
+		// Reject path traversal sequences
+		// After the above checks, this catches edge cases like bare ".."
+		if filename == ".." || filename == "." {
+			return nil, errgrpc.ToGRPCf(errdefs.ErrInvalidArgument,
+				"invalid bundle filename: %q", filename)
 		}
 	}
-
-	d := filepath.Join(s.bundleRoot, r.ID)
 	if err := os.Mkdir(d, bundleDirPerms); err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}

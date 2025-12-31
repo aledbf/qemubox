@@ -27,8 +27,15 @@ message CreateRequest {
 	string id = 1;
 
 	// files is a map of filename to file contents.
-	// Keys are relative paths within the bundle (e.g., "config.json", "hosts", "resolv.conf").
+	// Keys must be simple filenames without path components (e.g., "config.json", "hosts", "resolv.conf").
 	// Values are the file contents as raw bytes.
+	//
+	// SECURITY: The server validates all filenames to prevent attacks:
+	//   - Empty filenames are rejected
+	//   - Absolute paths (starting with /) are rejected
+	//   - Path separators (/ or \) are rejected - only simple filenames allowed
+	//   - "." and ".." are rejected
+	// Invalid filenames result in INVALID_ARGUMENT error.
 	map<string, bytes> files = 2;
 }
 
