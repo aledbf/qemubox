@@ -160,8 +160,9 @@ func (b *qemuCommandBuilder) setQMPUnixSocket(socketPath string) *qemuCommandBui
 //   - disk: Disk configuration
 //
 // This generates both -drive and -device options:
-//   -drive file=<path>,if=none,id=<id>,format=<format>[,readonly=on]
-//   -device virtio-blk-pci,drive=<id>
+//
+//	-drive file=<path>,if=none,id=<id>,format=<format>[,readonly=on]
+//	-device virtio-blk-pci,drive=<id>
 //
 // Format is auto-detected from file extension:
 //   - .vmdk → vmdk
@@ -198,8 +199,9 @@ type NICConfig struct {
 //   - nic: NIC configuration
 //
 // This generates both -netdev and -device options:
-//   -netdev tap,id=<id>,fd=<fd>
-//   -device virtio-net-pci,netdev=<id>,mac=<mac>,romfile=
+//
+//	-netdev tap,id=<id>,fd=<fd>
+//	-device virtio-net-pci,netdev=<id>,mac=<mac>,romfile=
 //
 // Note: romfile= disables option ROM loading (e.g., efi-virtio.rom) to avoid firmware dependency.
 func (b *qemuCommandBuilder) addNIC(id string, nic NICConfig) *qemuCommandBuilder {
