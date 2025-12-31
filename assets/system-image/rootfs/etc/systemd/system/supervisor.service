@@ -1,0 +1,31 @@
+[Unit]
+Description=Beacon Workspace Supervisor
+Documentation=https://github.com/aledbf/beacon
+After=network.target network-online.target ssh.service
+Wants=network-online.target
+Requires=ssh.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/beacon/environment
+ExecStart=/usr/local/bin/supervisor
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=no
+ProtectSystem=false
+ProtectHome=false
+PrivateTmp=false
+
+# Allow the supervisor to write to workspace directories
+ReadWritePaths=/workspace
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=supervisor
+
+[Install]
+WantedBy=multi-user.target

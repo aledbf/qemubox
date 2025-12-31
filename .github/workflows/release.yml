@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
@@ -28,10 +29,8 @@ jobs:
           if command -v go &> /dev/null; then
             echo "exists=true" >> $GITHUB_OUTPUT
             echo "Go already installed: $(go version)"
-            # Ensure Go is in PATH
             GO_BIN_DIR=$(dirname $(command -v go))
             echo "${GO_BIN_DIR}" >> $GITHUB_PATH
-            # Also add GOPATH/bin
             echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
           else
             echo "exists=false" >> $GITHUB_OUTPUT
@@ -96,9 +95,17 @@ jobs:
                 keepDuration = 1209600
                 filters = [ "type==source.local", "type==exec.cachemount", "type==source.git.checkout"]
 
-      - name: Build release tarball
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build release and push sandbox image
         env:
           VERSION: ${{ inputs.version || github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: task release
 
       - name: Upload release assets
@@ -109,7 +116,5 @@ jobs:
       - name: Cleanup BuildKit cache
         if: always()
         run: |
-          # BuildKit GC policy handles automatic cleanup based on gckeepstorage setting
-          # Only manually clean very old local cache exports (60 days)
           find /var/lib/qemubox-buildkit-cache -type f -mtime +60 -delete || true
-          echo "BuildKit cache cleanup complete (local cache files older than 60 days removed)"
+          echo "BuildKit cache cleanup complete"

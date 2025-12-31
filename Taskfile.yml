@@ -617,9 +617,26 @@ tasks:
   # ==========================================================================
 
   release:
-    desc: Create release tarball with proper directory structure
+    desc: Create release tarball and push sandbox image
+    vars:
+      VERSION:
+        sh: echo "${VERSION:-$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)}"
     cmds:
       - task: build
       - |
         set -eou pipefail
-        {{.SCRIPTS_DIR}}/release
+        VERSION="{{.VERSION}}" {{.SCRIPTS_DIR}}/release
+      - task: release:image
+        vars:
+          VERSION: "{{.VERSION}}"
+
+  release:image:
+    desc: Build and push sandbox image to GitHub Container Registry
+    dir: assets/system-image
+    vars:
+      VERSION:
+        sh: echo "${VERSION:-$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)}"
+    cmds:
+      - |
+        set -eou pipefail
+        VERSION="{{.VERSION}}" task release

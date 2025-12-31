@@ -1,0 +1,14 @@
+[Unit]
+Description=containerd socket
+Documentation=https://containerd.io
+PartOf=containerd.service
+
+[Socket]
+ListenStream=/run/containerd/containerd.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=root
+Service=containerd.service
+
+[Install]
+WantedBy=sockets.target
