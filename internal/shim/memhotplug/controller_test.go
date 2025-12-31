@@ -527,6 +527,7 @@ func TestControllerErrorHandling(t *testing.T) {
 func TestFindFreeSlot(t *testing.T) {
 	controller := &Controller{
 		usedSlots: make(map[int]bool),
+		config:    Config{MaxSlots: 8},
 	}
 
 	// Initially all slots should be free
@@ -555,6 +556,7 @@ func TestFindFreeSlot(t *testing.T) {
 func TestFindUsedSlot(t *testing.T) {
 	controller := &Controller{
 		usedSlots: make(map[int]bool),
+		config:    Config{MaxSlots: 8},
 	}
 
 	// No used slots

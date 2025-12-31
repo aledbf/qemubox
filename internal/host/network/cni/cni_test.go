@@ -194,7 +194,7 @@ func TestParseCNIResult(t *testing.T) {
 				CNIVersion: "1.0.0",
 				Interfaces: []*current.Interface{
 					{Name: "qemubox0", Mac: "aa:bb:cc:dd:ee:ff", Sandbox: ""},
-					{Name: "tap0", Mac: "11:22:33:44:55:66", Sandbox: ""},
+					{Name: "tap0", Mac: "11:22:33:44:55:66", Sandbox: "/var/run/netns/test"},
 				},
 				IPs: []*current.IPConfig{
 					{

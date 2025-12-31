@@ -184,7 +184,8 @@ func TestExitTracker_SubscriptionCancellation(t *testing.T) {
 func TestExitTracker_Cleanup(t *testing.T) {
 	tracker := newExitTracker()
 	container := testutil.MockContainer("test-container")
-	proc := &testutil.MockProcess{IDValue: "init", PIDValue: 1234}
+	// Use *process.Init so NotifyExit correctly identifies it as an init process
+	proc := &process.Init{}
 
 	// Start process
 	sub := tracker.Subscribe(nil)

@@ -22,7 +22,7 @@ func TestExtractTAPDevice_Success(t *testing.T) {
 			result: &current.Result{
 				Interfaces: []*current.Interface{
 					{Name: "qemubox0", Mac: "aa:bb:cc:dd:ee:ff", Sandbox: ""},
-					{Name: "tap123", Mac: "11:22:33:44:55:66", Sandbox: ""},
+					{Name: "tap123", Mac: "11:22:33:44:55:66", Sandbox: "/var/run/netns/test"},
 				},
 			},
 			expectedTAP: "tap123",
@@ -32,7 +32,7 @@ func TestExtractTAPDevice_Success(t *testing.T) {
 			name: "tap device with tap prefix and hex suffix",
 			result: &current.Result{
 				Interfaces: []*current.Interface{
-					{Name: "tapABC123", Mac: "11:22:33:44:55:66", Sandbox: ""},
+					{Name: "tapABC123", Mac: "11:22:33:44:55:66", Sandbox: "/var/run/netns/test"},
 				},
 			},
 			expectedTAP: "tapABC123",
@@ -43,7 +43,7 @@ func TestExtractTAPDevice_Success(t *testing.T) {
 			result: &current.Result{
 				Interfaces: []*current.Interface{
 					{Name: "qemubox0", Sandbox: ""},
-					{Name: "tap999", Sandbox: ""},
+					{Name: "tap999", Sandbox: "/var/run/netns/test"},
 					{Name: "veth0", Sandbox: "/var/run/netns/test"},
 				},
 			},
@@ -101,8 +101,8 @@ func TestExtractTAPDevice_PrefersTCRedirectTapPattern(t *testing.T) {
 	// When multiple patterns match, first matching TAP device should be returned
 	result := &current.Result{
 		Interfaces: []*current.Interface{
-			{Name: "tap123", Sandbox: ""},
-			{Name: "tap456", Sandbox: ""},
+			{Name: "tap123", Sandbox: "/var/run/netns/test"},
+			{Name: "tap456", Sandbox: "/var/run/netns/test"},
 		},
 	}
 
@@ -160,9 +160,9 @@ func TestExtractTAPDevice_MultipleMatches(t *testing.T) {
 	result := &current.Result{
 		Interfaces: []*current.Interface{
 			{Name: "qemubox0", Sandbox: ""},
-			{Name: "tap111", Sandbox: ""},
-			{Name: "tap222", Sandbox: ""},
-			{Name: "tap333", Sandbox: ""},
+			{Name: "tap111", Sandbox: "/var/run/netns/test"},
+			{Name: "tap222", Sandbox: "/var/run/netns/test"},
+			{Name: "tap333", Sandbox: "/var/run/netns/test"},
 		},
 	}
 
@@ -175,9 +175,9 @@ func TestExtractTAPDevice_CaseSensitive(t *testing.T) {
 	// TAP prefix is case-sensitive (must be lowercase "tap")
 	result := &current.Result{
 		Interfaces: []*current.Interface{
-			{Name: "TAP123", Sandbox: ""}, // Wrong case
-			{Name: "Tap456", Sandbox: ""}, // Wrong case
-			{Name: "tap789", Sandbox: ""}, // Correct
+			{Name: "TAP123", Sandbox: "/var/run/netns/test"}, // Wrong case
+			{Name: "Tap456", Sandbox: "/var/run/netns/test"}, // Wrong case
+			{Name: "tap789", Sandbox: "/var/run/netns/test"}, // Correct
 		},
 	}
 

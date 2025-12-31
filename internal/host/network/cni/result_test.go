@@ -26,7 +26,7 @@ func TestParseCNIResult_Success(t *testing.T) {
 				CNIVersion: "1.0.0",
 				Interfaces: []*current.Interface{
 					{Name: "qemubox0", Mac: "aa:bb:cc:dd:ee:ff"},
-					{Name: "tap123", Mac: "11:22:33:44:55:66", Sandbox: ""},
+					{Name: "tap123", Mac: "11:22:33:44:55:66", Sandbox: "/var/run/netns/test"},
 				},
 				IPs: []*current.IPConfig{
 					{
@@ -50,7 +50,7 @@ func TestParseCNIResult_Success(t *testing.T) {
 				CNIVersion: "1.0.0",
 				Interfaces: []*current.Interface{
 					{Name: "qemubox0", Mac: "aa:bb:cc:dd:ee:ff"},
-					{Name: "tapABC123", Mac: "11:22:33:44:55:66", Sandbox: ""},
+					{Name: "tapABC123", Mac: "11:22:33:44:55:66", Sandbox: "/var/run/netns/test"},
 				},
 				IPs: []*current.IPConfig{
 					{
@@ -73,7 +73,7 @@ func TestParseCNIResult_Success(t *testing.T) {
 			result: &current.Result{
 				CNIVersion: "1.0.0",
 				Interfaces: []*current.Interface{
-					{Name: "tap456", Sandbox: ""},
+					{Name: "tap456", Mac: "22:33:44:55:66:77", Sandbox: "/var/run/netns/test"},
 				},
 				IPs: []*current.IPConfig{
 					{
@@ -120,7 +120,7 @@ func TestParseCNIResult_NoIPs(t *testing.T) {
 	result := &current.Result{
 		CNIVersion: "1.0.0",
 		Interfaces: []*current.Interface{
-			{Name: "tap123", Sandbox: ""},
+			{Name: "tap123", Mac: "11:22:33:44:55:66", Sandbox: "/var/run/netns/test"},
 		},
 		IPs: []*current.IPConfig{},
 	}
@@ -134,7 +134,7 @@ func TestParseCNIResult_TAPMACRequired(t *testing.T) {
 	result := &current.Result{
 		CNIVersion: "1.0.0",
 		Interfaces: []*current.Interface{
-			{Name: "tap123", Sandbox: ""},
+			{Name: "tap123", Sandbox: "/var/run/netns/test"},
 		},
 		IPs: []*current.IPConfig{
 			{
@@ -183,7 +183,7 @@ func TestParseCNIResult_GatewayOptional(t *testing.T) {
 	result := &current.Result{
 		CNIVersion: "1.0.0",
 		Interfaces: []*current.Interface{
-			{Name: "tap789", Sandbox: ""},
+			{Name: "tap789", Mac: "11:22:33:44:55:66", Sandbox: "/var/run/netns/test"},
 		},
 		IPs: []*current.IPConfig{
 			{
