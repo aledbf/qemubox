@@ -1027,6 +1027,15 @@ func (s *service) send(evt interface{}) {
 	if s.eventsClosed.Load() {
 		return
 	}
+	// Use defer/recover to handle the race window between eventsClosed check
+	// and channel close. If the channel is closed after our check, the send
+	// would panic - we catch this and silently drop the event.
+	defer func() {
+		if r := recover(); r != nil {
+			// Event dropped during shutdown race - this is expected and safe
+			log.L.Debug("event dropped during shutdown")
+		}
+	}()
 	s.events <- evt
 }
 
