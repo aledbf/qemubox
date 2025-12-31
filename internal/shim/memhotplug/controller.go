@@ -58,7 +58,7 @@ type Controller struct {
 
 	// State management
 	mu        sync.Mutex
-	started   bool          // Track if Start() has been called
+	started   bool // Track if Start() has been called
 	stopCh    chan struct{}
 	stoppedCh chan struct{}
 }
