@@ -41,6 +41,10 @@ If you need cross-platform support or rootless containers, use nerdbox.
 
 VM isolation provides a stronger security boundary than namespace-based containers, while maintaining compatibility with standard containerd tooling.
 
+## Demo
+
+[![asciicast](https://asciinema.org/a/o08afEiqqtfWegNomf9qWkzxE.svg)](https://asciinema.org/a/o08afEiqqtfWegNomf9qWkzxE)
+
 ## Quick Start
 
 ### Prerequisites
