@@ -135,17 +135,20 @@ func TestCNIManager_LoadNetworkConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			confDir := tt.setupConfig()
 			mgr, err := NewCNIManager(confDir, "/opt/cni/bin")
-			require.NoError(t, err)
-
-			config, err := mgr.loadNetworkConfig()
 
 			if tt.expectError {
+				// NewCNIManager now loads config at startup, so error happens there
 				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				assert.NotNil(t, config)
-				assert.Equal(t, tt.expectedName, config.Name)
+				return
 			}
+
+			require.NoError(t, err)
+
+			// Config is cached at startup, retrieve via getNetworkConfig
+			config, err := mgr.getNetworkConfig()
+			require.NoError(t, err)
+			assert.NotNil(t, config)
+			assert.Equal(t, tt.expectedName, config.Name)
 		})
 	}
 }

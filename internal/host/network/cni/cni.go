@@ -6,6 +6,7 @@ package cni
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/containerd/log"
 	"github.com/containernetworking/cni/libcni"
@@ -19,10 +20,14 @@ type CNIManager struct {
 
 	// CNI library instance
 	cniConfig libcni.CNI
+
+	// Cached network configuration (protected by netConfMu)
+	netConf   *libcni.NetworkConfigList
+	netConfMu sync.RWMutex
 }
 
 // NewCNIManager creates a new CNI manager.
-// It will auto-discover CNI network configuration from confDir.
+// It will auto-discover and cache CNI network configuration from confDir.
 func NewCNIManager(confDir, binDir string) (*CNIManager, error) {
 	if confDir == "" {
 		return nil, fmt.Errorf("CNI conf directory cannot be empty")
@@ -31,20 +36,59 @@ func NewCNIManager(confDir, binDir string) (*CNIManager, error) {
 		return nil, fmt.Errorf("CNI bin directory cannot be empty")
 	}
 
-	return &CNIManager{
+	m := &CNIManager{
 		confDir:   confDir,
 		binDir:    binDir,
 		cniConfig: libcni.NewCNIConfig([]string{binDir}, nil),
-	}, nil
+	}
+
+	// Load and cache the configuration at startup
+	if err := m.loadAndCacheConfig(); err != nil {
+		return nil, fmt.Errorf("failed to load initial CNI config: %w", err)
+	}
+
+	return m, nil
+}
+
+// Reload reloads the CNI network configuration from disk.
+// This can be called to pick up configuration changes without restarting.
+func (m *CNIManager) Reload() error {
+	return m.loadAndCacheConfig()
+}
+
+// getNetworkConfig returns the cached network configuration.
+// Returns an error if no configuration is cached.
+func (m *CNIManager) getNetworkConfig() (*libcni.NetworkConfigList, error) {
+	m.netConfMu.RLock()
+	defer m.netConfMu.RUnlock()
+
+	if m.netConf == nil {
+		return nil, fmt.Errorf("no CNI configuration loaded")
+	}
+	return m.netConf, nil
+}
+
+// loadAndCacheConfig loads the network configuration from disk and caches it.
+func (m *CNIManager) loadAndCacheConfig() error {
+	netConf, err := m.loadNetworkConfigFromDisk()
+	if err != nil {
+		return err
+	}
+
+	m.netConfMu.Lock()
+	m.netConf = netConf
+	m.netConfMu.Unlock()
+
+	return nil
 }
 
 // Setup executes the CNI plugin chain to configure networking for a VM.
 // It returns a CNIResult containing the TAP device name and network configuration.
 func (m *CNIManager) Setup(ctx context.Context, vmID string, netns string) (*CNIResult, error) {
-	// Load network configuration
-	netConfList, err := m.loadNetworkConfig()
+	// Get cached network configuration
+	netConfList, err := m.getNetworkConfig()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load CNI network config: %w", err)
+		return nil, fmt.Errorf("failed to get CNI network config: %w", err)
 	}
 
 	// Execute CNI plugin chain
@@ -71,10 +115,10 @@ func (m *CNIManager) Setup(ctx context.Context, vmID string, netns string) (*CNI
 
 // Teardown executes the CNI plugin chain to clean up networking for a VM.
 func (m *CNIManager) Teardown(ctx context.Context, vmID string, netns string) error {
-	// Load network configuration
-	netConfList, err := m.loadNetworkConfig()
+	// Get cached network configuration
+	netConfList, err := m.getNetworkConfig()
 	if err != nil {
-		return fmt.Errorf("failed to load CNI network config: %w", err)
+		return fmt.Errorf("failed to get CNI network config: %w", err)
 	}
 
 	// Create runtime configuration
@@ -92,9 +136,10 @@ func (m *CNIManager) Teardown(ctx context.Context, vmID string, netns string) er
 	return nil
 }
 
-// loadNetworkConfig loads the CNI network configuration from the conf directory.
+// loadNetworkConfigFromDisk loads the CNI network configuration from the conf directory.
 // It auto-discovers the first available .conflist file (sorted lexicographically).
-func (m *CNIManager) loadNetworkConfig() (*libcni.NetworkConfigList, error) {
+// This is called internally by loadAndCacheConfig; callers should use getNetworkConfig.
+func (m *CNIManager) loadNetworkConfigFromDisk() (*libcni.NetworkConfigList, error) {
 	// Get all CNI config files from the directory
 	files, err := libcni.ConfFiles(m.confDir, []string{".conflist", ".conf"})
 	if err != nil {
