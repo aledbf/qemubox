@@ -20,6 +20,11 @@ import (
 	goevents "github.com/docker/go-events"
 )
 
+// maxQueuedEvents is the maximum number of events that can be queued
+// per subscriber before new events are dropped. This prevents memory
+// exhaustion if a subscriber is slow to consume events.
+const maxQueuedEvents = 1024
+
 func init() {
 	registry.Register(&plugin.Registration{
 		Type: plugins.EventPlugin,
@@ -117,7 +122,7 @@ func (e *Exchange) Subscribe(ctx context.Context, fs ...string) (<-chan *events.
 	var (
 		evch                  = make(chan *events.Envelope)
 		errq                  = make(chan error, 1)
-		channel               = goevents.NewChannel(0)
+		channel               = goevents.NewChannel(maxQueuedEvents)
 		queue                 = goevents.NewQueue(channel)
 		dst     goevents.Sink = queue
 	)
