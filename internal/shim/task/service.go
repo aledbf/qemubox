@@ -232,7 +232,8 @@ type service struct {
 	deletionInProgress  atomic.Bool // True during Delete() to reject concurrent Create()
 	creationInProgress  atomic.Bool // True during Create() to reject concurrent Create() and Delete()
 	shutdownSvc         shutdown.Service
-	inflight            atomic.Int64 // Count of in-flight RPC calls for graceful shutdown
+	inflight            atomic.Int64   // Count of in-flight RPC calls for graceful shutdown
+	exitFunc            func(code int) // Exit function (default: os.Exit), injectable for testing
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
@@ -1031,9 +1032,17 @@ func (s *service) send(evt interface{}) {
 
 func (s *service) requestShutdownAndExit(ctx context.Context, reason string) {
 	log.G(ctx).WithField("reason", reason).Info("shim shutdown requested")
+
+	// Use injectable exit function, defaulting to os.Exit
+	exit := s.exitFunc
+	if exit == nil {
+		exit = os.Exit
+	}
+
 	if s.shutdownSvc == nil {
 		log.G(ctx).WithField("reason", reason).Warn("shutdown service missing; exiting immediately")
-		os.Exit(0)
+		exit(0)
+		return
 	}
 
 	s.shutdownSvc.Shutdown()
@@ -1054,7 +1063,7 @@ func (s *service) requestShutdownAndExit(ctx context.Context, reason string) {
 	}
 
 	log.G(ctx).WithField("reason", reason).Info("exiting shim after shutdown")
-	os.Exit(0)
+	exit(0)
 }
 
 func (s *service) forward(ctx context.Context, publisher shim.Publisher, ready chan<- struct{}) {
