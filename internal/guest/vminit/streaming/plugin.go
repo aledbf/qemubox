@@ -13,6 +13,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/shutdown"
 	cplugins "github.com/containerd/containerd/v2/plugins"
 	"github.com/containerd/errdefs"
+	"github.com/containerd/log"
 	"github.com/containerd/plugin"
 	"github.com/containerd/plugin/registry"
 	"github.com/mdlayher/vsock"
@@ -102,23 +103,31 @@ func (s *service) Shutdown(ctx context.Context) error {
 }
 
 func (s *service) Run() {
+	ctx := context.Background()
 	for {
 		conn, err := s.l.Accept()
 		if err != nil {
-			return // Listener closed
+			// Distinguish between normal shutdown and unexpected errors
+			if errors.Is(err, net.ErrClosed) {
+				log.G(ctx).Debug("streaming listener closed, stopping accept loop")
+				return
+			}
+			log.G(ctx).WithError(err).Error("unexpected error accepting streaming connection")
+			return
 		}
 		var b [4]byte
 		if _, err := conn.Read(b[:]); err != nil {
 			_ = conn.Close()
-			continue // Error reading, close connection
+			continue // Error reading stream ID, close connection
 		}
 
 		s.mu.Lock()
 		sid := binary.BigEndian.Uint32(b[:])
 		if _, ok := s.streams[sid]; ok {
 			s.mu.Unlock()
+			log.G(ctx).WithField("stream_id", sid).Warn("stream ID collision detected, closing duplicate connection")
 			_ = conn.Close()
-			continue // Error reading, close connection
+			continue
 		}
 		s.streams[sid] = streamConn{
 			Conn: conn,

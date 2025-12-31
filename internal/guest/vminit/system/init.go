@@ -93,7 +93,7 @@ func mountFilesystems() error {
 		},
 		{
 			Type:    "devtmpfs",
-			Source:  "devtmpsfs",
+			Source:  "devtmpfs",
 			Target:  "/dev",
 			Options: []string{"nosuid", "noexec"},
 		},

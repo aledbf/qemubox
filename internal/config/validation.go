@@ -142,7 +142,12 @@ func (c *Config) validateCPUHotplug() error {
 		return fmt.Errorf("scale_down_stability must be > 0, got %d", c.CPUHotplug.ScaleDownStability)
 	}
 
-	// EnableScaleDown is boolean, always valid
+	// Validate threshold relationship: scale_down must be less than scale_up
+	// Otherwise the system would simultaneously want to scale up and down
+	if c.CPUHotplug.ScaleDownThreshold >= c.CPUHotplug.ScaleUpThreshold {
+		return fmt.Errorf("scale_down_threshold (%.2f) must be less than scale_up_threshold (%.2f)",
+			c.CPUHotplug.ScaleDownThreshold, c.CPUHotplug.ScaleUpThreshold)
+	}
 
 	return nil
 }
@@ -197,7 +202,12 @@ func (c *Config) validateMemHotplug() error {
 		return fmt.Errorf("scale_down_stability must be > 0, got %d", c.MemHotplug.ScaleDownStability)
 	}
 
-	// EnableScaleDown is boolean, always valid
+	// Validate threshold relationship: scale_down must be less than scale_up
+	// Otherwise the system would simultaneously want to scale up and down
+	if c.MemHotplug.ScaleDownThreshold >= c.MemHotplug.ScaleUpThreshold {
+		return fmt.Errorf("scale_down_threshold (%.2f) must be less than scale_up_threshold (%.2f)",
+			c.MemHotplug.ScaleDownThreshold, c.MemHotplug.ScaleUpThreshold)
+	}
 
 	return nil
 }

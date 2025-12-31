@@ -113,8 +113,12 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 		resourceCfg.MemoryHotplugSize = resourceCfg.MemorySize
 	}
 
-	// Use dedicated log directory per container
-	logDir := filepath.Join("/var/log/qemubox", containerID)
+	// Use dedicated log directory per container from config
+	cfg, err := config.Get()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get config for log directory: %w", err)
+	}
+	logDir := filepath.Join(cfg.Paths.LogDir, containerID)
 	if err := os.MkdirAll(logDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}
