@@ -122,12 +122,70 @@ func extractCPURequest(spec *specs.Spec) int {
 	// Fallback: check CPU.Cpus (cpuset format like "0-3" or "0,1,2,3")
 	// This is less common but may be present
 	if cpu.Cpus != "" {
-		// Simple heuristic: count commas + 1, or parse ranges
-		// For now, just return 1 as this requires more complex parsing
-		return 1
+		if count := parseCPUSet(cpu.Cpus); count > 0 {
+			return count
+		}
+		// If parsing failed, fall through to default
 	}
 
 	return 1 // Default to 1 vCPU
+}
+
+// parseCPUSet parses a Linux cpuset string and returns the number of CPUs.
+// Supported formats:
+//   - Ranges: "0-3" → 4 CPUs
+//   - Lists: "0,2,4" → 3 CPUs
+//   - Mixed: "0-3,8-11" → 8 CPUs
+//
+// Returns 0 if the format is invalid or empty.
+func parseCPUSet(cpuset string) int {
+	cpuset = strings.TrimSpace(cpuset)
+	if cpuset == "" {
+		return 0
+	}
+
+	cpus := make(map[int]struct{}) // Use map to deduplicate
+
+	// Split by commas to handle "0-3,8-11" format
+	parts := strings.Split(cpuset, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// Check if this is a range (e.g., "0-3")
+		if strings.Contains(part, "-") {
+			rangeParts := strings.SplitN(part, "-", 2)
+			if len(rangeParts) != 2 {
+				return 0 // Invalid range format
+			}
+
+			start, err := strconv.Atoi(strings.TrimSpace(rangeParts[0]))
+			if err != nil || start < 0 {
+				return 0 // Invalid start
+			}
+
+			end, err := strconv.Atoi(strings.TrimSpace(rangeParts[1]))
+			if err != nil || end < 0 || end < start {
+				return 0 // Invalid end
+			}
+
+			// Add all CPUs in range
+			for i := start; i <= end; i++ {
+				cpus[i] = struct{}{}
+			}
+		} else {
+			// Single CPU number
+			cpu, err := strconv.Atoi(part)
+			if err != nil || cpu < 0 {
+				return 0 // Invalid CPU number
+			}
+			cpus[cpu] = struct{}{}
+		}
+	}
+
+	return len(cpus)
 }
 
 // extractMemoryRequest extracts the memory request from the OCI spec.
