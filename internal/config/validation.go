@@ -214,17 +214,74 @@ func (c *Config) validateMemHotplug() error {
 
 // Helper functions
 
+// canonicalizePath resolves symlinks and cleans the path to prevent symlink attacks.
+// This ensures paths are resolved to their real location before validation.
+// If the path doesn't exist yet (for directories we'll create), we clean it
+// and resolve as much of the path as possible.
+func canonicalizePath(path string) (string, error) {
+	// First clean the path to normalize it (remove . and .. where possible)
+	cleaned := filepath.Clean(path)
+
+	// Try to resolve symlinks for the full path
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err == nil {
+		return resolved, nil
+	}
+
+	// If path doesn't exist, resolve parent directories that do exist
+	// This handles the case where we need to create a directory
+	if os.IsNotExist(err) {
+		// Walk up the path to find the first existing parent
+		dir := cleaned
+		var nonExistent []string
+		for {
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				// Reached root, nothing exists
+				break
+			}
+
+			resolved, err := filepath.EvalSymlinks(parent)
+			if err == nil {
+				// Found an existing parent, reconstruct the path
+				for i := len(nonExistent) - 1; i >= 0; i-- {
+					resolved = filepath.Join(resolved, nonExistent[i])
+				}
+				resolved = filepath.Join(resolved, filepath.Base(dir))
+				return resolved, nil
+			}
+
+			if !os.IsNotExist(err) {
+				return "", fmt.Errorf("failed to resolve path %s: %w", path, err)
+			}
+
+			nonExistent = append(nonExistent, filepath.Base(dir))
+			dir = parent
+		}
+		// Nothing exists, just return the cleaned path
+		return cleaned, nil
+	}
+
+	return "", fmt.Errorf("failed to resolve path %s: %w", path, err)
+}
+
 func validateDirectoryExists(path, fieldName string) error {
-	info, err := os.Stat(path)
+	// Canonicalize the path to prevent symlink attacks
+	canonical, err := canonicalizePath(path)
+	if err != nil {
+		return fmt.Errorf("%s path resolution failed: %w", fieldName, err)
+	}
+
+	info, err := os.Stat(canonical)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("%s directory does not exist: %s (please create it or check your config)", fieldName, path)
+			return fmt.Errorf("%s directory does not exist: %s (resolved from %s)", fieldName, canonical, path)
 		}
-		return fmt.Errorf("%s cannot access directory %s: %w", fieldName, path, err)
+		return fmt.Errorf("%s cannot access directory %s: %w", fieldName, canonical, err)
 	}
 
 	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory: %s", fieldName, path)
+		return fmt.Errorf("%s is not a directory: %s", fieldName, canonical)
 	}
 
 	return nil
@@ -232,43 +289,60 @@ func validateDirectoryExists(path, fieldName string) error {
 
 // ensureDirectoryWritable ensures a directory exists and is writable.
 // If the directory doesn't exist, it creates it with 0750 permissions.
+// Paths are canonicalized to prevent symlink attacks.
 func ensureDirectoryWritable(path, fieldName string) error {
-	// Check if directory exists
-	if err := validateDirectoryExists(path, fieldName); err != nil {
-		// If directory doesn't exist, try to create it
-		if os.IsNotExist(err) {
-			if err := os.MkdirAll(path, 0750); err != nil {
-				return fmt.Errorf("%s directory does not exist and cannot be created: %s (%w)", fieldName, path, err)
-			}
-		} else {
-			return err
-		}
+	// Canonicalize the path first to prevent symlink attacks
+	// This resolves existing parent directories to their real paths
+	canonical, err := canonicalizePath(path)
+	if err != nil {
+		return fmt.Errorf("%s path resolution failed: %w", fieldName, err)
 	}
 
-	// Check write permission
-	if err := unix.Access(path, unix.W_OK); err != nil {
-		return fmt.Errorf("%s directory is not writable: %s", fieldName, path)
+	// Check if directory exists
+	info, statErr := os.Stat(canonical)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			// Directory doesn't exist, try to create it at the canonical path
+			if err := os.MkdirAll(canonical, 0750); err != nil {
+				return fmt.Errorf("%s directory does not exist and cannot be created: %s (%w)", fieldName, canonical, err)
+			}
+		} else {
+			return fmt.Errorf("%s cannot access directory %s: %w", fieldName, canonical, statErr)
+		}
+	} else if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory: %s", fieldName, canonical)
+	}
+
+	// Check write permission on the canonical path
+	if err := unix.Access(canonical, unix.W_OK); err != nil {
+		return fmt.Errorf("%s directory is not writable: %s", fieldName, canonical)
 	}
 
 	return nil
 }
 
 func validateExecutable(path, fieldName string) error {
-	info, err := os.Stat(path)
+	// Canonicalize the path to prevent symlink attacks
+	canonical, err := canonicalizePath(path)
+	if err != nil {
+		return fmt.Errorf("%s path resolution failed: %w", fieldName, err)
+	}
+
+	info, err := os.Stat(canonical)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("%s file does not exist: %s", fieldName, path)
+			return fmt.Errorf("%s file does not exist: %s", fieldName, canonical)
 		}
-		return fmt.Errorf("%s cannot access file %s: %w", fieldName, path, err)
+		return fmt.Errorf("%s cannot access file %s: %w", fieldName, canonical, err)
 	}
 
 	if info.IsDir() {
-		return fmt.Errorf("%s is a directory, not an executable: %s", fieldName, path)
+		return fmt.Errorf("%s is a directory, not an executable: %s", fieldName, canonical)
 	}
 
 	// Check if file is executable
 	if info.Mode()&0111 == 0 {
-		return fmt.Errorf("%s file is not executable: %s (try: chmod +x %s)", fieldName, path, path)
+		return fmt.Errorf("%s file is not executable: %s (try: chmod +x %s)", fieldName, canonical, canonical)
 	}
 
 	return nil

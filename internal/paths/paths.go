@@ -80,14 +80,26 @@ func discoverQemuSharePath(shareDir string) string {
 	return "/usr/share/qemu"
 }
 
-// fileExists checks if a file exists
+// fileExists checks if a file exists, resolving symlinks to the real path.
+// This prevents symlink attacks by ensuring we check the actual file.
 func fileExists(path string) bool {
-	info, err := os.Stat(path)
+	// Resolve symlinks to get the real path
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(resolved)
 	return err == nil && !info.IsDir()
 }
 
-// dirExists checks if a directory exists
+// dirExists checks if a directory exists, resolving symlinks to the real path.
+// This prevents symlink attacks by ensuring we check the actual directory.
 func dirExists(path string) bool {
-	info, err := os.Stat(path)
+	// Resolve symlinks to get the real path
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(resolved)
 	return err == nil && info.IsDir()
 }
