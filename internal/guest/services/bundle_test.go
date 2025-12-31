@@ -156,9 +156,9 @@ func TestServiceCreate(t *testing.T) {
 			name:     "valid filename with double dots (not traversal)",
 			bundleID: "test-bundle-double-dots",
 			files: map[string][]byte{
-				"file..txt":      []byte("content1"),
-				"config..json":   []byte("content2"),
-				"..hidden.file":  []byte("content3"),
+				"file..txt":     []byte("content1"),
+				"config..json":  []byte("content2"),
+				"..hidden.file": []byte("content3"),
 			},
 			wantErr: false,
 			validate: func(t *testing.T, bundlePath string) {
