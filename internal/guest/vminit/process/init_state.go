@@ -88,7 +88,9 @@ func (s *createdState) SetExited(status int) {
 	s.p.setExited(status)
 
 	if err := s.transition(stateStopped); err != nil {
-		panic(err)
+		// Log but don't panic - the process has already exited, we must reflect that
+		log.L.WithError(err).Error("invalid state transition during exit, forcing to stopped state")
+		s.p.initState = &stoppedState{p: s.p}
 	}
 }
 
@@ -207,7 +209,9 @@ func (s *createdCheckpointState) SetExited(status int) {
 	s.p.setExited(status)
 
 	if err := s.transition(stateStopped); err != nil {
-		panic(err)
+		// Log but don't panic - the process has already exited, we must reflect that
+		log.L.WithError(err).Error("invalid state transition during exit, forcing to stopped state")
+		s.p.initState = &stoppedState{p: s.p}
 	}
 }
 
@@ -282,7 +286,9 @@ func (s *runningState) SetExited(status int) {
 	s.p.setExited(status)
 
 	if err := s.transition(stateStopped); err != nil {
-		panic(err)
+		// Log but don't panic - the process has already exited, we must reflect that
+		log.L.WithError(err).Error("invalid state transition during exit, forcing to stopped state")
+		s.p.initState = &stoppedState{p: s.p}
 	}
 }
 
@@ -354,7 +360,9 @@ func (s *pausedState) SetExited(status int) {
 	}
 
 	if err := s.transition(stateStopped); err != nil {
-		panic(err)
+		// Log but don't panic - the process has already exited, we must reflect that
+		log.L.WithError(err).Error("invalid state transition during exit, forcing to stopped state")
+		s.p.initState = &stoppedState{p: s.p}
 	}
 }
 

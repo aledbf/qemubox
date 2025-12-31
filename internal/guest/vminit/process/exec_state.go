@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/containerd/console"
+	"github.com/containerd/log"
 )
 
 type execState interface {
@@ -69,7 +70,9 @@ func (s *execCreatedState) SetExited(status int) {
 	s.p.setExited(status)
 
 	if err := s.transition(stateStopped); err != nil {
-		panic(err)
+		// Log but don't panic - the process has already exited, we must reflect that
+		log.L.WithError(err).Error("invalid state transition during exit, forcing to stopped state")
+		s.p.execState = &execStoppedState{p: s.p}
 	}
 }
 
@@ -115,7 +118,9 @@ func (s *execRunningState) SetExited(status int) {
 	s.p.setExited(status)
 
 	if err := s.transition(stateStopped); err != nil {
-		panic(err)
+		// Log but don't panic - the process has already exited, we must reflect that
+		log.L.WithError(err).Error("invalid state transition during exit, forcing to stopped state")
+		s.p.execState = &execStoppedState{p: s.p}
 	}
 }
 
