@@ -122,7 +122,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          go test -race -coverprofile=coverage.txt -covermode=atomic ./...
+          go test -v -timeout 120s -race -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
