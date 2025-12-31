@@ -2,12 +2,36 @@
 
 **Experimental** containerd runtime that runs each container in its own lightweight VM using QEMU/KVM.
 
+This project started as a fork of [nerdbox](https://github.com/containerd/nerdbox).
+
 - Linux only (requires KVM)
 - One VM per container for strong isolation
 - Standard CNI networking
 - EROFS snapshots for efficient storage
 
-## Why?
+## Why Fork?
+
+[nerdbox](https://github.com/containerd/nerdbox) is an excellent project that pioneered the "shim-level VM isolation" approach for containerd. It uses [libkrun](https://github.com/containers/libkrun) as its VMM, enabling cross-platform support (Linux, macOS, Windows) and rootless operation.
+
+**qemubox** takes a different path:
+
+| | nerdbox | qemubox |
+|---|---------|---------|
+| **VMM** | libkrun (Rust) | QEMU/KVM |
+| **Platforms** | Linux, macOS, Windows | Linux only |
+| **Focus** | Cross-platform, rootless | Server workloads, KVM features |
+| **Networking** | libkrun networking | Standard CNI plugins |
+
+We forked because we wanted:
+
+1. **QEMU's maturity** - Battle-tested VMM with extensive device support, debugging tools (QMP, gdbstub), and broad kernel compatibility
+2. **Standard CNI networking** - Reuse existing CNI plugins (Calico, Cilium, etc.) instead of custom networking
+3. **KVM-specific features** - CPU/memory hotplug, vhost-net, virtio-fs, and other Linux-specific optimizations
+4. **Simpler deployment** - Single static binary VMM without Rust runtime dependencies
+
+If you need cross-platform support or rootless containers, use nerdbox.
+
+## Why VMs?
 
 VM isolation provides a stronger security boundary than namespace-based containers, while maintaining compatibility with standard containerd tooling.
 
@@ -183,9 +207,10 @@ images/        - Container/VM image builds
 
 | Project | Approach | Trade-offs |
 |---------|----------|------------|
-| **qemubox** | VM per container (QEMU) | Strong isolation, simple, cold start overhead |
-| **Kata Containers** | VM per container (multiple VMMs) | Production-ready, more complex |
-| **gVisor** | User-space kernel | No VM overhead, different compatibility |
+| **qemubox** | VM per container (QEMU/KVM) | Strong isolation, Linux-only, cold start overhead |
+| **[nerdbox](https://github.com/containerd/nerdbox)** | VM per container (libkrun) | Cross-platform, rootless, newer VMM |
+| **[Kata Containers](https://katacontainers.io/)** | VM per container (multiple VMMs) | Production-ready, more complex |
+| **[gVisor](https://gvisor.dev/)** | User-space kernel | No VM overhead, different syscall compatibility |
 | **runc** | Namespaces only | Fast, weaker isolation |
 
 ## License
