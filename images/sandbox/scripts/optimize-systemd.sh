@@ -20,11 +20,14 @@ die() { log_err "$*"; exit 1; }
 # Keep the list short – only those that have no observable impact on a
 # typical headless, non‑hotplug VM.
 MASK_UNITS=(
+    # tmp.mount - Container already has /tmp, and lacks CAP_SYS_ADMIN to remount
+    tmp.mount
+
     # udev‐related – they are only needed for hot‑plug hardware.
     systemd-udev-trigger.service
     # The daemon that actually talks to the kernel udev netlink socket.
     systemd-udevd.service
-    # Control sockets used only for the “settle” wait; they disappear once all udev
+    # Control sockets used only for the "settle" wait; they disappear once all udev
     # events are processed.  In a static VM there is nothing to wait for.
     systemd-udevd-control.socket
     systemd-udevd-kernel.socket
