@@ -29,6 +29,10 @@ type qmpClient struct {
 	mu             sync.Mutex
 	closed         atomic.Bool
 	commandTimeout time.Duration // Timeout for QMP commands (default: 5 seconds)
+
+	// eventLoopDone is closed when the eventLoop goroutine exits.
+	// This allows Close() to wait for proper cleanup.
+	eventLoopDone chan struct{}
 }
 
 type qmpCommand struct {
@@ -88,6 +92,7 @@ func newQMPClient(ctx context.Context, socketPath string) (*qmpClient, error) {
 		encoder:        json.NewEncoder(conn),
 		pending:        make(map[uint64]chan *qmpResponse),
 		commandTimeout: qmpDefaultTimeout,
+		eventLoopDone:  make(chan struct{}),
 	}
 	// QMP can emit large JSON objects; ensure we don't drop events due to scanner limits.
 	qmp.scanner.Buffer(make([]byte, 0, qmpBufferInitial), qmpBufferMax)
@@ -269,6 +274,8 @@ func (q *qmpClient) handleEvent(ctx context.Context, resp *qmpResponse) {
 
 // eventLoop processes QMP messages (responses and events)
 func (q *qmpClient) eventLoop(ctx context.Context) {
+	defer close(q.eventLoopDone)
+
 	for q.scanner.Scan() {
 		if q.closed.Load() {
 			return
@@ -857,21 +864,41 @@ func (q *qmpClient) UnplugMemory(ctx context.Context, slotID int) error {
 	return nil
 }
 
-// Close closes the QMP connection
+// Close closes the QMP connection.
+//
+// The shutdown sequence is carefully ordered to avoid races with eventLoop:
+// 1. Mark as closed (prevents new commands)
+// 2. Close the connection (causes scanner.Scan() to return false)
+// 3. Wait for eventLoop to exit (ensures it won't access pending channels)
+// 4. Clean up any remaining pending channels
 func (q *qmpClient) Close() error {
 	if !q.closed.CompareAndSwap(false, true) {
 		return nil // Already closed
 	}
 
+	// Close connection first - this will cause scanner.Scan() to return false
+	// and the eventLoop to exit gracefully
+	err := q.conn.Close()
+
+	// Wait for eventLoop to exit with a timeout
+	// This ensures eventLoop won't race with pending channel cleanup
+	select {
+	case <-q.eventLoopDone:
+		// eventLoop exited cleanly
+	case <-time.After(100 * time.Millisecond):
+		// Timeout - eventLoop may have already exited or is stuck
+		// Proceed with cleanup anyway
+	}
+
+	// Now safe to clean up pending channels
 	q.mu.Lock()
-	// Close all pending channels
 	for _, ch := range q.pending {
 		close(ch)
 	}
 	q.pending = nil
 	q.mu.Unlock()
 
-	return q.conn.Close()
+	return err
 }
 
 // checkClosed returns an error if the QMP client is closed.
