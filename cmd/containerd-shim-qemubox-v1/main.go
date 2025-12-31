@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/containerd/containerd/v2/pkg/shim"
+	"github.com/containerd/log"
 
 	"github.com/aledbf/qemubox/containerd/internal/config"
 	"github.com/aledbf/qemubox/containerd/internal/shim/manager"
@@ -18,10 +19,12 @@ func main() {
 	// Load configuration first - fail fast if config is missing or invalid
 	_, err := config.Get()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: Failed to load qemubox configuration: %v\n", err)
-		fmt.Fprintf(os.Stderr, "\nPlease create a configuration file at /etc/qemubox/config.json\n")
-		fmt.Fprintf(os.Stderr, "See examples/config.json for a template with default values.\n")
-		fmt.Fprintf(os.Stderr, "\nAlternatively, set QEMUBOX_CONFIG to specify a custom config file location.\n")
+		// Use structured logging for the error (consistent with vminitd)
+		log.L.WithError(err).Error("failed to load qemubox configuration")
+		// Print user-friendly guidance to stderr
+		fmt.Fprintln(os.Stderr, "\nPlease create a configuration file at /etc/qemubox/config.json")
+		fmt.Fprintln(os.Stderr, "See examples/config.json for a template with default values.")
+		fmt.Fprintln(os.Stderr, "\nAlternatively, set QEMUBOX_CONFIG to specify a custom config file location.")
 		os.Exit(1)
 	}
 
