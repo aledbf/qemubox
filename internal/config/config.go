@@ -70,8 +70,20 @@ type MemHotplugConfig struct {
 var (
 	globalConfig *Config
 	configOnce   sync.Once
+	configMu     sync.Mutex
 	errConfig    error
 )
+
+// Reset clears the cached global config, forcing the next Get() call to reload.
+// This is intended for testing only. Callers must ensure no concurrent Get() calls
+// are in progress when calling Reset().
+func Reset() {
+	configMu.Lock()
+	defer configMu.Unlock()
+	globalConfig = nil
+	errConfig = nil
+	configOnce = sync.Once{}
+}
 
 // Get returns the global config, loading it on first call.
 // This is the primary way to access configuration throughout the codebase.
