@@ -64,9 +64,8 @@ func TestInstance_AddDisk(t *testing.T) {
 		testFile := filepath.Join(tmpDir, "test.img")
 		require.NoError(t, os.WriteFile(testFile, []byte("test"), 0600))
 
-		q := &Instance{
-			state: vmStateNew,
-		}
+		q := &Instance{}
+		q.setState(vmStateNew)
 
 		err := q.AddDisk(ctx, "test-disk", testFile)
 		require.NoError(t, err)
@@ -82,9 +81,8 @@ func TestInstance_AddDisk(t *testing.T) {
 		testFile := filepath.Join(tmpDir, "test.img")
 		require.NoError(t, os.WriteFile(testFile, []byte("test"), 0600))
 
-		q := &Instance{
-			state: vmStateNew,
-		}
+		q := &Instance{}
+		q.setState(vmStateNew)
 
 		err := q.AddDisk(ctx, "test-disk", testFile, vm.WithReadOnly())
 		require.NoError(t, err)
@@ -98,9 +96,8 @@ func TestInstance_AddDisk(t *testing.T) {
 		testFile := filepath.Join(tmpDir, "test.img")
 		require.NoError(t, os.WriteFile(testFile, []byte("test"), 0600))
 
-		q := &Instance{
-			state: vmStateNew,
-		}
+		q := &Instance{}
+		q.setState(vmStateNew)
 
 		err := q.AddDisk(ctx, "", testFile)
 		require.NoError(t, err)
@@ -110,9 +107,8 @@ func TestInstance_AddDisk(t *testing.T) {
 	})
 
 	t.Run("fails after VM started", func(t *testing.T) {
-		q := &Instance{
-			state: vmStateRunning,
-		}
+		q := &Instance{}
+		q.setState(vmStateRunning)
 
 		err := q.AddDisk(ctx, "test-disk", "/some/path")
 		require.Error(t, err)
@@ -126,9 +122,8 @@ func TestInstance_AddDisk(t *testing.T) {
 		require.NoError(t, os.WriteFile(file1, []byte("1"), 0600))
 		require.NoError(t, os.WriteFile(file2, []byte("2"), 0600))
 
-		q := &Instance{
-			state: vmStateNew,
-		}
+		q := &Instance{}
+		q.setState(vmStateNew)
 
 		require.NoError(t, q.AddDisk(ctx, "disk1", file1))
 		require.NoError(t, q.AddDisk(ctx, "disk2", file2))
@@ -151,7 +146,7 @@ func TestInstance_AddNIC(t *testing.T) {
 	q := &Instance{}
 	mac, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
 
-	err := q.AddNIC(ctx, "endpoint", mac, vm.NetworkModeNone, 0, 0)
+	err := q.AddNIC(ctx, "endpoint", mac, vm.NetworkModeUnixgram, 0, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not supported")
 }
@@ -160,9 +155,8 @@ func TestInstance_AddTAPNIC(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("adds TAP NIC when VM is new", func(t *testing.T) {
-		q := &Instance{
-			state: vmStateNew,
-		}
+		q := &Instance{}
+		q.setState(vmStateNew)
 		mac, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
 
 		err := q.AddTAPNIC(ctx, "tap0", mac)
@@ -175,9 +169,8 @@ func TestInstance_AddTAPNIC(t *testing.T) {
 	})
 
 	t.Run("fails after VM started", func(t *testing.T) {
-		q := &Instance{
-			state: vmStateRunning,
-		}
+		q := &Instance{}
+		q.setState(vmStateRunning)
 		mac, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
 
 		err := q.AddTAPNIC(ctx, "tap0", mac)
@@ -186,9 +179,8 @@ func TestInstance_AddTAPNIC(t *testing.T) {
 	})
 
 	t.Run("adds multiple NICs with sequential IDs", func(t *testing.T) {
-		q := &Instance{
-			state: vmStateNew,
-		}
+		q := &Instance{}
+		q.setState(vmStateNew)
 		mac1, _ := net.ParseMAC("aa:bb:cc:dd:ee:f1")
 		mac2, _ := net.ParseMAC("aa:bb:cc:dd:ee:f2")
 
@@ -232,7 +224,8 @@ func BenchmarkAddDisk(b *testing.B) {
 
 	b.ResetTimer()
 	for range b.N {
-		q := &Instance{state: vmStateNew}
+		q := &Instance{}
+		q.setState(vmStateNew)
 		_ = q.AddDisk(ctx, "disk", testFile)
 	}
 }

@@ -138,12 +138,11 @@ func (m *mockReadWriteCloser) Close() error {
 
 func TestInstance_Shutdown_NotRunning(t *testing.T) {
 	// When VM is not in running state, Shutdown should be idempotent
-	q := &Instance{
-		state: vmStateStopped,
-	}
+	q := &Instance{}
+	q.setState(vmStateShutdown)
 
-	// Switch to shutdown state
-	q.state = vmStateShutdown
+	// Verify state was set
+	assert.Equal(t, vmStateShutdown, q.getState())
 
 	// Shutdown should return nil without error (idempotent)
 	// Can't fully test without starting a real VM
