@@ -120,6 +120,18 @@ jobs:
       - name: Validate
         run: task validate
 
+      - name: Run tests with coverage
+        run: |
+          go test -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.txt
+          fail_ci_if_error: false
+          verbose: true
+
       - name: Cleanup BuildKit cache
         if: always()
         run: |
