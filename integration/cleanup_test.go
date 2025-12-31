@@ -68,10 +68,10 @@ import (
 
 // resourceSnapshot captures the state of system resources at a point in time.
 type resourceSnapshot struct {
-	tapDevices      []string
-	qemuProcesses   []int
+	tapDevices       []string
+	qemuProcesses    []int
 	networkNamspaces []string
-	cniAllocations  []string
+	cniAllocations   []string
 }
 
 // captureResourceSnapshot captures current system resource state.
