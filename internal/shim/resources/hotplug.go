@@ -73,42 +73,37 @@ func StartCPUHotplug(
 	}
 
 	// Create controller configuration from config file
-	var cpuConfig cpuhotplug.Config
-	cfg, err := config.Get()
-	if err != nil {
-		log.G(ctx).WithError(err).Error("cpu-hotplug: failed to load config, using defaults")
-		cpuConfig = cpuhotplug.DefaultConfig()
-	} else {
-		// Parse durations from config
-		monitorInterval, err := time.ParseDuration(cfg.CPUHotplug.MonitorInterval)
-		if err != nil {
-			log.G(ctx).WithError(err).Error("cpu-hotplug: invalid monitor_interval, using defaults")
-			cpuConfig = cpuhotplug.DefaultConfig()
-		} else {
-			scaleUpCooldown, err1 := time.ParseDuration(cfg.CPUHotplug.ScaleUpCooldown)
-			scaleDownCooldown, err2 := time.ParseDuration(cfg.CPUHotplug.ScaleDownCooldown)
-
-			if err1 != nil || err2 != nil {
-				log.G(ctx).WithFields(log.Fields{
-					"scale_up_err":   err1,
-					"scale_down_err": err2,
-				}).Error("cpu-hotplug: invalid cooldown durations, using defaults")
-				cpuConfig = cpuhotplug.DefaultConfig()
-			} else {
-				cpuConfig = cpuhotplug.Config{
-					MonitorInterval:      monitorInterval,
-					ScaleUpCooldown:      scaleUpCooldown,
-					ScaleDownCooldown:    scaleDownCooldown,
-					ScaleUpThreshold:     cfg.CPUHotplug.ScaleUpThreshold,
-					ScaleDownThreshold:   cfg.CPUHotplug.ScaleDownThreshold,
-					ScaleUpThrottleLimit: cfg.CPUHotplug.ScaleUpThrottleLimit,
-					ScaleUpStability:     cfg.CPUHotplug.ScaleUpStability,
-					ScaleDownStability:   cfg.CPUHotplug.ScaleDownStability,
-					EnableScaleDown:      cfg.CPUHotplug.EnableScaleDown,
-				}
+	cpuConfig := parseHotplugConfig(ctx, "cpu-hotplug",
+		cpuhotplug.DefaultConfig,
+		func(cfg *config.Config) (cpuhotplug.Config, error) {
+			monitorInterval, err := time.ParseDuration(cfg.CPUHotplug.MonitorInterval)
+			if err != nil {
+				return cpuhotplug.Config{}, fmt.Errorf("invalid monitor_interval: %w", err)
 			}
-		}
-	}
+
+			scaleUpCooldown, err := time.ParseDuration(cfg.CPUHotplug.ScaleUpCooldown)
+			if err != nil {
+				return cpuhotplug.Config{}, fmt.Errorf("invalid scale_up_cooldown: %w", err)
+			}
+
+			scaleDownCooldown, err := time.ParseDuration(cfg.CPUHotplug.ScaleDownCooldown)
+			if err != nil {
+				return cpuhotplug.Config{}, fmt.Errorf("invalid scale_down_cooldown: %w", err)
+			}
+
+			return cpuhotplug.Config{
+				MonitorInterval:      monitorInterval,
+				ScaleUpCooldown:      scaleUpCooldown,
+				ScaleDownCooldown:    scaleDownCooldown,
+				ScaleUpThreshold:     cfg.CPUHotplug.ScaleUpThreshold,
+				ScaleDownThreshold:   cfg.CPUHotplug.ScaleDownThreshold,
+				ScaleUpThrottleLimit: cfg.CPUHotplug.ScaleUpThrottleLimit,
+				ScaleUpStability:     cfg.CPUHotplug.ScaleUpStability,
+				ScaleDownStability:   cfg.CPUHotplug.ScaleDownStability,
+				EnableScaleDown:      cfg.CPUHotplug.EnableScaleDown,
+			}, nil
+		},
+	)
 
 	hotplugger, err := vmi.CPUHotplugger()
 	if err != nil {
@@ -178,22 +173,25 @@ func StartMemoryHotplug(
 	}
 
 	// Create controller configuration from config file
-	var memConfig memhotplug.Config
-	cfg, err := config.Get()
-	if err != nil {
-		log.G(ctx).WithError(err).Error("memory-hotplug: failed to load config, using defaults")
-		memConfig = memhotplug.DefaultConfig()
-	} else {
-		// Parse durations from config
-		monitorInterval, err := time.ParseDuration(cfg.MemHotplug.MonitorInterval)
-		if err != nil {
-			log.G(ctx).WithError(err).Error("memory-hotplug: invalid monitor_interval, using defaults")
-			memConfig = memhotplug.DefaultConfig()
-		} else {
-			scaleUpCooldown, _ := time.ParseDuration(cfg.MemHotplug.ScaleUpCooldown)
-			scaleDownCooldown, _ := time.ParseDuration(cfg.MemHotplug.ScaleDownCooldown)
+	memConfig := parseHotplugConfig(ctx, "memory-hotplug",
+		memhotplug.DefaultConfig,
+		func(cfg *config.Config) (memhotplug.Config, error) {
+			monitorInterval, err := time.ParseDuration(cfg.MemHotplug.MonitorInterval)
+			if err != nil {
+				return memhotplug.Config{}, fmt.Errorf("invalid monitor_interval: %w", err)
+			}
 
-			memConfig = memhotplug.Config{
+			scaleUpCooldown, err := time.ParseDuration(cfg.MemHotplug.ScaleUpCooldown)
+			if err != nil {
+				return memhotplug.Config{}, fmt.Errorf("invalid scale_up_cooldown: %w", err)
+			}
+
+			scaleDownCooldown, err := time.ParseDuration(cfg.MemHotplug.ScaleDownCooldown)
+			if err != nil {
+				return memhotplug.Config{}, fmt.Errorf("invalid scale_down_cooldown: %w", err)
+			}
+
+			return memhotplug.Config{
 				MonitorInterval:    monitorInterval,
 				ScaleUpCooldown:    scaleUpCooldown,
 				ScaleDownCooldown:  scaleDownCooldown,
@@ -204,9 +202,9 @@ func StartMemoryHotplug(
 				ScaleUpStability:   cfg.MemHotplug.ScaleUpStability,
 				ScaleDownStability: cfg.MemHotplug.ScaleDownStability,
 				EnableScaleDown:    cfg.MemHotplug.EnableScaleDown,
-			}
-		}
-	}
+			}, nil
+		},
+	)
 
 	if memConfig.EnableScaleDown {
 		log.G(ctx).Warn("memory-hotplug: scale-down enabled (EXPERIMENTAL)")
@@ -264,4 +262,28 @@ func CreateVMClientCallbacks(dialClient func(context.Context) (*ttrpc.Client, er
 			return onlineMemory(ctx, dialClient, memoryID)
 		},
 	}
+}
+
+// parseHotplugConfig is a generic helper for parsing hotplug configuration.
+// It loads the config, calls the provided parser function, and falls back to defaults on error.
+// This eliminates duplicate config parsing logic between CPU and memory hotplug.
+func parseHotplugConfig[T any](
+	ctx context.Context,
+	subsystem string,
+	getDefaults func() T,
+	parseConfig func(*config.Config) (T, error),
+) T {
+	cfg, err := config.Get()
+	if err != nil {
+		log.G(ctx).WithError(err).Errorf("%s: failed to load config, using defaults", subsystem)
+		return getDefaults()
+	}
+
+	parsed, err := parseConfig(cfg)
+	if err != nil {
+		log.G(ctx).WithError(err).Errorf("%s: invalid config, using defaults", subsystem)
+		return getDefaults()
+	}
+
+	return parsed
 }
