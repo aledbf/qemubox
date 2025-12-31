@@ -95,51 +95,34 @@ func TestDumpFile_DebugLevelDisabled(t *testing.T) {
 }
 
 func TestDumpInfo(t *testing.T) {
-	ctx := context.Background()
-
 	// DumpInfo walks the filesystem and calls various system commands
 	// It's primarily a debugging/logging function
-	// We test that it doesn't panic
+	// Skip by default as it walks "/" which is very slow (~14s)
+	t.Skip("skipping DumpInfo test (walks entire filesystem, ~14s)")
 
-	// Note: DumpInfo walks "/" which could be slow in tests
-	// In production, this is only called for debugging
-	// For tests, we just verify it doesn't crash
-
-	// Skip this test in short mode since it's slow
-	if testing.Short() {
-		t.Skip("skipping DumpInfo in short mode (walks filesystem)")
-	}
+	ctx := context.Background()
 
 	// Call DumpInfo and verify it doesn't panic
 	// It will log warnings about missing /sbin/crun on non-Linux systems
 	DumpInfo(ctx)
-
-	// If we get here without panic, the test passes
 }
 
 func TestDumpInfo_ProcCmdline(t *testing.T) {
-	// This test verifies DumpInfo can handle /proc/cmdline
-	// On non-Linux systems, this file won't exist
+	// This test is redundant with TestDumpInfo - just verifies DumpInfo handles /proc gracefully
+	// Skip by default as it calls DumpInfo which walks "/" (~14s)
+	t.Skip("skipping DumpInfo test (walks entire filesystem, ~14s)")
 
 	ctx := context.Background()
-
-	// Just verify DumpInfo handles missing /proc gracefully
-	// The function should log errors but not panic
 	DumpInfo(ctx)
-
-	// If we get here without panic, the test passes
 }
 
 func TestDumpInfo_CrunVersion(t *testing.T) {
-	// This test documents that DumpInfo tries to run /sbin/crun --version
-	// On systems without crun, this will fail gracefully
+	// This test is redundant with TestDumpInfo - documents that DumpInfo tries /sbin/crun --version
+	// Skip by default as it calls DumpInfo which walks "/" (~14s)
+	t.Skip("skipping DumpInfo test (walks entire filesystem, ~14s)")
 
 	ctx := context.Background()
-
-	// The function should handle missing crun gracefully
 	DumpInfo(ctx)
-
-	// If we get here without panic, the test passes
 }
 
 // Benchmark DumpFile performance

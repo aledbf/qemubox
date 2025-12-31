@@ -150,6 +150,11 @@ func TestRetrySysfsOperation(t *testing.T) {
 	})
 
 	t.Run("fails after max retries", func(t *testing.T) {
+		// Skip by default: exponential backoff takes ~5s to exhaust all retries
+		if testing.Short() {
+			t.Skip("skipping slow retry test in short mode (~5s)")
+		}
+
 		callCount := 0
 		err := retrySysfsOperation(context.Background(), "test", func() error {
 			callCount++
@@ -269,6 +274,11 @@ func TestSystemServiceOnlineCPU(t *testing.T) {
 	})
 
 	t.Run("CPU not present after retries", func(t *testing.T) {
+		// Skip by default: exponential backoff takes ~5s to exhaust all retries
+		if testing.Short() {
+			t.Skip("skipping slow retry test in short mode (~5s)")
+		}
+
 		svc := &systemService{}
 		req := &api.OnlineCPURequest{CpuID: 999}
 
@@ -356,6 +366,11 @@ func TestSystemServiceOfflineMemory(t *testing.T) {
 
 func TestSystemServiceOnlineMemory(t *testing.T) {
 	t.Run("memory not present after retries", func(t *testing.T) {
+		// Skip by default: exponential backoff takes ~5s to exhaust all retries
+		if testing.Short() {
+			t.Skip("skipping slow retry test in short mode (~5s)")
+		}
+
 		svc := &systemService{}
 		req := &api.OnlineMemoryRequest{MemoryID: 999}
 
