@@ -18,7 +18,10 @@ func TestSystemInfo(t *testing.T) {
 	runWithVM(t, func(ctx context.Context, t *testing.T, instance vm.Instance) {
 		t.Helper()
 
-		client := instance.Client()
+		client, err := instance.Client()
+		if err != nil {
+			t.Fatalf("get client: %v", err)
+		}
 		ss := systemapi.NewTTRPCSystemClient(client)
 
 		resp, err := ss.Info(ctx, nil)
@@ -150,7 +153,10 @@ func TestVMResourceConfig(t *testing.T) {
 	runWithVMConfig(t, cfg, func(ctx context.Context, t *testing.T, instance vm.Instance) {
 		t.Helper()
 
-		client := instance.Client()
+		client, err := instance.Client()
+		if err != nil {
+			t.Fatalf("get client: %v", err)
+		}
 		ss := systemapi.NewTTRPCSystemClient(client)
 
 		resp, err := ss.Info(ctx, nil)

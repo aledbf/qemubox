@@ -111,7 +111,9 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) error {
 		if retErr != nil && containerCreated {
 			// Container was created via runtime.Create() but something else failed.
 			// We need to delete the container to avoid leaking resources.
-			if err := p.runtime.Delete(context.Background(), r.ID, &runc.DeleteOpts{
+			// Use context.WithoutCancel to ensure cleanup proceeds even if ctx is cancelled
+			cleanupCtx := context.WithoutCancel(ctx)
+			if err := p.runtime.Delete(cleanupCtx, r.ID, &runc.DeleteOpts{
 				Force: true,
 			}); err != nil {
 				log.G(ctx).WithError(err).WithField("container_id", r.ID).
