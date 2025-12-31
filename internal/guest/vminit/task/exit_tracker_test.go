@@ -3,55 +3,18 @@
 package task
 
 import (
-	"context"
-	"io"
 	"testing"
-	"time"
 
-	"github.com/containerd/console"
-	"github.com/containerd/containerd/v2/pkg/stdio"
 	runcC "github.com/containerd/go-runc"
 
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/runc"
+	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/testutil"
 )
-
-// mockProcess implements process.Process for testing
-type mockProcess struct {
-	id         string
-	pid        int
-	exitStatus int
-	exitedAt   time.Time
-}
-
-func (m *mockProcess) ID() string                                           { return m.id }
-func (m *mockProcess) Pid() int                                             { return m.pid }
-func (m *mockProcess) ExitStatus() int                                      { return m.exitStatus }
-func (m *mockProcess) ExitedAt() time.Time                                  { return m.exitedAt }
-func (m *mockProcess) SetExited(status int)                                 { m.exitStatus = status }
-func (m *mockProcess) Wait()                                                {}
-func (m *mockProcess) Delete(ctx context.Context) error                     { return nil }
-func (m *mockProcess) Kill(ctx context.Context, sig uint32, all bool) error { return nil }
-func (m *mockProcess) Resize(ws console.WinSize) error                      { return nil }
-func (m *mockProcess) Start(ctx context.Context) error                      { return nil }
-func (m *mockProcess) Status(ctx context.Context) (string, error)           { return "running", nil }
-func (m *mockProcess) Stdin() io.Closer                                     { return nil }
-func (m *mockProcess) Stdio() stdio.Stdio                                   { return stdio.Stdio{} }
-
-// mockContainer creates a fake container for testing
-func mockContainer(id string, pid int) *runc.Container {
-	// Note: This is a simplified mock. In real tests, you'd need proper initialization
-	c := &runc.Container{
-		ID:     id,
-		Bundle: "/test/bundle/" + id,
-	}
-	return c
-}
 
 func TestExitTracker_SubscribeAndHandleStart(t *testing.T) {
 	tracker := newExitTracker()
-	container := mockContainer("test-container", 1234)
-	proc := &mockProcess{id: "init", pid: 1234}
+	container := testutil.MockContainer("test-container")
+	proc := &testutil.MockProcess{IDValue: "init", PIDValue: 1234}
 
 	// Subscribe before starting
 	sub := tracker.Subscribe(nil)
@@ -79,8 +42,8 @@ func TestExitTracker_SubscribeAndHandleStart(t *testing.T) {
 
 func TestExitTracker_EarlyExit(t *testing.T) {
 	tracker := newExitTracker()
-	container := mockContainer("test-container", 1234)
-	proc := &mockProcess{id: "init", pid: 1234}
+	container := testutil.MockContainer("test-container")
+	proc := &testutil.MockProcess{IDValue: "init", PIDValue: 1234}
 
 	// Subscribe before starting
 	sub := tracker.Subscribe(nil)
@@ -103,9 +66,9 @@ func TestExitTracker_EarlyExit(t *testing.T) {
 
 func TestExitTracker_InitExitDelayed(t *testing.T) {
 	tracker := newExitTracker()
-	container := mockContainer("test-container", 1234)
+	container := testutil.MockContainer("test-container")
 	initProc := &process.Init{}
-	execProc := &mockProcess{id: "exec1", pid: 1235}
+	execProc := &testutil.MockProcess{IDValue: "exec1", PIDValue: 1235}
 
 	// Start init process
 	sub1 := tracker.Subscribe(nil)
@@ -157,7 +120,7 @@ func TestExitTracker_InitExitDelayed(t *testing.T) {
 
 func TestExitTracker_InitExitNotDelayed(t *testing.T) {
 	tracker := newExitTracker()
-	container := mockContainer("test-container", 1234)
+	container := testutil.MockContainer("test-container")
 
 	// No execs running - init exit should not be delayed
 	shouldDelay, waitChan := tracker.ShouldDelayInitExit(container)
@@ -173,7 +136,7 @@ func TestExitTracker_InitExitNotDelayed(t *testing.T) {
 
 func TestExitTracker_ConcurrentSubscribers(t *testing.T) {
 	tracker := newExitTracker()
-	container := mockContainer("test-container", 1234)
+	container := testutil.MockContainer("test-container")
 
 	// Create multiple concurrent subscriptions
 	sub1 := tracker.Subscribe(nil)
@@ -185,7 +148,7 @@ func TestExitTracker_ConcurrentSubscribers(t *testing.T) {
 	tracker.NotifyExit(exit)
 
 	// Each subscriber should see the exit
-	proc := &mockProcess{id: "proc", pid: 1234}
+	proc := &testutil.MockProcess{IDValue: "proc", PIDValue: 1234}
 
 	exits1 := sub1.HandleStart(container, proc, 1234)
 	exits2 := sub2.HandleStart(container, proc, 1234)
@@ -216,8 +179,8 @@ func TestExitTracker_SubscriptionCancellation(t *testing.T) {
 
 func TestExitTracker_Cleanup(t *testing.T) {
 	tracker := newExitTracker()
-	container := mockContainer("test-container", 1234)
-	proc := &mockProcess{id: "init", pid: 1234}
+	container := testutil.MockContainer("test-container")
+	proc := &testutil.MockProcess{IDValue: "init", PIDValue: 1234}
 
 	// Start process
 	sub := tracker.Subscribe(nil)
@@ -258,10 +221,10 @@ func TestExitTracker_Cleanup(t *testing.T) {
 
 func TestExitTracker_PIDReuse(t *testing.T) {
 	tracker := newExitTracker()
-	container1 := mockContainer("container-1", 1234)
-	container2 := mockContainer("container-2", 1234)
-	proc1 := &mockProcess{id: "proc1", pid: 1234}
-	proc2 := &mockProcess{id: "proc2", pid: 1234}
+	container1 := testutil.MockContainer("container-1")
+	container2 := testutil.MockContainer("container-2")
+	proc1 := &testutil.MockProcess{IDValue: "proc1", PIDValue: 1234}
+	proc2 := &testutil.MockProcess{IDValue: "proc2", PIDValue: 1234}
 
 	// Start both processes with same PID (simulating PID reuse)
 	sub1 := tracker.Subscribe(nil)
@@ -290,7 +253,7 @@ func TestExitTracker_PIDReuse(t *testing.T) {
 
 func TestExitTracker_InitHasExited(t *testing.T) {
 	tracker := newExitTracker()
-	container := mockContainer("test-container", 1234)
+	container := testutil.MockContainer("test-container")
 
 	// Initially, init has not exited
 	if tracker.InitHasExited(container) {
@@ -313,8 +276,8 @@ func TestExitTracker_InitHasExited(t *testing.T) {
 
 func TestExitTracker_DecrementExecCount(t *testing.T) {
 	tracker := newExitTracker()
-	container := mockContainer("test-container", 1234)
-	execProc := &mockProcess{id: "exec1", pid: 1235}
+	container := testutil.MockContainer("test-container")
+	execProc := &testutil.MockProcess{IDValue: "exec1", PIDValue: 1235}
 
 	// Start exec process (increments counter)
 	sub := tracker.Subscribe(nil)
