@@ -89,6 +89,12 @@ func AdaptForVM(ctx context.Context, b *bundle.Bundle) error {
 		}
 	}
 
+	// Clear readonly/masked paths - VM provides isolation, not OCI restrictions
+	if b.Spec.Linux != nil {
+		b.Spec.Linux.ReadonlyPaths = nil
+		b.Spec.Linux.MaskedPaths = nil
+	}
+
 	return nil
 }
 
