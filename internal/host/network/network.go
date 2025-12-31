@@ -62,9 +62,9 @@ type NetworkConfig struct {
 }
 
 // LoadNetworkConfig loads CNI network configuration using a three-tier fallback:
-//   1. Environment variables (QEMUBOX_CNI_CONF_DIR, QEMUBOX_CNI_BIN_DIR)
-//   2. Qemubox-bundled CNI config (if exists)
-//   3. Standard system CNI paths (/etc/cni/net.d, /opt/cni/bin)
+//  1. Environment variables (QEMUBOX_CNI_CONF_DIR, QEMUBOX_CNI_BIN_DIR)
+//  2. Qemubox-bundled CNI config (if exists)
+//  3. Standard system CNI paths (/etc/cni/net.d, /opt/cni/bin)
 //
 // Network configuration is auto-discovered from the first .conflist file
 // in the CNI config directory (sorted alphabetically by filename).
