@@ -86,6 +86,7 @@ type Instance struct {
 	consoleFifoPath string   // Ephemeral FIFO pipe (stateDir) - QEMU writes here, prevents blocking on slow disk I/O
 	qemuLogPath     string   // QEMU stderr log
 	consoleFile     *os.File // Console log file handle
+	consoleFifo     *os.File // FIFO reader handle (closed on shutdown to cancel console goroutine)
 
 	// Runtime state
 	cmd       *exec.Cmd

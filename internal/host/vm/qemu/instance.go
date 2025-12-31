@@ -301,9 +301,8 @@ func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
 	// Start background goroutine to stream FIFO → log file
 	// This prevents QEMU from blocking on slow disk I/O
 	//
-	// Goroutine lifecycle: This goroutine exits when QEMU closes the FIFO writer (on VM shutdown).
-	// FIFOs don't support read deadlines, so we can't use context for early cancellation.
-	// In practice, the goroutine lifetime matches the VM lifetime, which is acceptable.
+	// Goroutine lifecycle: Exits when FIFO is closed (either by QEMU shutdown or explicit
+	// close in Shutdown()). This allows proper cancellation during abnormal VM termination.
 	go func() {
 		defer func() {
 			_ = consoleFile.Close()
@@ -319,6 +318,9 @@ func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
 		defer func() {
 			_ = fifo.Close()
 		}()
+
+		// Store FIFO handle so Shutdown() can close it to cancel this goroutine
+		q.consoleFifo = fifo
 
 		// Continuously stream: FIFO (fast, kernel-buffered) → log file (persistent, may be slow)
 		// This decouples QEMU's write speed from disk I/O performance
@@ -1055,6 +1057,14 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 		logger.Debug("qemu: closing vsock connection")
 		closeAndLog(logger, "vsock", q.vsockConn)
 		q.vsockConn = nil
+	}
+
+	// Close console FIFO to cancel the streaming goroutine.
+	// This interrupts the blocked Read() and allows graceful goroutine exit.
+	if q.consoleFifo != nil {
+		logger.Debug("qemu: closing console FIFO to cancel streaming goroutine")
+		closeAndLog(logger, "console-fifo", q.consoleFifo)
+		q.consoleFifo = nil
 	}
 
 	q.shutdownGuest(ctx, logger)
