@@ -117,30 +117,54 @@ type CPUInfo struct {
 	Target   string `json:"target"`
 }
 
-// Instance represents a VM instance that can run containers.
-// This interface abstracts the VMM backend (QEMU)
-//
-//nolint:interfacebloat // VM interface naturally has many methods for different operations
-type Instance interface {
-	// Device configuration (called before Start)
+// DeviceConfigurator configures VM devices before startup.
+// These methods must be called before Start().
+type DeviceConfigurator interface {
+	// AddDisk adds a virtio-blk disk device to the VM.
 	AddDisk(ctx context.Context, blockID, mountPath string, opts ...MountOpt) error
+	// AddTAPNIC adds a TAP-based network interface to the VM.
 	AddTAPNIC(ctx context.Context, tapName string, mac net.HardwareAddr) error
+	// AddFS adds a virtio-fs filesystem to the VM.
 	AddFS(ctx context.Context, tag, mountPath string, opts ...MountOpt) error
+	// AddNIC adds a network interface with the specified configuration.
 	AddNIC(ctx context.Context, endpoint string, mac net.HardwareAddr, mode NetworkMode, features, flags uint32) error
+}
 
-	// Lifecycle management
-	Start(ctx context.Context, opts ...StartOpt) error
-	Shutdown(ctx context.Context) error
-
-	// Communication with guest
+// GuestCommunicator provides communication channels with the guest VM.
+type GuestCommunicator interface {
+	// Client returns the shared TTRPC client for guest communication.
 	Client() (*ttrpc.Client, error)
 	// DialClient creates a new, short-lived TTRPC client connection to the guest.
 	// Callers must close the returned client when done.
 	DialClient(ctx context.Context) (*ttrpc.Client, error)
+	// StartStream creates a new bidirectional stream for I/O forwarding.
 	StartStream(ctx context.Context) (uint32, net.Conn, error)
+}
 
-	// Resource management
+// ResourceManager provides dynamic resource management for the VM.
+type ResourceManager interface {
+	// CPUHotplugger returns an interface for CPU hotplug operations.
 	CPUHotplugger() (CPUHotplugger, error)
+}
+
+// Instance represents a VM instance that can run containers.
+// This interface abstracts the VMM backend (QEMU) and composes
+// focused interfaces for different aspects of VM management.
+//
+// The interface is organized into logical groups:
+//   - DeviceConfigurator: Configure devices before Start()
+//   - Lifecycle: Start() and Shutdown()
+//   - GuestCommunicator: Communicate with the running guest
+//   - ResourceManager: Dynamic resource management
+//   - Metadata: VM information
+type Instance interface {
+	DeviceConfigurator
+	GuestCommunicator
+	ResourceManager
+
+	// Lifecycle management
+	Start(ctx context.Context, opts ...StartOpt) error
+	Shutdown(ctx context.Context) error
 
 	// Metadata
 	VMInfo() VMInfo
