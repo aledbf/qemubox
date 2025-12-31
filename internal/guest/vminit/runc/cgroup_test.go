@@ -4,13 +4,19 @@ package runc
 
 import (
 	"context"
+	"os"
 	"testing"
 
-	cgroupsv2 "github.com/containerd/cgroups/v3/cgroup2"
 	"github.com/containerd/cgroups/v3/cgroup2/stats"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// isCgroupV2Available checks if cgroup v2 (unified hierarchy) is available
+func isCgroupV2Available() bool {
+	_, err := os.Stat("/sys/fs/cgroup/cgroup.controllers")
+	return err == nil
+}
 
 func TestNewCgroupManager(t *testing.T) {
 	// NewCgroupManager wraps the v2 manager
@@ -57,7 +63,7 @@ func TestLoadProcessCgroup_NonExistentPID(t *testing.T) {
 
 func TestLoadProcessCgroup_CurrentProcess(t *testing.T) {
 	// Skip if not in cgroup v2 unified mode
-	if !cgroupsv2.Enabled() {
+	if !isCgroupV2Available() {
 		t.Skip("cgroup v2 (unified mode) not available")
 	}
 
