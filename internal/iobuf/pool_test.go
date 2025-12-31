@@ -60,8 +60,8 @@ func TestGet_BufferReuse(t *testing.T) {
 
 func TestGet_MultipleBuffers(t *testing.T) {
 	// Get multiple buffers without returning them
-	buffers := make([]*[]byte, 10)
-	for i := range buffers {
+	var buffers []*[]byte
+	for i := range 10 {
 		buf := Get()
 		if buf == nil {
 			t.Fatalf("Get() returned nil for buffer %d", i)
@@ -69,7 +69,7 @@ func TestGet_MultipleBuffers(t *testing.T) {
 		if len(*buf) != 4096 {
 			t.Errorf("buffer %d length = %d, want 4096", i, len(*buf))
 		}
-		buffers[i] = buf
+		buffers = append(buffers, buf)
 	}
 
 	// Return all buffers
