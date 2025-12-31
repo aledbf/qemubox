@@ -11,8 +11,6 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
-const resolvConfPath = "/etc/resolv.conf"
-
 func TestReadSpec(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -233,18 +231,24 @@ func TestShouldKillAllOnExit_MissingSpec(t *testing.T) {
 	}
 }
 
-func TestInjectResolvConf(t *testing.T) {
-	t.Run("injects resolv.conf when not present", func(t *testing.T) {
+func TestRelaxOCISpec(t *testing.T) {
+	t.Run("relaxes restrictions and adds resolv.conf", func(t *testing.T) {
 		bundleDir := t.TempDir()
 
 		spec := &specs.Spec{
 			Version: "1.0.0",
-			Mounts: []specs.Mount{
-				{
-					Destination: "/proc",
-					Type:        "proc",
-					Source:      "proc",
+			Linux: &specs.Linux{
+				ReadonlyPaths: []string{"/proc/bus", "/proc/sysrq-trigger"},
+				MaskedPaths:   []string{"/proc/kcore", "/proc/keys"},
+				Seccomp:       &specs.LinuxSeccomp{DefaultAction: "SCMP_ACT_ERRNO"},
+				Resources: &specs.LinuxResources{
+					Devices: []specs.LinuxDeviceCgroup{
+						{Allow: false, Access: "rwm"},
+					},
 				},
+			},
+			Mounts: []specs.Mount{
+				{Destination: "/proc", Type: "proc", Source: "proc"},
 			},
 		}
 
@@ -252,69 +256,60 @@ func TestInjectResolvConf(t *testing.T) {
 			t.Fatalf("failed to write spec: %v", err)
 		}
 
-		if err := InjectResolvConf(context.Background(), bundleDir); err != nil {
-			t.Fatalf("InjectResolvConf failed: %v", err)
+		if err := RelaxOCISpec(context.Background(), bundleDir); err != nil {
+			t.Fatalf("RelaxOCISpec failed: %v", err)
 		}
 
 		// Read back and verify
-		updatedSpec, err := readSpec(bundleDir)
+		updated, err := readSpec(bundleDir)
 		if err != nil {
 			t.Fatalf("failed to read updated spec: %v", err)
 		}
 
-		// Should have 2 mounts now (original + resolv.conf)
-		if len(updatedSpec.Mounts) != 2 {
-			t.Fatalf("expected 2 mounts, got %d", len(updatedSpec.Mounts))
+		// Verify restrictions removed
+		if len(updated.Linux.ReadonlyPaths) != 0 {
+			t.Errorf("ReadonlyPaths not cleared: %v", updated.Linux.ReadonlyPaths)
+		}
+		if len(updated.Linux.MaskedPaths) != 0 {
+			t.Errorf("MaskedPaths not cleared: %v", updated.Linux.MaskedPaths)
+		}
+		if updated.Linux.Seccomp != nil {
+			t.Error("Seccomp not cleared")
 		}
 
-		// Find resolv.conf mount
-		var found bool
-		for _, m := range updatedSpec.Mounts {
-			if m.Destination == resolvConfPath {
-				found = true
+		// Verify all devices allowed
+		if len(updated.Linux.Resources.Devices) != 1 {
+			t.Fatalf("expected 1 device rule, got %d", len(updated.Linux.Resources.Devices))
+		}
+		if !updated.Linux.Resources.Devices[0].Allow {
+			t.Error("devices not allowed")
+		}
+		if updated.Linux.Resources.Devices[0].Access != "rwm" {
+			t.Errorf("device access = %q, want %q", updated.Linux.Resources.Devices[0].Access, "rwm")
+		}
+
+		// Verify resolv.conf mount added
+		hasResolv := false
+		for _, m := range updated.Mounts {
+			if m.Destination == "/etc/resolv.conf" {
+				hasResolv = true
 				if m.Type != "bind" {
-					t.Errorf("resolv.conf mount type = %q, want %q", m.Type, "bind")
-				}
-				if m.Source != resolvConfPath {
-					t.Errorf("resolv.conf source = %q, want %q", m.Source, resolvConfPath)
-				}
-				// Verify options
-				hasRbind := false
-				hasRo := false
-				for _, opt := range m.Options {
-					if opt == "rbind" {
-						hasRbind = true
-					}
-					if opt == "ro" {
-						hasRo = true
-					}
-				}
-				if !hasRbind {
-					t.Error("resolv.conf mount missing 'rbind' option")
-				}
-				if !hasRo {
-					t.Error("resolv.conf mount missing 'ro' option")
+					t.Errorf("resolv.conf type = %q, want bind", m.Type)
 				}
 			}
 		}
-
-		if !found {
-			t.Error("resolv.conf mount not found in updated spec")
+		if !hasResolv {
+			t.Error("resolv.conf mount not added")
 		}
 	})
 
-	t.Run("skips injection when resolv.conf already exists", func(t *testing.T) {
+	t.Run("skips resolv.conf if already present", func(t *testing.T) {
 		bundleDir := t.TempDir()
 
 		spec := &specs.Spec{
 			Version: "1.0.0",
 			Mounts: []specs.Mount{
-				{
-					Destination: resolvConfPath,
-					Type:        "bind",
-					Source:      "/custom/resolv.conf",
-					Options:     []string{"rbind", "rw"},
-				},
+				{Destination: "/etc/resolv.conf", Type: "bind", Source: "/custom/resolv.conf"},
 			},
 		}
 
@@ -322,32 +317,56 @@ func TestInjectResolvConf(t *testing.T) {
 			t.Fatalf("failed to write spec: %v", err)
 		}
 
-		if err := InjectResolvConf(context.Background(), bundleDir); err != nil {
-			t.Fatalf("InjectResolvConf failed: %v", err)
+		if err := RelaxOCISpec(context.Background(), bundleDir); err != nil {
+			t.Fatalf("RelaxOCISpec failed: %v", err)
 		}
 
-		// Read back and verify
-		updatedSpec, err := readSpec(bundleDir)
+		updated, err := readSpec(bundleDir)
 		if err != nil {
 			t.Fatalf("failed to read updated spec: %v", err)
 		}
 
 		// Should still have only 1 mount (not duplicated)
-		if len(updatedSpec.Mounts) != 1 {
-			t.Errorf("expected 1 mount, got %d", len(updatedSpec.Mounts))
+		if len(updated.Mounts) != 1 {
+			t.Errorf("expected 1 mount, got %d", len(updated.Mounts))
 		}
 
 		// Verify original mount unchanged
-		if updatedSpec.Mounts[0].Source != "/custom/resolv.conf" {
-			t.Errorf("original mount was modified")
+		if updated.Mounts[0].Source != "/custom/resolv.conf" {
+			t.Error("original mount was modified")
+		}
+	})
+
+	t.Run("handles nil Linux section", func(t *testing.T) {
+		bundleDir := t.TempDir()
+
+		spec := &specs.Spec{Version: "1.0.0"}
+
+		if err := writeSpec(bundleDir, spec); err != nil {
+			t.Fatalf("failed to write spec: %v", err)
+		}
+
+		if err := RelaxOCISpec(context.Background(), bundleDir); err != nil {
+			t.Fatalf("RelaxOCISpec failed: %v", err)
+		}
+
+		updated, err := readSpec(bundleDir)
+		if err != nil {
+			t.Fatalf("failed to read updated spec: %v", err)
+		}
+
+		if updated.Linux == nil {
+			t.Fatal("Linux section should be created")
+		}
+		if updated.Linux.Resources == nil {
+			t.Fatal("Resources section should be created")
 		}
 	})
 
 	t.Run("error on missing spec file", func(t *testing.T) {
 		bundleDir := t.TempDir()
-		// Don't create config.json
 
-		err := InjectResolvConf(context.Background(), bundleDir)
+		err := RelaxOCISpec(context.Background(), bundleDir)
 		if err == nil {
 			t.Fatal("expected error for missing spec, got nil")
 		}

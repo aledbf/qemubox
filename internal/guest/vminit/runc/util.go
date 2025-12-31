@@ -65,33 +65,58 @@ func writeSpec(p string, spec *specs.Spec) error {
 	return enc.Encode(spec)
 }
 
-// InjectResolvConf adds a bind mount for /etc/resolv.conf from the VM root into the container
-// This allows containers to inherit DNS configuration from the VM's /etc/resolv.conf
-func InjectResolvConf(ctx context.Context, bundlePath string) error {
+// RelaxOCISpec modifies the OCI spec to remove unnecessary container restrictions.
+// Since the container runs inside a VM, the VM provides the security boundary.
+// This removes restrictions that are redundant with VM isolation:
+//   - Allows access to all devices
+//   - Removes readonly and masked paths
+//   - Removes seccomp restrictions
+//   - Adds bind mount for /etc/resolv.conf (DNS from VM)
+func RelaxOCISpec(ctx context.Context, bundlePath string) error {
 	spec, err := readSpec(bundlePath)
 	if err != nil {
 		return err
 	}
 
-	// Check if /etc/resolv.conf already exists as a mount
+	if spec.Linux == nil {
+		spec.Linux = &specs.Linux{}
+	}
+
+	// Allow access to all devices - VM provides isolation
+	spec.Linux.Resources = &specs.LinuxResources{
+		Devices: []specs.LinuxDeviceCgroup{
+			{
+				Allow:  true,
+				Access: "rwm",
+			},
+		},
+	}
+
+	// Remove readonly and masked paths - not needed with VM isolation
+	spec.Linux.ReadonlyPaths = nil
+	spec.Linux.MaskedPaths = nil
+
+	// Remove seccomp restrictions - VM provides syscall isolation
+	spec.Linux.Seccomp = nil
+
+	// Add /etc/resolv.conf bind mount if not already present
+	hasResolv := false
 	for _, m := range spec.Mounts {
 		if m.Destination == "/etc/resolv.conf" {
-			log.G(ctx).Debug("resolv.conf mount already exists in spec, skipping injection")
-			return nil
+			hasResolv = true
+			break
 		}
 	}
-
-	// Add bind mount for /etc/resolv.conf
-	resolvConfMount := specs.Mount{
-		Destination: "/etc/resolv.conf",
-		Type:        "bind",
-		Source:      "/etc/resolv.conf",
-		Options:     []string{"rbind", "ro"},
+	if !hasResolv {
+		spec.Mounts = append(spec.Mounts, specs.Mount{
+			Destination: "/etc/resolv.conf",
+			Type:        "bind",
+			Source:      "/etc/resolv.conf",
+			Options:     []string{"rbind", "ro"},
+		})
 	}
 
-	spec.Mounts = append(spec.Mounts, resolvConfMount)
-
-	log.G(ctx).Info("injected /etc/resolv.conf bind mount into container spec")
+	log.G(ctx).Debug("relaxed OCI spec for VM isolation")
 
 	return writeSpec(bundlePath, spec)
 }

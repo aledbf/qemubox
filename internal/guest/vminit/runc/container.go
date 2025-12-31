@@ -117,10 +117,9 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 		log.G(ctx).WithField("rootfs", rootfs).Info("rootfs components mounted")
 	}
 
-	// Inject /etc/resolv.conf bind mount from VM into container
-	// This allows containers to use DNS configuration from kernel ip= parameter
-	if err := InjectResolvConf(ctx, r.Bundle); err != nil {
-		log.G(ctx).WithError(err).Warn("failed to inject resolv.conf, container may not have DNS")
+	// Relax OCI spec restrictions - VM provides the security boundary
+	if err := RelaxOCISpec(ctx, r.Bundle); err != nil {
+		log.G(ctx).WithError(err).Warn("failed to relax OCI spec")
 	}
 
 	p := newInit(

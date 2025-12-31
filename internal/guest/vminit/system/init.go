@@ -11,6 +11,7 @@ import (
 
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/log"
+	"golang.org/x/sys/unix"
 
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/devices"
 )
@@ -19,6 +20,10 @@ import (
 // This includes mounting filesystems, configuring cgroups, and setting up DNS.
 func Initialize(ctx context.Context) error {
 	if err := mountFilesystems(); err != nil {
+		return err
+	}
+
+	if err := setupDevNodes(ctx); err != nil {
 		return err
 	}
 
@@ -61,7 +66,8 @@ func mountFilesystems() error {
 		return fmt.Errorf("failed to create /lib: %w", err)
 	}
 
-	return mount.All([]mount.Mount{
+	// Mount base filesystems first
+	if err := mount.All([]mount.Mount{
 		{
 			Type:    "proc",
 			Source:  "proc",
@@ -97,7 +103,78 @@ func mountFilesystems() error {
 			Target:  "/dev",
 			Options: []string{"nosuid", "noexec"},
 		},
+	}, "/"); err != nil {
+		return err
+	}
+
+	// Create /dev subdirectories after devtmpfs is mounted
+	// #nosec G301 -- /dev/pts and /dev/shm must be accessible inside the VM.
+	for _, dir := range []string{"/dev/pts", "/dev/shm"} {
+		if err := os.MkdirAll(dir, 0755); err != nil && !os.IsExist(err) {
+			return fmt.Errorf("failed to create %s: %w", dir, err)
+		}
+	}
+
+	// Mount /dev subdirectories
+	return mount.All([]mount.Mount{
+		{
+			Type:    "devpts",
+			Source:  "devpts",
+			Target:  "/dev/pts",
+			Options: []string{"nosuid", "noexec", "gid=5", "mode=0620", "ptmxmode=0666"},
+		},
+		{
+			Type:    "tmpfs",
+			Source:  "shm",
+			Target:  "/dev/shm",
+			Options: []string{"nosuid", "noexec", "nodev", "mode=1777", "size=64m"},
+		},
 	}, "/")
+}
+
+// setupDevNodes creates device nodes and symlinks that may not be created by devtmpfs.
+// This includes /dev/fuse for FUSE filesystems and standard symlinks like /dev/fd.
+func setupDevNodes(ctx context.Context) error {
+	// Create /dev/fuse if it doesn't exist (major 10, minor 229)
+	// FUSE is built into the kernel but devtmpfs may not create the device node
+	// until something tries to use it. Docker's fuse-overlayfs needs this.
+	fusePath := "/dev/fuse"
+	if _, err := os.Stat(fusePath); os.IsNotExist(err) {
+		// #nosec G302 -- /dev/fuse must be world-readable for FUSE operations.
+		if err := unix.Mknod(fusePath, unix.S_IFCHR|0666, int(unix.Mkdev(10, 229))); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to create /dev/fuse, FUSE filesystems may not work")
+		} else {
+			log.G(ctx).Info("created /dev/fuse device node")
+		}
+	}
+
+	// Create standard /dev symlinks if they don't exist
+	// These are typically created by udev but we don't run udev in the VM
+	symlinks := map[string]string{
+		"/dev/fd":     "/proc/self/fd",
+		"/dev/stdin":  "/proc/self/fd/0",
+		"/dev/stdout": "/proc/self/fd/1",
+		"/dev/stderr": "/proc/self/fd/2",
+	}
+
+	for link, target := range symlinks {
+		if _, err := os.Lstat(link); os.IsNotExist(err) {
+			if err := os.Symlink(target, link); err != nil {
+				log.G(ctx).WithError(err).WithField("link", link).Warn("failed to create symlink")
+			}
+		}
+	}
+
+	// Create /dev/ptmx symlink to /dev/pts/ptmx if it doesn't exist
+	// This is needed for pseudo-terminal allocation with devpts
+	ptmxPath := "/dev/ptmx"
+	if _, err := os.Lstat(ptmxPath); os.IsNotExist(err) {
+		if err := os.Symlink("/dev/pts/ptmx", ptmxPath); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to create /dev/ptmx symlink")
+		}
+	}
+
+	return nil
 }
 
 // setupCgroupControl enables cgroup controllers for container resource management.
