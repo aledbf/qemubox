@@ -23,7 +23,37 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/host/mountutil"
 )
 
-const runtimePath = "/sbin/crun"
+// defaultRuntimePath is the fallback OCI runtime path.
+const defaultRuntimePath = "/sbin/crun"
+
+// runtimePathOnce ensures getRuntimePath() only runs filesystem checks once.
+var (
+	runtimePathOnce   sync.Once
+	resolvedRuntimePath string
+)
+
+// getRuntimePath returns the OCI runtime path to use.
+// It checks the QEMUBOX_OCI_RUNTIME environment variable first,
+// then tries common locations, falling back to /sbin/crun.
+func getRuntimePath() string {
+	runtimePathOnce.Do(func() {
+		// Check environment variable first
+		if path := os.Getenv("QEMUBOX_OCI_RUNTIME"); path != "" {
+			resolvedRuntimePath = path
+			return
+		}
+		// Try common locations
+		for _, p := range []string{"/sbin/crun", "/usr/bin/crun", "/usr/local/bin/crun", "/sbin/runc", "/usr/bin/runc"} {
+			if _, err := os.Stat(p); err == nil {
+				resolvedRuntimePath = p
+				return
+			}
+		}
+		// Fallback to default
+		resolvedRuntimePath = defaultRuntimePath
+	})
+	return resolvedRuntimePath
+}
 
 // NewContainer returns a new runc container
 func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTaskRequest, streams stream.Manager) (*Container, error) {
@@ -63,7 +93,7 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 	config := &process.CreateConfig{
 		ID:               r.ID,
 		Bundle:           r.Bundle,
-		Runtime:          runtimePath,
+		Runtime:          getRuntimePath(),
 		Rootfs:           pmounts,
 		Terminal:         r.Terminal,
 		Stdin:            r.Stdin,
@@ -156,7 +186,7 @@ func WriteOptions(path string, opts *options.Options) error {
 
 func newInit(path, workDir string, platform stdio.Platform,
 	r *process.CreateConfig, options *options.Options, rootfs string, streams stream.Manager) *process.Init {
-	runtime := process.NewRunc(options.Root, path, runtimePath, options.SystemdCgroup)
+	runtime := process.NewRunc(options.Root, path, getRuntimePath(), options.SystemdCgroup)
 
 	p := process.New(r.ID, runtime, stdio.Stdio{
 		Stdin:    r.Stdin,
