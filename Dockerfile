@@ -8,8 +8,6 @@
 ARG GO_VERSION=1.25.4
 ARG BASE_DEBIAN_DISTRO="bookworm"
 ARG GOLANG_IMAGE="golang:${GO_VERSION}-${BASE_DEBIAN_DISTRO}"
-ARG DOCKER_VERSION=28.4.0
-ARG DOCKER_IMAGE="docker:${DOCKER_VERSION}-cli"
 
 
 # ============================================================================
@@ -217,40 +215,12 @@ COPY --from=shim-build /build/containerd-shim-qemubox-v1 /containerd-shim-qemubo
 # Development Environment
 # ============================================================================
 
-FROM "${DOCKER_IMAGE}" AS docker-cli
-
-FROM "${GOLANG_IMAGE}" AS dlv
-# Use cache mount for Go build and module cache
-RUN --mount=type=cache,target=/root/.cache/go-build,id=dlv-build \
-    --mount=type=cache,target=/go/pkg/mod,id=dlv-mod \
-    go install github.com/go-delve/delve/cmd/dlv@latest
-
 FROM ${GOLANG_IMAGE} AS dev
-ARG CONTAINERD_VERSION=2.1.4
-ARG TARGETARCH
-
-# Configure apt to keep downloaded packages for cache mounts
-RUN rm -f /etc/apt/apt.conf.d/docker-clean && \
-    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
 
 ENV PATH=/go/src/github.com/aledbf/qemubox/containerd/_output:$PATH
 WORKDIR /go/src/github.com/containerd/qemubox
 
 RUN --mount=type=cache,sharing=locked,id=dev-aptlib,target=/var/lib/apt \
     --mount=type=cache,sharing=locked,id=dev-aptcache,target=/var/cache/apt \
-        apt-get update && apt-get install -y erofs-utils git make wget
+        apt-get update && apt-get install -y erofs-utils git make
 
-# Download containerd (cached across builds)
-RUN --mount=type=cache,sharing=locked,id=containerd-download,target=/var/cache/containerd \
-    if [ ! -f "/var/cache/containerd/containerd-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz" ]; then \
-        wget -O "/var/cache/containerd/containerd-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz" \
-            https://github.com/containerd/containerd/releases/download/v${CONTAINERD_VERSION}/containerd-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz; \
-    fi && \
-    tar -C /usr/local/bin --strip-components=1 -xf "/var/cache/containerd/containerd-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz"
-
-COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
-
-COPY --from=dlv /go/bin/dlv /usr/local/bin/dlv
-
-VOLUME /var/lib/containerd
