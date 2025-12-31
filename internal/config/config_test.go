@@ -565,3 +565,137 @@ func TestValidate_Comprehensive(t *testing.T) {
 		})
 	}
 }
+
+func TestResetForTesting(t *testing.T) {
+	// This test demonstrates that ResetForTesting allows testing different
+	// configurations in the same test run by resetting the global singleton state
+
+	// Create first config file
+	dir1 := t.TempDir()
+	configFile1 := filepath.Join(dir1, "config.json")
+
+	// Create directories for first config
+	shareDir1 := filepath.Join(dir1, "share")
+	stateDir1 := filepath.Join(dir1, "state")
+	logDir1 := filepath.Join(dir1, "log")
+	if err := os.MkdirAll(filepath.Join(shareDir1, "kernel"), 0755); err != nil {
+		t.Fatalf("failed to create share dir: %v", err)
+	}
+	if err := os.MkdirAll(stateDir1, 0755); err != nil {
+		t.Fatalf("failed to create state dir: %v", err)
+	}
+	if err := os.MkdirAll(logDir1, 0755); err != nil {
+		t.Fatalf("failed to create log dir: %v", err)
+	}
+
+	// Create dummy kernel and initrd files
+	kernelPath1 := filepath.Join(shareDir1, "kernel", "qemubox-kernel-x86_64")
+	initrdPath1 := filepath.Join(shareDir1, "kernel", "qemubox-initrd")
+	if err := os.WriteFile(kernelPath1, []byte("dummy"), 0644); err != nil {
+		t.Fatalf("failed to create dummy kernel: %v", err)
+	}
+	if err := os.WriteFile(initrdPath1, []byte("dummy"), 0644); err != nil {
+		t.Fatalf("failed to create dummy initrd: %v", err)
+	}
+
+	cfg1 := DefaultConfig()
+	cfg1.Paths.ShareDir = shareDir1
+	cfg1.Paths.StateDir = stateDir1
+	cfg1.Paths.LogDir = logDir1
+
+	data1, err := json.Marshal(cfg1)
+	if err != nil {
+		t.Fatalf("failed to marshal first config: %v", err)
+	}
+
+	if err := os.WriteFile(configFile1, data1, 0600); err != nil {
+		t.Fatalf("failed to write first config: %v", err)
+	}
+
+	// Load first config
+	t.Setenv("QEMUBOX_CONFIG", configFile1)
+	loadedCfg1, err := Get()
+	if err != nil {
+		t.Fatalf("failed to load first config: %v", err)
+	}
+
+	if loadedCfg1.Paths.ShareDir != shareDir1 {
+		t.Errorf("first config: expected ShareDir %s, got %s", shareDir1, loadedCfg1.Paths.ShareDir)
+	}
+	if loadedCfg1.Paths.StateDir != stateDir1 {
+		t.Errorf("first config: expected StateDir %s, got %s", stateDir1, loadedCfg1.Paths.StateDir)
+	}
+
+	// Without ResetForTesting, Get() would return the cached first config
+	// even after changing QEMUBOX_CONFIG. Verify this:
+	t.Setenv("QEMUBOX_CONFIG", "/this/does/not/exist")
+	cachedCfg, _ := Get()
+	if cachedCfg.Paths.ShareDir != shareDir1 {
+		t.Error("expected Get() to return cached config without ResetForTesting")
+	}
+
+	// Now reset and load second config
+	ResetForTesting()
+
+	dir2 := t.TempDir()
+	configFile2 := filepath.Join(dir2, "config.json")
+
+	// Create directories for second config
+	shareDir2 := filepath.Join(dir2, "share")
+	stateDir2 := filepath.Join(dir2, "state")
+	logDir2 := filepath.Join(dir2, "log")
+	if err := os.MkdirAll(filepath.Join(shareDir2, "kernel"), 0755); err != nil {
+		t.Fatalf("failed to create share dir: %v", err)
+	}
+	if err := os.MkdirAll(stateDir2, 0755); err != nil {
+		t.Fatalf("failed to create state dir: %v", err)
+	}
+	if err := os.MkdirAll(logDir2, 0755); err != nil {
+		t.Fatalf("failed to create log dir: %v", err)
+	}
+
+	// Create dummy kernel and initrd files
+	kernelPath2 := filepath.Join(shareDir2, "kernel", "qemubox-kernel-x86_64")
+	initrdPath2 := filepath.Join(shareDir2, "kernel", "qemubox-initrd")
+	if err := os.WriteFile(kernelPath2, []byte("dummy"), 0644); err != nil {
+		t.Fatalf("failed to create dummy kernel: %v", err)
+	}
+	if err := os.WriteFile(initrdPath2, []byte("dummy"), 0644); err != nil {
+		t.Fatalf("failed to create dummy initrd: %v", err)
+	}
+
+	cfg2 := DefaultConfig()
+	cfg2.Paths.ShareDir = shareDir2
+	cfg2.Paths.StateDir = stateDir2
+	cfg2.Paths.LogDir = logDir2
+
+	data2, err := json.Marshal(cfg2)
+	if err != nil {
+		t.Fatalf("failed to marshal second config: %v", err)
+	}
+
+	if err := os.WriteFile(configFile2, data2, 0600); err != nil {
+		t.Fatalf("failed to write second config: %v", err)
+	}
+
+	t.Setenv("QEMUBOX_CONFIG", configFile2)
+	loadedCfg2, err := Get()
+	if err != nil {
+		t.Fatalf("failed to load second config: %v", err)
+	}
+
+	if loadedCfg2.Paths.ShareDir != shareDir2 {
+		t.Errorf("second config: expected ShareDir %s, got %s", shareDir2, loadedCfg2.Paths.ShareDir)
+	}
+	if loadedCfg2.Paths.StateDir != stateDir2 {
+		t.Errorf("second config: expected StateDir %s, got %s", stateDir2, loadedCfg2.Paths.StateDir)
+	}
+
+	// Verify configs are actually different
+	if loadedCfg1.Paths.ShareDir == loadedCfg2.Paths.ShareDir {
+		t.Error("ResetForTesting did not allow loading different config")
+	}
+	if shareDir1 == shareDir2 {
+		t.Fatal("test setup error: directories should be different")
+	}
+}
