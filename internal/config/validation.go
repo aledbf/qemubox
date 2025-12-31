@@ -60,21 +60,21 @@ func (c *Config) validatePaths() error {
 		return fmt.Errorf("cannot access initrd at %s: %w", initrdPath, err)
 	}
 
-	// StateDir must be writable
+	// StateDir must be writable (create if it doesn't exist)
 	if c.Paths.StateDir == "" {
 		return fmt.Errorf("state_dir cannot be empty")
 	}
 
-	if err := validateDirectoryWritable(c.Paths.StateDir, "state_dir"); err != nil {
+	if err := ensureDirectoryWritable(c.Paths.StateDir, "state_dir"); err != nil {
 		return err
 	}
 
-	// LogDir must be writable
+	// LogDir must be writable (create if it doesn't exist)
 	if c.Paths.LogDir == "" {
 		return fmt.Errorf("log_dir cannot be empty")
 	}
 
-	if err := validateDirectoryWritable(c.Paths.LogDir, "log_dir"); err != nil {
+	if err := ensureDirectoryWritable(c.Paths.LogDir, "log_dir"); err != nil {
 		return err
 	}
 
@@ -220,21 +220,38 @@ func validateDirectoryExists(path, fieldName string) error {
 	return nil
 }
 
+// validateDirectoryWritable checks if a directory exists and is writable.
+// It does NOT create the directory - use ensureDirectoryWritable for that.
 func validateDirectoryWritable(path, fieldName string) error {
-	// First check if directory exists
+	if err := validateDirectoryExists(path, fieldName); err != nil {
+		return err
+	}
+
+	// Check write permission using access() syscall
+	// This avoids creating files and potential symlink security issues
+	if err := unix.Access(path, unix.W_OK); err != nil {
+		return fmt.Errorf("%s directory is not writable: %s", fieldName, path)
+	}
+
+	return nil
+}
+
+// ensureDirectoryWritable ensures a directory exists and is writable.
+// If the directory doesn't exist, it creates it with 0750 permissions.
+func ensureDirectoryWritable(path, fieldName string) error {
+	// Check if directory exists
 	if err := validateDirectoryExists(path, fieldName); err != nil {
 		// If directory doesn't exist, try to create it
 		if os.IsNotExist(err) {
 			if err := os.MkdirAll(path, 0750); err != nil {
 				return fmt.Errorf("%s directory does not exist and cannot be created: %s (%w)", fieldName, path, err)
 			}
-			return nil
+		} else {
+			return err
 		}
-		return err
 	}
 
-	// Check write permission using access() syscall
-	// This avoids creating files and potential symlink security issues
+	// Check write permission
 	if err := unix.Access(path, unix.W_OK); err != nil {
 		return fmt.Errorf("%s directory is not writable: %s", fieldName, path)
 	}
