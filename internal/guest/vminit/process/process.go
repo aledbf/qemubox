@@ -34,7 +34,7 @@ type Process interface {
 	Resize(ws console.WinSize) error
 	// Start execution of the process
 	Start(ctx context.Context) error
-	// Delete deletes the process and its resourcess
+	// Delete deletes the process and its resources
 	Delete(ctx context.Context) error
 	// Kill kills the process
 	Kill(ctx context.Context, sig uint32, all bool) error
