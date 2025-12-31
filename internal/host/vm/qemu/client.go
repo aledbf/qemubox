@@ -84,4 +84,3 @@ func (q *Instance) CPUHotplugger() (vm.CPUHotplugger, error) {
 	defer q.mu.Unlock()
 	return q.qmpClient, nil
 }
-

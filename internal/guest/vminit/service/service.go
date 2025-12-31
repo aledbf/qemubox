@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"net"
 
+	cplugins "github.com/containerd/containerd/v2/plugins"
 	"github.com/containerd/log"
 	"github.com/containerd/otelttrpc"
 	"github.com/containerd/plugin"
 	"github.com/containerd/plugin/registry"
 	"github.com/containerd/ttrpc"
-	cplugins "github.com/containerd/containerd/v2/plugins"
 	"github.com/mdlayher/vsock"
 
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit"
