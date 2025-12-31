@@ -141,11 +141,20 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) error {
 		}()
 	}
 
+	// TODO(security): NoPivot is disabled due to EINVAL from pivot_root syscall.
+	// Investigation needed:
+	// 1. Is rootfs mount propagation set correctly? (should be MS_PRIVATE)
+	// 2. Is rootfs on the same filesystem as old_root?
+	// 3. Are we calling pivot_root with correct arguments?
+	// See: https://man7.org/linux/man-pages/man2/pivot_root.2.html
+	//
+	// SECURITY RISK: Without pivot_root, container processes can access
+	// VM filesystem outside the container rootfs. This reduces isolation.
+	// The VM boundary provides isolation, but proper pivot_root is still
+	// defense-in-depth and should be re-enabled.
 	opts := &runc.CreateOpts{
-		PidFile: pidFile.Path(),
-		// Pivot root is returning invalid argument
-		// Could otherwise use p.NoPivotRoot
-		NoPivot:      true,
+		PidFile:      pidFile.Path(),
+		NoPivot:      true, // FIXME: Re-enable after investigating EINVAL (see comment above)
 		NoNewKeyring: p.NoNewKeyring,
 	}
 	if p.io != nil {
