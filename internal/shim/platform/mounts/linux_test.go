@@ -254,7 +254,7 @@ func TestHandleExt4(t *testing.T) {
 			Options: []string{"ro", "noatime"},
 		}
 
-		mounts, diskOpts, err := m.handleExt4("container-id", &disks, mnt)
+		_, diskOpts, err := m.handleExt4("container-id", &disks, mnt)
 
 		require.NoError(t, err)
 		require.Len(t, diskOpts, 1)
