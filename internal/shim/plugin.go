@@ -39,7 +39,6 @@ func init() {
 			if !ok {
 				return nil, fmt.Errorf("unexpected shutdown service type %T", ss)
 			}
-			// VM instances are created directly by the task service when needed
 			return task.NewTaskService(ic.Context, publisher, shutdownSvc)
 		},
 	})

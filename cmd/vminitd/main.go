@@ -111,8 +111,8 @@ func run(ctx context.Context, cfg *config.ServiceConfig) error {
 		serviceErr <- svc.Run(ctx)
 	}()
 
-	s := make(chan os.Signal, 1)
-	signal.Notify(s, unix.SIGINT, unix.SIGTERM, unix.SIGHUP, unix.SIGQUIT, unix.SIGCHLD)
+	s := make(chan os.Signal, 32)
+	signal.Notify(s, unix.SIGINT, unix.SIGTERM, unix.SIGQUIT, unix.SIGCHLD)
 	for {
 		select {
 		case <-cfg.Shutdown.Done():
@@ -141,8 +141,6 @@ func run(ctx context.Context, cfg *config.ServiceConfig) error {
 			case unix.SIGINT, unix.SIGTERM, unix.SIGQUIT:
 				log.G(ctx).WithField("signal", sig).Info("received shutdown signal, triggering shutdown")
 				cfg.Shutdown.Shutdown()
-			default:
-				log.G(ctx).WithField("signal", sig).Debug("received unhandled signal")
 			}
 		}
 	}
