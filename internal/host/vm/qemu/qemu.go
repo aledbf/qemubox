@@ -44,9 +44,6 @@ func (q *Instance) compareAndSwapState(old, new vmState) bool {
 }
 
 const (
-	vsockCID            = 3                  // Guest context ID for vsock
-	vsockRPCPort        = 1025               // Port for TTRPC RPC communication
-	vsockStreamPort     = 1026               // Port for streaming I/O
 	defaultBootCPUs     = 1                  // Default number of boot vCPUs
 	defaultMaxCPUs      = 2                  // Default maximum vCPUs (set equal to boot for lean mode)
 	defaultMemorySize   = 512 * 1024 * 1024  // 512 MiB

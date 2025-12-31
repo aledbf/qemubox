@@ -13,6 +13,7 @@ import (
 	"github.com/mdlayher/vsock"
 
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	vsockports "github.com/aledbf/qemubox/containerd/internal/vsock"
 )
 
 func (q *Instance) Client() (*ttrpc.Client, error) {
@@ -38,7 +39,7 @@ func (q *Instance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
 	default:
 	}
 
-	conn, err := vsock.Dial(vsockCID, vsockRPCPort, nil)
+	conn, err := vsock.Dial(vsockports.GuestCID, vsockports.DefaultRPCPort, nil)
 	if err != nil {
 		return nil, err
 	}

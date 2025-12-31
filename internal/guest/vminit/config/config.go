@@ -10,6 +10,8 @@ import (
 	"os"
 
 	"github.com/containerd/containerd/v2/pkg/shutdown"
+
+	"github.com/aledbf/qemubox/containerd/internal/vsock"
 )
 
 // ServiceConfig holds the configuration for the vminitd service.
@@ -97,9 +99,9 @@ func ParseFlags(args []string) (*ServiceConfig, map[string]bool, string, error) 
 	fs := flag.NewFlagSet("vminitd", flag.ContinueOnError)
 	fs.StringVar(&configFile, "config", "", "Path to configuration file")
 	fs.BoolVar(&config.Debug, "debug", false, "Debug log level")
-	fs.IntVar(&config.RPCPort, "vsock-rpc-port", 1025, "vsock port to listen for rpc on")
-	fs.IntVar(&config.StreamPort, "vsock-stream-port", 1026, "vsock port to listen for streams on")
-	fs.IntVar(&config.VSockContextID, "vsock-cid", 3, "vsock context ID for vsock listen")
+	fs.IntVar(&config.RPCPort, "vsock-rpc-port", vsock.DefaultRPCPort, "vsock port to listen for rpc on")
+	fs.IntVar(&config.StreamPort, "vsock-stream-port", vsock.DefaultStreamPort, "vsock port to listen for streams on")
+	fs.IntVar(&config.VSockContextID, "vsock-cid", vsock.GuestCID, "vsock context ID for vsock listen")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, nil, "", err

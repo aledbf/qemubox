@@ -17,6 +17,7 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/config"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 	"github.com/aledbf/qemubox/containerd/internal/paths"
+	"github.com/aledbf/qemubox/containerd/internal/vsock"
 )
 
 func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
@@ -416,9 +417,9 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 	// Prepare init arguments for vminitd
 	initArgs := []string{
-		fmt.Sprintf("-vsock-rpc-port=%d", vsockRPCPort),
-		fmt.Sprintf("-vsock-stream-port=%d", vsockStreamPort),
-		fmt.Sprintf("-vsock-cid=%d", vsockCID),
+		fmt.Sprintf("-vsock-rpc-port=%d", vsock.DefaultRPCPort),
+		fmt.Sprintf("-vsock-stream-port=%d", vsock.DefaultStreamPort),
+		fmt.Sprintf("-vsock-cid=%d", vsock.GuestCID),
 	}
 	initArgs = append(initArgs, startOpts.InitArgs...)
 
@@ -504,7 +505,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) ([]string, error) {
 		// See setupConsoleFIFO() for the producer-consumer pipeline details
 		setSerial(fmt.Sprintf("file:%s", q.consoleFifoPath)).
 		// Vsock for guest communication (using vhost-vsock kernel module)
-		addVsockDevice(vsockCID).
+		addVsockDevice(vsock.GuestCID).
 		// QMP for VM control
 		setQMPUnixSocket(q.qmpSocketPath).
 		// RNG device for entropy

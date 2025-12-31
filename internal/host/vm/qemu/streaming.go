@@ -14,6 +14,8 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/mdlayher/vsock"
+
+	vsockports "github.com/aledbf/qemubox/containerd/internal/vsock"
 )
 
 func (q *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
@@ -35,7 +37,7 @@ func (q *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 		}
 
 		// Connect directly via vsock stream port
-		conn, err := vsock.Dial(vsockCID, vsockStreamPort, nil)
+		conn, err := vsock.Dial(vsockports.GuestCID, vsockports.DefaultStreamPort, nil)
 		if err == nil {
 			// Send stream ID to vminitd (4 bytes, big-endian)
 			var vs [4]byte
@@ -69,8 +71,8 @@ func (q *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 // connectVsockRPC establishes a connection to the vsock RPC server (vminitd)
 func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 	log.G(ctx).WithFields(log.Fields{
-		"cid":  vsockCID,
-		"port": vsockRPCPort,
+		"cid":  vsockports.GuestCID,
+		"port": vsockports.DefaultRPCPort,
 	}).Info("qemu: connecting to vsock RPC port")
 
 	// Wait a bit for vminitd to fully initialize
@@ -91,7 +93,7 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 		}
 
 		// Connect directly via vsock using kernel's vhost-vsock driver
-		conn, err := vsock.Dial(vsockCID, vsockRPCPort, nil)
+		conn, err := vsock.Dial(vsockports.GuestCID, vsockports.DefaultRPCPort, nil)
 		if err != nil {
 			log.G(ctx).WithError(err).Debug("qemu: failed to dial vsock")
 			time.Sleep(50 * time.Millisecond)
@@ -152,7 +154,7 @@ func (q *Instance) monitorGuestRPC(ctx context.Context) {
 		case <-t.C:
 		}
 
-		conn, err := vsock.Dial(vsockCID, vsockRPCPort, nil)
+		conn, err := vsock.Dial(vsockports.GuestCID, vsockports.DefaultRPCPort, nil)
 		if err == nil {
 			if err := conn.SetDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
 				log.G(ctx).WithError(err).Debug("qemu: failed to set guest RPC deadline")
