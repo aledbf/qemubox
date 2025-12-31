@@ -447,39 +447,61 @@ func (c *Controller) scaleUp(ctx context.Context, targetCPUs int) error {
 		"target":       targetCPUs,
 	}).Info("cpu-hotplug: scaling up vCPUs")
 
+	// Query current CPUs to find which IDs are already in use
+	cpus, err := c.cpuHotplugger.QueryCPUs(ctx)
+	if err != nil {
+		return fmt.Errorf("query CPUs for scale-up: %w", err)
+	}
+
+	// Build set of existing CPU IDs
+	existingCPUs := make(map[int]bool, len(cpus))
+	for _, cpu := range cpus {
+		existingCPUs[cpu.CPUIndex] = true
+	}
+
 	// Add CPUs one at a time to target
-	for i := c.currentCPUs; i < targetCPUs; i++ {
-		if err := c.cpuHotplugger.HotplugCPU(ctx, i); err != nil {
+	cpusToAdd := targetCPUs - c.currentCPUs
+	added := 0
+	for nextID := 0; added < cpusToAdd && nextID < c.maxCPUs; nextID++ {
+		// Skip if this CPU ID already exists
+		if existingCPUs[nextID] {
+			continue
+		}
+
+		if err := c.cpuHotplugger.HotplugCPU(ctx, nextID); err != nil {
 			log.G(ctx).WithError(err).WithFields(log.Fields{
 				"container_id": c.containerID,
-				"cpu_id":       i,
+				"cpu_id":       nextID,
 			}).Error("cpu-hotplug: failed to add vCPU")
-			return fmt.Errorf("hotplug CPU %d: %w", i, err)
+			return fmt.Errorf("hotplug CPU %d: %w", nextID, err)
 		}
 
 		log.G(ctx).WithFields(log.Fields{
 			"container_id": c.containerID,
-			"cpu_id":       i,
+			"cpu_id":       nextID,
 		}).Info("cpu-hotplug: added vCPU")
 
 		// Online the CPU in the guest (if onliner callback is provided)
 		if c.onlineCPU != nil {
-			if err := c.onlineCPU(ctx, i); err != nil {
+			if err := c.onlineCPU(ctx, nextID); err != nil {
 				log.G(ctx).WithError(err).WithFields(log.Fields{
 					"container_id": c.containerID,
-					"cpu_id":       i,
+					"cpu_id":       nextID,
 				}).Warn("cpu-hotplug: failed to online vCPU in guest (may auto-online via uevents)")
 				// Don't fail the operation - CPU may auto-online via kernel uevents
 			} else {
 				log.G(ctx).WithFields(log.Fields{
 					"container_id": c.containerID,
-					"cpu_id":       i,
+					"cpu_id":       nextID,
 				}).Debug("cpu-hotplug: vCPU onlined in guest")
 			}
 		}
+
+		existingCPUs[nextID] = true
+		added++
 	}
 
-	c.currentCPUs = targetCPUs
+	c.currentCPUs = c.currentCPUs + added
 	c.lastScaleUp = time.Now()
 	c.consecutiveHighUsage = 0
 
@@ -494,36 +516,62 @@ func (c *Controller) scaleDown(ctx context.Context, targetCPUs int) error {
 		"target":       targetCPUs,
 	}).Info("cpu-hotplug: scaling down vCPUs")
 
-	// Remove CPUs in reverse order (highest ID first)
-	// Never remove CPU0 (boot processor - not supported by most kernels)
-	for i := c.currentCPUs - 1; i >= targetCPUs && i > 0; i-- {
+	// Query current CPUs to get actual CPU IDs
+	cpus, err := c.cpuHotplugger.QueryCPUs(ctx)
+	if err != nil {
+		return fmt.Errorf("query CPUs for scale-down: %w", err)
+	}
+
+	// Collect CPU IDs (excluding CPU 0 which cannot be unplugged)
+	var removableCPUs []int
+	for _, cpu := range cpus {
+		if cpu.CPUIndex > 0 { // Never remove CPU0 (boot processor)
+			removableCPUs = append(removableCPUs, cpu.CPUIndex)
+		}
+	}
+
+	// Sort in descending order to remove highest IDs first (LIFO)
+	for i, j := 0, len(removableCPUs)-1; i < j; i, j = i+1, j-1 {
+		removableCPUs[i], removableCPUs[j] = removableCPUs[j], removableCPUs[i]
+	}
+
+	// Remove CPUs until we reach target (or run out of removable CPUs)
+	cpusToRemove := c.currentCPUs - targetCPUs
+	removed := 0
+	for _, cpuID := range removableCPUs {
+		if removed >= cpusToRemove {
+			break
+		}
+
 		if c.offlineCPU != nil {
-			if err := c.offlineCPU(ctx, i); err != nil {
+			if err := c.offlineCPU(ctx, cpuID); err != nil {
 				log.G(ctx).WithError(err).WithFields(log.Fields{
 					"container_id": c.containerID,
-					"cpu_id":       i,
+					"cpu_id":       cpuID,
 				}).Warn("cpu-hotplug: failed to offline vCPU in guest (best-effort, continuing)")
 				// CPU hot-unplug is best-effort - don't fail the operation
 				// Guest may keep the CPU in use, but we proceed with unplug
 			}
 		}
 
-		if err := c.cpuHotplugger.UnplugCPU(ctx, i); err != nil {
+		if err := c.cpuHotplugger.UnplugCPU(ctx, cpuID); err != nil {
 			log.G(ctx).WithError(err).WithFields(log.Fields{
 				"container_id": c.containerID,
-				"cpu_id":       i,
+				"cpu_id":       cpuID,
 			}).Warn("cpu-hotplug: failed to remove vCPU (may not be supported by guest kernel, best-effort)")
 			// CPU hot-unplug is best-effort - don't fail the operation
 			// Continue removing other CPUs even if this one fails
+			continue
 		}
 
 		log.G(ctx).WithFields(log.Fields{
 			"container_id": c.containerID,
-			"cpu_id":       i,
+			"cpu_id":       cpuID,
 		}).Info("cpu-hotplug: removed vCPU")
+		removed++
 	}
 
-	c.currentCPUs = targetCPUs
+	c.currentCPUs = c.currentCPUs - removed
 	c.lastScaleDown = time.Now()
 	c.consecutiveLowUsage = 0
 	return nil
