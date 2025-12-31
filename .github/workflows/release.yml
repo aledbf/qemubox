@@ -102,11 +102,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build release and push sandbox image
+      - name: Build release tarball
+        env:
+          VERSION: ${{ inputs.version || github.ref_name }}
+        run: task release
+
+      - name: Push sandbox image
         env:
           VERSION: ${{ inputs.version || github.ref_name }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: task release
+        run: task release:image
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2

@@ -617,7 +617,7 @@ tasks:
   # ==========================================================================
 
   release:
-    desc: Create release tarball and push sandbox image
+    desc: Create release tarball
     vars:
       VERSION:
         sh: echo "${VERSION:-$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)}"
@@ -626,17 +626,33 @@ tasks:
       - |
         set -eou pipefail
         VERSION="{{.VERSION}}" {{.SCRIPTS_DIR}}/release
-      - task: release:image
-        vars:
-          VERSION: "{{.VERSION}}"
 
   release:image:
     desc: Build and push sandbox image to GitHub Container Registry
-    dir: assets/system-image
     vars:
       VERSION:
         sh: echo "${VERSION:-$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)}"
+      GITHUB_REPOSITORY: '{{.GITHUB_REPOSITORY | default "aledbf/qemubox"}}'
+      IMAGE: 'ghcr.io/{{.GITHUB_REPOSITORY}}/sandbox'
     cmds:
       - |
         set -eou pipefail
-        VERSION="{{.VERSION}}" task release
+        echo "Building {{.IMAGE}}:{{.VERSION}}"
+        {{.DOCKER}} build --platform linux/amd64 \
+          --label "org.opencontainers.image.version={{.VERSION}}" \
+          --label "org.opencontainers.image.source=https://github.com/{{.GITHUB_REPOSITORY}}" \
+          -t {{.IMAGE}}:{{.VERSION}} \
+          assets/system-image
+      - |
+        set -eou pipefail
+        echo "Tagging {{.IMAGE}}:{{.VERSION}} as latest"
+        {{.DOCKER}} tag {{.IMAGE}}:{{.VERSION}} {{.IMAGE}}:latest
+      - |
+        set -eou pipefail
+        echo "Pushing {{.IMAGE}}:{{.VERSION}}"
+        {{.DOCKER}} push {{.IMAGE}}:{{.VERSION}}
+        {{.DOCKER}} push {{.IMAGE}}:latest
+        echo ""
+        echo "Released:"
+        echo "  {{.IMAGE}}:{{.VERSION}}"
+        echo "  {{.IMAGE}}:latest"

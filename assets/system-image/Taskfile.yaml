@@ -1,78 +1,48 @@
 version: '3'
 
 vars:
-  GITHUB_REPOSITORY: '{{.GITHUB_REPOSITORY | default "aledbf/qemubox"}}'
-  IMAGE: 'ghcr.io/{{.GITHUB_REPOSITORY}}/sandbox'
-  # Version from: 1) VERSION env var, 2) git tag, 3) git short sha, 4) "dev"
-  VERSION:
-    sh: echo "${VERSION:-$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)}"
+  IMAGE: 'qemubox-sandbox'
+  TAG: 'dev'
 
 tasks:
   default:
-    desc: Build the workspace image
+    desc: Build the sandbox image
     cmds:
       - task: build
 
   build:
-    desc: Build the Docker image
+    desc: Build the Docker image locally
     cmds:
-      - |
-        echo "Building {{.IMAGE}}:{{.VERSION}}"
-        docker build --platform linux/amd64 \
-          --label "org.opencontainers.image.version={{.VERSION}}" \
-          --label "org.opencontainers.image.source=https://github.com/{{.GITHUB_REPOSITORY}}" \
-          -t {{.IMAGE}}:{{.VERSION}} \
-          .
-
-  push:
-    desc: Push image to GitHub Container Registry
-    cmds:
-      - docker push {{.IMAGE}}:{{.VERSION}}
-
-  release:
-    desc: Build and push image with version tag and latest
-    cmds:
-      - task: build
-      - |
-        echo "Tagging {{.IMAGE}}:{{.VERSION}} as latest"
-        docker tag {{.IMAGE}}:{{.VERSION}} {{.IMAGE}}:latest
-      - task: push
-      - docker push {{.IMAGE}}:latest
-      - |
-        echo ""
-        echo "Released:"
-        echo "  {{.IMAGE}}:{{.VERSION}}"
-        echo "  {{.IMAGE}}:latest"
+      - docker build --platform linux/amd64 -t {{.IMAGE}}:{{.TAG}} .
 
   run:
     desc: Run the image locally for testing
     cmds:
       - |
-        docker run -d --rm --name workspace-test \
+        docker run -d --rm --name sandbox-test \
           --privileged \
           -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
           -p 2222:22 \
-          {{.IMAGE}}:{{.VERSION}}
+          {{.IMAGE}}:{{.TAG}}
         echo "Container started. SSH available on localhost:2222"
         echo "To stop: task stop"
 
   stop:
     desc: Stop the test container
     cmds:
-      - docker stop workspace-test || true
+      - docker stop sandbox-test || true
 
   logs:
     desc: View container logs
     cmds:
-      - docker logs -f workspace-test
+      - docker logs -f sandbox-test
 
   shell:
     desc: Open a shell in the test container
     cmds:
-      - docker exec -it workspace-test /bin/bash
+      - docker exec -it sandbox-test /bin/bash
 
   clean:
-    desc: Remove built images
+    desc: Remove built image
     cmds:
-      - docker rmi {{.IMAGE}}:{{.VERSION}} || true
-      - docker rmi {{.IMAGE}}:latest || true
+      - docker rmi {{.IMAGE}}:{{.TAG}} || true
