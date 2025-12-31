@@ -46,6 +46,9 @@ func ExtractTAPDeviceInfo(result *current.Result) (string, string, error) {
 // - Usually named "tap0" or "tapXXX"
 // - The TAP device is created inside the container netns (sandbox)
 // - QEMU will access the TAP from within the same netns
+//
+// To avoid false positives (e.g., interfaces like "tape0", "taproot"), we
+// validate that the interface is in a sandbox (container netns).
 func detectTCRedirectTAP(result *current.Result) (string, string, error) {
 	// Look for TAP devices in the CNI result
 	for _, iface := range result.Interfaces {
@@ -55,7 +58,22 @@ func detectTCRedirectTAP(result *current.Result) (string, string, error) {
 				"name":    iface.Name,
 				"sandbox": iface.Sandbox,
 				"mac":     iface.Mac,
-			}).Info("Found potential TAP device")
+			}).Debug("Found tap-prefixed interface")
+
+			// Validate that the interface is in a sandbox (container netns).
+			// TAP devices created by tc-redirect-tap for VM use will have
+			// a non-empty Sandbox field pointing to the netns path.
+			// This prevents false positives from interfaces like "tape0" or "taproot".
+			if iface.Sandbox == "" {
+				log.L.WithField("name", iface.Name).Debug("skipping tap-prefixed interface not in sandbox")
+				continue
+			}
+
+			log.L.WithFields(log.Fields{
+				"name":    iface.Name,
+				"sandbox": iface.Sandbox,
+				"mac":     iface.Mac,
+			}).Info("Found TAP device in sandbox")
 
 			// The TAP device is in the container netns
 			// Return the name - QEMU will access it from within the same netns
@@ -63,5 +81,5 @@ func detectTCRedirectTAP(result *current.Result) (string, string, error) {
 		}
 	}
 
-	return "", "", fmt.Errorf("no tc-redirect-tap device found")
+	return "", "", fmt.Errorf("no tc-redirect-tap device found in sandbox")
 }
