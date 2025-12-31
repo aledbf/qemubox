@@ -65,13 +65,13 @@ func writeSpec(p string, spec *specs.Spec) error {
 	return enc.Encode(spec)
 }
 
-// RelaxOCISpec modifies the OCI spec to remove unnecessary container restrictions.
+// RelaxOCISpec modifies the OCI spec for VM-isolated containers.
 // Since the container runs inside a VM, the VM provides the security boundary.
-// This removes restrictions that are redundant with VM isolation:
-//   - Allows access to all devices
-//   - Removes readonly and masked paths
-//   - Removes seccomp restrictions
-//   - Adds bind mount for /etc/resolv.conf (DNS from VM)
+// This function:
+//   - Bind-mounts /dev from the VM (gives access to all devices)
+//   - Allows all device access in cgroups
+//   - Removes readonly/masked paths and seccomp
+//   - Adds /etc/resolv.conf for DNS
 func RelaxOCISpec(ctx context.Context, bundlePath string) error {
 	spec, err := readSpec(bundlePath)
 	if err != nil {
@@ -82,33 +82,43 @@ func RelaxOCISpec(ctx context.Context, bundlePath string) error {
 		spec.Linux = &specs.Linux{}
 	}
 
-	// Allow access to all devices - VM provides isolation
+	// Allow access to all devices via cgroups
 	spec.Linux.Resources = &specs.LinuxResources{
-		Devices: []specs.LinuxDeviceCgroup{
-			{
-				Allow:  true,
-				Access: "rwm",
-			},
-		},
+		Devices: []specs.LinuxDeviceCgroup{{Allow: true, Access: "rwm"}},
 	}
 
-	// Remove readonly and masked paths - not needed with VM isolation
+	// Remove container isolation - VM provides it
 	spec.Linux.ReadonlyPaths = nil
 	spec.Linux.MaskedPaths = nil
-
-	// Remove seccomp restrictions - VM provides syscall isolation
 	spec.Linux.Seccomp = nil
 
-	// Add /etc/resolv.conf bind mount if not already present
-	hasResolv := false
+	// Replace /dev tmpfs with bind mount from VM's /dev
+	// This gives access to all devices (fuse, tun, etc.) automatically
+	var newMounts []specs.Mount
 	for _, m := range spec.Mounts {
+		if m.Destination == "/dev" {
+			// Replace tmpfs with bind mount
+			newMounts = append(newMounts, specs.Mount{
+				Destination: "/dev",
+				Type:        "bind",
+				Source:      "/dev",
+				Options:     []string{"rbind", "rw"},
+			})
+		} else {
+			newMounts = append(newMounts, m)
+		}
+	}
+
+	// Add /etc/resolv.conf if not present
+	hasResolv := false
+	for _, m := range newMounts {
 		if m.Destination == "/etc/resolv.conf" {
 			hasResolv = true
 			break
 		}
 	}
 	if !hasResolv {
-		spec.Mounts = append(spec.Mounts, specs.Mount{
+		newMounts = append(newMounts, specs.Mount{
 			Destination: "/etc/resolv.conf",
 			Type:        "bind",
 			Source:      "/etc/resolv.conf",
@@ -116,7 +126,8 @@ func RelaxOCISpec(ctx context.Context, bundlePath string) error {
 		})
 	}
 
-	log.G(ctx).Debug("relaxed OCI spec for VM isolation")
+	spec.Mounts = newMounts
 
+	log.G(ctx).Debug("relaxed OCI spec for VM isolation")
 	return writeSpec(bundlePath, spec)
 }
