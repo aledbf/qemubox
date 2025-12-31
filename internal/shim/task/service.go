@@ -230,6 +230,7 @@ type service struct {
 	eventsCloseOnce     sync.Once   // Ensures events channel closed exactly once
 	intentionalShutdown atomic.Bool // True for clean shutdown, false for VM crash
 	deletionInProgress  atomic.Bool // True during Delete() to reject concurrent Create()
+	creationInProgress  atomic.Bool // True during Create() to reject concurrent Create() and Delete()
 	shutdownSvc         shutdown.Service
 	inflight            atomic.Int64 // Count of in-flight RPC calls for graceful shutdown
 }
@@ -329,11 +330,19 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, errgrpc.ToGRPC(fmt.Errorf("checkpoints not supported: %w", errdefs.ErrNotImplemented))
 	}
 
+	// Atomically mark creation in progress to prevent concurrent Create() or Delete()
+	// Uses CompareAndSwap to avoid TOCTOU race between check and VM creation
+	if !s.creationInProgress.CompareAndSwap(false, true) {
+		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "container creation already in progress")
+	}
+	defer s.creationInProgress.Store(false)
+
 	// Check if deletion is in progress
 	if s.deletionInProgress.Load() {
 		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim is deleting container; requires fresh shim per container")
 	}
 
+	// Check if container already exists
 	s.containerMu.Lock()
 	hasContainer := s.container != nil
 	s.containerMu.Unlock()
@@ -341,11 +350,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	// Check if VM already exists
 	if _, err := s.vmLifecycle.Instance(); err == nil || hasContainer {
 		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim already running a container; requires fresh shim per container")
-	}
-
-	// Double-check deletion flag (prevent TOCTOU race)
-	if s.deletionInProgress.Load() {
-		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim is deleting container; requires fresh shim per container")
 	}
 
 	presetup := time.Now()
@@ -649,6 +653,12 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	if r.ExecID == "" {
 		if !s.deletionInProgress.CompareAndSwap(false, true) {
 			return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "delete already in progress")
+		}
+
+		// Check if creation is in progress - fail fast to avoid race
+		if s.creationInProgress.Load() {
+			s.deletionInProgress.Store(false) // Reset deletion flag
+			return nil, errgrpc.ToGRPCf(errdefs.ErrFailedPrecondition, "cannot delete while container creation is in progress")
 		}
 	}
 
