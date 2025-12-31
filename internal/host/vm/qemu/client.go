@@ -39,7 +39,7 @@ func (q *Instance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
 	default:
 	}
 
-	conn, err := vsock.Dial(vsockports.GuestCID, vsockports.DefaultRPCPort, nil)
+	conn, err := vsock.Dial(q.guestCID, vsockports.DefaultRPCPort, nil)
 	if err != nil {
 		return nil, err
 	}

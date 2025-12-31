@@ -307,6 +307,12 @@ func (q *Instance) rollbackStart(success *bool) {
 
 	// Close any opened TAP FDs on failure
 	q.closeTAPFiles()
+
+	// Release CID lock on failure (allows CID reuse)
+	if q.cidLockFile != nil {
+		_ = q.cidLockFile.Close()
+		q.cidLockFile = nil
+	}
 }
 
 // Start starts the QEMU VM
@@ -419,7 +425,7 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 	initArgs := []string{
 		fmt.Sprintf("-vsock-rpc-port=%d", vsock.DefaultRPCPort),
 		fmt.Sprintf("-vsock-stream-port=%d", vsock.DefaultStreamPort),
-		fmt.Sprintf("-vsock-cid=%d", vsock.GuestCID),
+		fmt.Sprintf("-vsock-cid=%d", q.guestCID),
 	}
 	initArgs = append(initArgs, startOpts.InitArgs...)
 
@@ -505,7 +511,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) ([]string, error) {
 		// See setupConsoleFIFO() for the producer-consumer pipeline details
 		setSerial(fmt.Sprintf("file:%s", q.consoleFifoPath)).
 		// Vsock for guest communication (using vhost-vsock kernel module)
-		addVsockDevice(vsock.GuestCID).
+		addVsockDevice(int(q.guestCID)).
 		// QMP for VM control
 		setQMPUnixSocket(q.qmpSocketPath).
 		// RNG device for entropy

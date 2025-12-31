@@ -37,7 +37,7 @@ func (q *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 		}
 
 		// Connect directly via vsock stream port
-		conn, err := vsock.Dial(vsockports.GuestCID, vsockports.DefaultStreamPort, nil)
+		conn, err := vsock.Dial(q.guestCID, vsockports.DefaultStreamPort, nil)
 		if err == nil {
 			// Send stream ID to vminitd (4 bytes, big-endian)
 			var vs [4]byte
@@ -71,7 +71,7 @@ func (q *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {
 // connectVsockRPC establishes a connection to the vsock RPC server (vminitd)
 func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 	log.G(ctx).WithFields(log.Fields{
-		"cid":  vsockports.GuestCID,
+		"cid":  q.guestCID,
 		"port": vsockports.DefaultRPCPort,
 	}).Info("qemu: connecting to vsock RPC port")
 
@@ -93,7 +93,7 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 		}
 
 		// Connect directly via vsock using kernel's vhost-vsock driver
-		conn, err := vsock.Dial(vsockports.GuestCID, vsockports.DefaultRPCPort, nil)
+		conn, err := vsock.Dial(q.guestCID, vsockports.DefaultRPCPort, nil)
 		if err != nil {
 			log.G(ctx).WithError(err).Debug("qemu: failed to dial vsock")
 			time.Sleep(50 * time.Millisecond)
@@ -154,7 +154,7 @@ func (q *Instance) monitorGuestRPC(ctx context.Context) {
 		case <-t.C:
 		}
 
-		conn, err := vsock.Dial(vsockports.GuestCID, vsockports.DefaultRPCPort, nil)
+		conn, err := vsock.Dial(q.guestCID, vsockports.DefaultRPCPort, nil)
 		if err == nil {
 			if err := conn.SetDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
 				log.G(ctx).WithError(err).Debug("qemu: failed to set guest RPC deadline")

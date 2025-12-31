@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/containerd/log"
 
@@ -20,7 +21,61 @@ const (
 	// 8 slots * 128MB min increment = 1GB max hotplug capacity
 	// Trade-off: More slots = more QEMU overhead, fewer = less flexibility
 	defaultMemorySlots = 8
+
+	// minGuestCID is the minimum valid vsock guest CID.
+	// CIDs 0-2 are reserved (hypervisor, reserved, host).
+	minGuestCID uint32 = 3
+
+	// maxGuestCID is the maximum CID we'll scan to before wrapping.
+	// Using a reasonable limit to avoid scanning billions of files.
+	maxGuestCID uint32 = 65535
+
+	// cidLockDir is the subdirectory for CID lock files.
+	cidLockDir = "cid"
 )
+
+// allocateGuestCID allocates a unique vsock CID using lock files.
+// Each CID has a corresponding lock file; the caller holds an exclusive flock
+// for the lifetime of the VM. When the shim process exits (normally or crashes),
+// the kernel automatically releases the lock, making the CID available for reuse.
+//
+// Returns the allocated CID and the lock file handle. The caller must keep the
+// file open for the duration of the VM and close it on shutdown.
+func allocateGuestCID() (uint32, *os.File, error) {
+	cfg, err := config.Get()
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to get config: %w", err)
+	}
+
+	lockDir := filepath.Join(cfg.Paths.StateDir, cidLockDir)
+	if err := os.MkdirAll(lockDir, 0750); err != nil {
+		return 0, nil, fmt.Errorf("failed to create CID lock directory: %w", err)
+	}
+
+	// Scan for first available CID
+	for cid := minGuestCID; cid <= maxGuestCID; cid++ {
+		lockPath := filepath.Join(lockDir, fmt.Sprintf("%d.lock", cid))
+
+		// Try to open/create and lock the file
+		f, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0600)
+		if err != nil {
+			continue // Try next CID
+		}
+
+		// Try non-blocking exclusive lock
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err != nil {
+			// Lock held by another process, try next CID
+			_ = f.Close()
+			continue
+		}
+
+		// Successfully acquired lock - this CID is ours
+		return cid, f, nil
+	}
+
+	return 0, nil, fmt.Errorf("no available vsock CID in range [%d, %d]", minGuestCID, maxGuestCID)
+}
 
 func findQemu() (string, error) {
 	cfg, err := config.Get()
@@ -139,6 +194,12 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 		return nil, fmt.Errorf("vsock socket path too long (%d > %d): %s", len(vsockPath), maxUnixSocketPath, vsockPath)
 	}
 
+	// Allocate unique vsock CID for this VM
+	guestCID, cidLockFile, err := allocateGuestCID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate vsock CID: %w", err)
+	}
+
 	inst := &Instance{
 		binaryPath:      binaryPath,
 		stateDir:        stateDir,
@@ -153,10 +214,13 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 		disks:           []*DiskConfig{},
 		nets:            []*NetConfig{},
 		resourceCfg:     resourceCfg,
+		guestCID:        guestCID,
+		cidLockFile:     cidLockFile,
 	}
 
 	log.G(ctx).WithFields(log.Fields{
 		"containerID":   containerID,
+		"guestCID":      guestCID,
 		"bootCPUs":      resourceCfg.BootCPUs,
 		"maxCPUs":       resourceCfg.MaxCPUs,
 		"memorySize":    resourceCfg.MemorySize,

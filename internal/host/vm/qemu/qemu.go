@@ -75,6 +75,8 @@ type Instance struct {
 	kernelPath  string
 	initrdPath  string
 	resourceCfg *vm.VMResourceConfig
+	guestCID    uint32   // Unique vsock CID for this VM (3+)
+	cidLockFile *os.File // Lock file holding CID reservation (released on close)
 
 	// Runtime paths
 	qmpSocketPath   string   // QMP control socket

@@ -196,6 +196,12 @@ func (q *Instance) cleanupResources(logger *log.Entry) {
 
 	// Close TAP file descriptors
 	q.closeTAPFiles()
+
+	// Release CID lock (allows CID reuse by other VMs)
+	if q.cidLockFile != nil {
+		closeAndLog(logger, "cid-lock", q.cidLockFile)
+		q.cidLockFile = nil
+	}
 }
 
 // Shutdown gracefully shuts down the VM following a multi-phase process:
