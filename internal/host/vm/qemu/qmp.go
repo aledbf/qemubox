@@ -549,8 +549,6 @@ type MemoryDeviceInfo struct {
 	Data map[string]any `json:"data"`
 }
 
-// MemorySizeSummary is defined in types.go (platform-independent)
-
 // QueryMemoryDevices returns all hotplugged memory devices
 func (q *qmpClient) QueryMemoryDevices(ctx context.Context) ([]MemoryDeviceInfo, error) {
 	return qmpQuery[[]MemoryDeviceInfo](q, ctx, "query-memory-devices")

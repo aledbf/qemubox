@@ -108,5 +108,3 @@ type Instance struct {
 	nets       []*NetConfig
 	networkCfg *vm.NetworkConfig // CNI network configuration
 }
-
-// DiskConfig and NetConfig are defined in types.go (platform-independent)
