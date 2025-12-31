@@ -145,6 +145,28 @@ func (q *qmpClient) execute(ctx context.Context, command string, args map[string
 	return q.sendCommand(ctx, command, args)
 }
 
+// qmpQuery is a generic helper that sends a QMP query command and parses
+// the response into the specified type. This eliminates code duplication
+// across query methods like QueryStatus, QueryMemoryDevices, etc.
+func qmpQuery[T any](q *qmpClient, ctx context.Context, command string) (T, error) {
+	var result T
+	resp, err := q.sendCommand(ctx, command, nil)
+	if err != nil {
+		return result, err
+	}
+	if resp.Return == nil {
+		return result, nil
+	}
+	returnBytes, err := json.Marshal(resp.Return)
+	if err != nil {
+		return result, fmt.Errorf("failed to marshal %s response: %w", command, err)
+	}
+	if err := json.Unmarshal(returnBytes, &result); err != nil {
+		return result, fmt.Errorf("failed to parse %s response: %w", command, err)
+	}
+	return result, nil
+}
+
 func (q *qmpClient) sendCommand(ctx context.Context, command string, args map[string]any) (*qmpResponse, error) {
 	if err := q.checkClosed(); err != nil {
 		return nil, err
@@ -350,54 +372,7 @@ func (q *qmpClient) Quit(ctx context.Context) error {
 
 // QueryStatus returns the current VM status (running, paused, shutdown, etc).
 func (q *qmpClient) QueryStatus(ctx context.Context) (*qmpStatus, error) {
-	if err := q.checkClosed(); err != nil {
-		return nil, err
-	}
-
-	id := q.nextID.Add(1)
-	respChan := make(chan *qmpResponse, 1)
-
-	q.mu.Lock()
-	q.pending[id] = respChan
-	q.mu.Unlock()
-
-	cmd := qmpCommand{
-		Execute: "query-status",
-		ID:      id,
-	}
-
-	if err := q.encoder.Encode(cmd); err != nil {
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, fmt.Errorf("failed to send query-status: %w", err)
-	}
-
-	select {
-	case resp := <-respChan:
-		if resp.Error != nil {
-			return nil, fmt.Errorf("QMP error for query-status: %s: %s", resp.Error.Class, resp.Error.Desc)
-		}
-		var status qmpStatus
-		returnBytes, err := json.Marshal(resp.Return)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal status: %w", err)
-		}
-		if err := json.Unmarshal(returnBytes, &status); err != nil {
-			return nil, fmt.Errorf("failed to parse status: %w", err)
-		}
-		return &status, nil
-	case <-ctx.Done():
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, ctx.Err()
-	case <-time.After(qmpDefaultTimeout):
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, fmt.Errorf("timeout waiting for query-status response")
-	}
+	return qmpQuery[*qmpStatus](q, ctx, "query-status")
 }
 
 // DeviceAdd hotplugs a device
@@ -429,43 +404,12 @@ type HotpluggableCPU struct {
 // QueryCPUs returns information about all vCPUs in the VM
 // Uses query-cpus-fast which is more efficient than query-cpus
 func (q *qmpClient) QueryCPUs(ctx context.Context) ([]vm.CPUInfo, error) {
-	resp, err := q.sendCommand(ctx, "query-cpus-fast", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse the return value as array of CPUInfo
-	var cpus []vm.CPUInfo
-	returnBytes, err := json.Marshal(resp.Return)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal CPU info: %w", err)
-	}
-
-	if err := json.Unmarshal(returnBytes, &cpus); err != nil {
-		return nil, fmt.Errorf("failed to parse CPU info: %w", err)
-	}
-
-	return cpus, nil
+	return qmpQuery[[]vm.CPUInfo](q, ctx, "query-cpus-fast")
 }
 
 // QueryHotpluggableCPUs returns available CPU hotplug slots.
 func (q *qmpClient) QueryHotpluggableCPUs(ctx context.Context) ([]HotpluggableCPU, error) {
-	resp, err := q.sendCommand(ctx, "query-hotpluggable-cpus", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var cpus []HotpluggableCPU
-	returnBytes, err := json.Marshal(resp.Return)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal hotpluggable CPU info: %w", err)
-	}
-
-	if err := json.Unmarshal(returnBytes, &cpus); err != nil {
-		return nil, fmt.Errorf("failed to parse hotpluggable CPU info: %w", err)
-	}
-
-	return cpus, nil
+	return qmpQuery[[]HotpluggableCPU](q, ctx, "query-hotpluggable-cpus")
 }
 
 // HotplugCPU adds a new vCPU to the running VM
@@ -613,124 +557,12 @@ type MemorySizeSummary struct {
 
 // QueryMemoryDevices returns all hotplugged memory devices
 func (q *qmpClient) QueryMemoryDevices(ctx context.Context) ([]MemoryDeviceInfo, error) {
-	if err := q.checkClosed(); err != nil {
-		return nil, err
-	}
-
-	id := q.nextID.Add(1)
-	respChan := make(chan *qmpResponse, 1)
-
-	q.mu.Lock()
-	q.pending[id] = respChan
-	q.mu.Unlock()
-
-	cmd := qmpCommand{
-		Execute: "query-memory-devices",
-		ID:      id,
-	}
-
-	if err := q.encoder.Encode(cmd); err != nil {
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, fmt.Errorf("failed to send query-memory-devices: %w", err)
-	}
-
-	select {
-	case resp := <-respChan:
-		if resp.Error != nil {
-			return nil, fmt.Errorf("QMP error for query-memory-devices: %s: %s", resp.Error.Class, resp.Error.Desc)
-		}
-
-		var devices []MemoryDeviceInfo
-		if resp.Return == nil {
-			return devices, nil
-		}
-
-		returnBytes, err := json.Marshal(resp.Return)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal memory devices: %w", err)
-		}
-
-		if err := json.Unmarshal(returnBytes, &devices); err != nil {
-			return nil, fmt.Errorf("failed to parse memory devices: %w", err)
-		}
-
-		return devices, nil
-
-	case <-ctx.Done():
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, ctx.Err()
-
-	case <-time.After(qmpDefaultTimeout):
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, fmt.Errorf("timeout waiting for query-memory-devices response")
-	}
+	return qmpQuery[[]MemoryDeviceInfo](q, ctx, "query-memory-devices")
 }
 
 // QueryMemorySizeSummary returns memory usage summary
 func (q *qmpClient) QueryMemorySizeSummary(ctx context.Context) (*MemorySizeSummary, error) {
-	if err := q.checkClosed(); err != nil {
-		return nil, err
-	}
-
-	id := q.nextID.Add(1)
-	respChan := make(chan *qmpResponse, 1)
-
-	q.mu.Lock()
-	q.pending[id] = respChan
-	q.mu.Unlock()
-
-	cmd := qmpCommand{
-		Execute: "query-memory-size-summary",
-		ID:      id,
-	}
-
-	if err := q.encoder.Encode(cmd); err != nil {
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, fmt.Errorf("failed to send query-memory-size-summary: %w", err)
-	}
-
-	select {
-	case resp := <-respChan:
-		if resp.Error != nil {
-			return nil, fmt.Errorf("QMP error for query-memory-size-summary: %s: %s", resp.Error.Class, resp.Error.Desc)
-		}
-
-		var summary MemorySizeSummary
-		if resp.Return == nil {
-			return &summary, nil
-		}
-
-		returnBytes, err := json.Marshal(resp.Return)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal memory summary: %w", err)
-		}
-
-		if err := json.Unmarshal(returnBytes, &summary); err != nil {
-			return nil, fmt.Errorf("failed to parse memory summary: %w", err)
-		}
-
-		return &summary, nil
-
-	case <-ctx.Done():
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, ctx.Err()
-
-	case <-time.After(qmpDefaultTimeout):
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, fmt.Errorf("timeout waiting for query-memory-size-summary response")
-	}
+	return qmpQuery[*MemorySizeSummary](q, ctx, "query-memory-size-summary")
 }
 
 // ObjectAdd adds a QEMU object (e.g., memory backend)
