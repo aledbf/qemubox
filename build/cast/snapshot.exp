@@ -64,10 +64,25 @@ expect {
 }
 after [expr {$LONG_DELAY * 500}]
 
-comment "Step 2: Run VM (note: no --rm flag, we'll snapshot it later)"
-type_cmd "$CTR run -t --snapshotter erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:v0.0.9 snapshot-demo"
+comment "Step 2: Run VM in background"
+type_cmd "$CTR run -d -t --snapshotter erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:v0.0.9 snapshot-demo"
+expect -re {\$|#}
+after 1000
 
-# Wait for login
+comment "Wait for VM to boot..."
+type_cmd "sleep 10"
+expect -re {\$|#}
+after 11000
+
+comment "Check VM is running"
+type_cmd "$CTR task ls | grep snapshot-demo"
+expect -re {\$|#}
+after 1000
+
+comment "Attach to VM console"
+type_cmd "$CTR task attach snapshot-demo"
+
+# Wait for login prompt or shell
 expect {
     -re {ctr: failed|error starting|Error} {
         send_user "\nERROR: Container failed to start\n"
@@ -107,7 +122,7 @@ type_cmd "mkdir -p /root/my-project && echo 'version: 1.0' > /root/my-project/co
 expect -re $PROMPT
 after 500
 
-comment "Install a package (this will persist in the snapshot)"
+comment "Install a package (this will persist)"
 type_cmd "apt-get update -qq && apt-get install -qq -y cowsay > /dev/null 2>&1"
 expect -re $PROMPT
 after 2000
@@ -122,41 +137,55 @@ type_cmd "cat /root/persistent-data.txt && cat /root/my-project/config.yaml"
 expect -re $PROMPT
 after 1500
 
-comment "Now shutdown the VM to create a snapshot"
+comment "Sync filesystem"
+type_cmd "sync"
+expect -re $PROMPT
 after 500
-type_cmd "halt"
 
-expect {
-    -re {\$|#} {}
-    eof {}
-    timeout {}
-}
+comment "Logout to detach from VM"
+type_cmd "exit"
+expect -re {\$|#}
 after 2000
 
 # ============================================
-# PHASE 3: Container stopped, state preserved
+# PHASE 3: Create new image while VM runs
 # ============================================
 
-comment "=== HOST: Container state is preserved ==="
+comment "=== HOST: Create image from running VM ==="
 
-comment "List current snapshots (snapshot-demo is Active with our changes)"
-type_cmd "$CTR snapshots --snapshotter erofs ls | grep -E 'KEY|snapshot-demo'"
-expect -re {\$|#}
-after 1500
+set NERDCTL "nerdctl --address /var/run/qemubox/containerd.sock"
 
-comment "Container is stopped but still exists"
-type_cmd "$CTR container ls | grep snapshot-demo"
+comment "VM is still running in background"
+type_cmd "$CTR task ls | grep snapshot-demo"
 expect -re {\$|#}
 after 1000
 
+comment "Create new image using nerdctl commit"
+type_cmd "$NERDCTL commit --snapshotter erofs snapshot-demo localhost/sandbox:with-changes"
+expect -re {\$|#}
+after 3000
+
+comment "Verify new image was created"
+type_cmd "$CTR images ls | grep with-changes"
+expect -re {\$|#}
+after 1000
+
+comment "Stop original VM"
+type_cmd "$CTR task kill snapshot-demo"
+expect -re {\$|#}
+after 1000
+type_cmd "$CTR container rm snapshot-demo"
+expect -re {\$|#}
+after 500
+
 # ============================================
-# PHASE 4: Restart the same container
+# PHASE 4: Run new container from our image
 # ============================================
 
-comment "=== Restart container - changes will persist! ==="
+comment "=== Run VM from our custom image ==="
 
-comment "Start the same container again (state is preserved)"
-type_cmd "$CTR task start -d snapshot-demo && $CTR task attach snapshot-demo"
+comment "Run new container from the image with our changes"
+type_cmd "$CTR run -t --rm --snapshotter erofs --runtime io.containerd.qemubox.v1 localhost/sandbox:with-changes snapshot-demo"
 
 # Wait for login
 expect {
@@ -184,7 +213,7 @@ after [expr {$CMD_DELAY * 500}]
 # PHASE 5: Verify changes persisted
 # ============================================
 
-comment "=== VERIFY: Changes persisted across restart! ==="
+comment "=== VERIFY: Changes from first VM are here! ==="
 
 comment "Check our persistent file"
 type_cmd "cat /root/persistent-data.txt"
@@ -197,14 +226,10 @@ expect -re $PROMPT
 after 1000
 
 comment "Verify installed package still works"
-type_cmd "/usr/games/cowsay 'State persisted!'"
+type_cmd "/usr/games/cowsay 'Snapshot works!'"
 expect -re $PROMPT
 after 2000
 
-comment "All changes from previous run are preserved!"
-after 1000
-
-# Shutdown
 comment "Done! Shutting down..."
 type_cmd "halt"
 
@@ -217,8 +242,8 @@ expect {
 after 1000
 send_user "\n"
 send_user "Snapshot Demo Complete!\n"
-send_user "  - Created files and installed packages in VM\n"
-send_user "  - VM halted (container kept, not removed)\n"
-send_user "  - Restarted same container\n"
-send_user "  - All disk changes persisted!\n"
+send_user "  - Made changes in first VM (files + packages)\n"
+send_user "  - Committed snapshot to preserve state\n"
+send_user "  - Ran new VM from saved snapshot\n"
+send_user "  - All changes persisted!\n"
 send_user "\n"

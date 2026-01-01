@@ -21,13 +21,16 @@ echo "QemuBox Snapshot Demo - Recording to ${OUTPUT}.cast"
 
 # Pre-cleanup to avoid conflicts from previous runs
 CTR="ctr --address /var/run/qemubox/containerd.sock"
+NERDCTL="nerdctl --address /var/run/qemubox/containerd.sock"
 $CTR task kill snapshot-demo 2>/dev/null || true
 $CTR container rm snapshot-demo 2>/dev/null || true
+$CTR snapshots --snapshotter erofs delete snapshot-demo 2>/dev/null || true
+$NERDCTL rmi localhost/sandbox:with-changes 2>/dev/null || true
 
-# Clean up orphaned CNI allocations
+# Clean up orphaned CNI allocations (host-local IPAM stores by IP, content is container ID)
 CNI_NET_DIR="/var/lib/cni/networks/qemubox-net"
 if [ -d "$CNI_NET_DIR" ]; then
-    sudo rm -f "$CNI_NET_DIR/snapshot-demo" 2>/dev/null || true
+    grep -l "snapshot-demo" "$CNI_NET_DIR"/* 2>/dev/null | xargs -r sudo rm -f
 fi
 
 echo "Starting in 3 seconds..."
@@ -56,9 +59,11 @@ echo "Upload: asciinema upload ${OUTPUT}.cast"
 # Cleanup
 $CTR task kill snapshot-demo 2>/dev/null || true
 $CTR container rm snapshot-demo 2>/dev/null || true
+$CTR snapshots --snapshotter erofs delete snapshot-demo 2>/dev/null || true
+$NERDCTL rmi localhost/sandbox:with-changes 2>/dev/null || true
 
 # Clean up CNI allocations
 CNI_NET_DIR="/var/lib/cni/networks/qemubox-net"
 if [ -d "$CNI_NET_DIR" ]; then
-    sudo rm -f "$CNI_NET_DIR/snapshot-demo" 2>/dev/null || true
+    grep -l "snapshot-demo" "$CNI_NET_DIR"/* 2>/dev/null | xargs -r sudo rm -f
 fi
