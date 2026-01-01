@@ -134,46 +134,29 @@ expect {
 after 2000
 
 # ============================================
-# PHASE 3: Create snapshot on host
+# PHASE 3: Container stopped, state preserved
 # ============================================
 
-comment "=== HOST: Creating snapshot from container ==="
+comment "=== HOST: Container state is preserved ==="
 
-comment "List current snapshots (note: snapshot-demo is Active)"
-type_cmd "$CTR snapshots --snapshotter erofs ls"
+comment "List current snapshots (snapshot-demo is Active with our changes)"
+type_cmd "$CTR snapshots --snapshotter erofs ls | grep -E 'KEY|snapshot-demo'"
 expect -re {\$|#}
 after 1500
 
-comment "Commit the active snapshot to preserve our changes"
-type_cmd "$CTR snapshots --snapshotter erofs commit my-saved-state snapshot-demo"
+comment "Container is stopped but still exists"
+type_cmd "$CTR container ls | grep snapshot-demo"
 expect -re {\$|#}
 after 1000
 
-comment "List snapshots - my-saved-state is now Committed"
-type_cmd "$CTR snapshots --snapshotter erofs ls | grep -E 'KEY|my-saved-state'"
-expect -re {\$|#}
-after 1500
-
-comment "Clean up the original container"
-type_cmd "$CTR task kill snapshot-demo 2>/dev/null || true"
-expect -re {\$|#}
-type_cmd "$CTR container rm snapshot-demo 2>/dev/null || true"
-expect -re {\$|#}
-after 500
-
 # ============================================
-# PHASE 4: Run new VM from snapshot
+# PHASE 4: Restart the same container
 # ============================================
 
-comment "=== Run new VM from committed snapshot ==="
+comment "=== Restart container - changes will persist! ==="
 
-comment "Prepare an active snapshot from our saved state"
-type_cmd "$CTR snapshots --snapshotter erofs prepare snapshot-test my-saved-state"
-expect -re {\$|#}
-after 1000
-
-comment "Start a new VM using the prepared snapshot"
-type_cmd "$CTR run -t --rm --snapshotter erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:v0.0.9 snapshot-test"
+comment "Start the same container again (state is preserved)"
+type_cmd "$CTR task start -d snapshot-demo && $CTR task attach snapshot-demo"
 
 # Wait for login
 expect {
@@ -201,7 +184,7 @@ after [expr {$CMD_DELAY * 500}]
 # PHASE 5: Verify changes persisted
 # ============================================
 
-comment "=== VERIFY: Changes persisted! ==="
+comment "=== VERIFY: Changes persisted across restart! ==="
 
 comment "Check our persistent file"
 type_cmd "cat /root/persistent-data.txt"
@@ -214,11 +197,11 @@ expect -re $PROMPT
 after 1000
 
 comment "Verify installed package still works"
-type_cmd "/usr/games/cowsay 'Snapshot works!'"
+type_cmd "/usr/games/cowsay 'State persisted!'"
 expect -re $PROMPT
 after 2000
 
-comment "All changes from the original VM are preserved!"
+comment "All changes from previous run are preserved!"
 after 1000
 
 # Shutdown
@@ -235,7 +218,7 @@ after 1000
 send_user "\n"
 send_user "Snapshot Demo Complete!\n"
 send_user "  - Created files and installed packages in VM\n"
-send_user "  - Created snapshot of VM state\n"
-send_user "  - New VM has all previous changes\n"
-send_user "  - Disk state persists across VM runs\n"
+send_user "  - VM halted (container kept, not removed)\n"
+send_user "  - Restarted same container\n"
+send_user "  - All disk changes persisted!\n"
 send_user "\n"

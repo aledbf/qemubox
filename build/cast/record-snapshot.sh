@@ -23,16 +23,11 @@ echo "QemuBox Snapshot Demo - Recording to ${OUTPUT}.cast"
 CTR="ctr --address /var/run/qemubox/containerd.sock"
 $CTR task kill snapshot-demo 2>/dev/null || true
 $CTR container rm snapshot-demo 2>/dev/null || true
-$CTR task kill snapshot-test 2>/dev/null || true
-$CTR container rm snapshot-test 2>/dev/null || true
-$CTR snapshots --snapshotter erofs delete snapshot-test 2>/dev/null || true
-$CTR snapshots --snapshotter erofs delete my-saved-state 2>/dev/null || true
 
 # Clean up orphaned CNI allocations
 CNI_NET_DIR="/var/lib/cni/networks/qemubox-net"
 if [ -d "$CNI_NET_DIR" ]; then
     sudo rm -f "$CNI_NET_DIR/snapshot-demo" 2>/dev/null || true
-    sudo rm -f "$CNI_NET_DIR/snapshot-test" 2>/dev/null || true
 fi
 
 echo "Starting in 3 seconds..."
@@ -61,14 +56,9 @@ echo "Upload: asciinema upload ${OUTPUT}.cast"
 # Cleanup
 $CTR task kill snapshot-demo 2>/dev/null || true
 $CTR container rm snapshot-demo 2>/dev/null || true
-$CTR task kill snapshot-test 2>/dev/null || true
-$CTR container rm snapshot-test 2>/dev/null || true
-$CTR snapshots --snapshotter erofs delete snapshot-test 2>/dev/null || true
-$CTR snapshots --snapshotter erofs delete my-saved-state 2>/dev/null || true
 
 # Clean up CNI allocations
 CNI_NET_DIR="/var/lib/cni/networks/qemubox-net"
 if [ -d "$CNI_NET_DIR" ]; then
     sudo rm -f "$CNI_NET_DIR/snapshot-demo" 2>/dev/null || true
-    sudo rm -f "$CNI_NET_DIR/snapshot-test" 2>/dev/null || true
 fi
