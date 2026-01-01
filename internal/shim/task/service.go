@@ -1053,6 +1053,21 @@ func (s *service) requestShutdownAndExit(ctx context.Context, reason string) {
 		exit = os.Exit
 	}
 
+	// Ensure network cleanup happens before exit, regardless of shutdown service state.
+	// This is critical for unexpected VM exits (e.g., halt inside VM) where the normal
+	// Delete() path may not run, leaving CNI allocations orphaned.
+	s.containerMu.Lock()
+	containerID := s.containerID
+	s.containerMu.Unlock()
+	if containerID != "" {
+		env := &network.Environment{ID: containerID}
+		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
+			log.G(ctx).WithError(err).WithField("id", containerID).Warn("failed to release network resources during unexpected shutdown")
+		} else {
+			log.G(ctx).WithField("id", containerID).Info("released network resources during unexpected shutdown")
+		}
+	}
+
 	if s.shutdownSvc == nil {
 		log.G(ctx).WithField("reason", reason).Warn("shutdown service missing; exiting immediately")
 		exit(0)
