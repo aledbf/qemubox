@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/containerd/containerd/v2/pkg/stdio"
 	"github.com/containerd/errdefs"
@@ -403,36 +404,74 @@ func startOutputCopy(ctx context.Context, cwg *sync.WaitGroup, copying *atomic.I
 
 func startStdinCopy(ctx context.Context, cwg *sync.WaitGroup, stream io.ReadWriteCloser, stdin string) error {
 	if stdin == "" {
+		log.G(ctx).Debug("startStdinCopy: stdin is empty, skipping")
 		return nil
 	}
+	log.G(ctx).WithField("stdin", stdin).Debug("startStdinCopy: opening stdin FIFO")
 	// Open FIFO with background context - it needs to stay open for the lifetime of I/O forwarding,
-	// not tied to any specific operation context.
-	f, err := fifo.OpenFifo(ctx, stdin, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
+	// not tied to any specific operation context. Using the RPC context would cause the FIFO to
+	// close when the Create RPC completes, breaking stdin for later attach operations.
+	f, err := fifo.OpenFifo(context.Background(), stdin, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return fmt.Errorf("containerd-shim: opening %s failed: %w", stdin, err)
 	}
+	log.G(ctx).WithField("stdin", stdin).Debug("startStdinCopy: stdin FIFO opened, starting copy goroutine")
 	cwg.Add(1)
 	go func() {
 		cwg.Done()
+		log.G(ctx).Debug("startStdinCopy: copy goroutine started")
+		defer func() {
+			if err := stream.Close(); err != nil {
+				if !isAlreadyClosedError(err) {
+					log.G(ctx).WithError(err).Warn("error closing stdin stream")
+				}
+			}
+			if err := f.Close(); err != nil {
+				if !isAlreadyClosedError(err) {
+					log.G(ctx).WithError(err).Warn("error closing stdin fifo")
+				}
+			}
+		}()
+
 		p := iobuf.Get()
 		defer iobuf.Put(p)
+		buf := *p
 
-		if _, err := io.CopyBuffer(stream, f, *p); err != nil {
-			// Ignore "use of closed network connection" - expected during shutdown
-			if !isClosedConnError(err) {
-				log.G(ctx).WithError(err).Warn("error copying stdin")
+		var totalBytes int64
+		pollInterval := 50 * time.Millisecond
+		ticker := time.NewTicker(pollInterval)
+		defer ticker.Stop()
+
+		for {
+			// Read from FIFO - with O_NONBLOCK this returns immediately
+			// If no writer is connected, we get 0 bytes (EOF-like behavior)
+			n, err := f.Read(buf)
+			if n > 0 {
+				totalBytes += int64(n)
+				// Write to stream (vsock to guest)
+				if _, werr := stream.Write(buf[:n]); werr != nil {
+					if !isClosedConnError(werr) {
+						log.G(ctx).WithError(werr).Warn("error writing to stdin stream")
+					}
+					log.G(ctx).WithField("bytes", totalBytes).Debug("startStdinCopy: copy finished (stream write error)")
+					return
+				}
+				// Got data, continue reading immediately
+				continue
 			}
-		}
-		if err := stream.Close(); err != nil {
-			// Ignore "file already closed" - benign race during shutdown
-			if !isAlreadyClosedError(err) {
-				log.G(ctx).WithError(err).Warn("error closing stdin stream")
+
+			if err != nil && err != io.EOF {
+				// Real error (not just "no data available")
+				if !isClosedConnError(err) {
+					log.G(ctx).WithError(err).Warn("error reading stdin fifo")
+				}
+				log.G(ctx).WithField("bytes", totalBytes).Debug("startStdinCopy: copy finished (read error)")
+				return
 			}
-		}
-		if err := f.Close(); err != nil {
-			if !isAlreadyClosedError(err) {
-				log.G(ctx).WithError(err).Warn("error closing stdin fifo")
-			}
+
+			// No data available (n == 0 or EOF from non-blocking read)
+			// Wait before polling again
+			<-ticker.C
 		}
 	}()
 	return nil

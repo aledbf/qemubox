@@ -80,9 +80,15 @@ func (p *linuxPlatform) CopyConsole(ctx context.Context, cons console.Console, i
 		cwg.Add(1)
 		go func() {
 			cwg.Done()
+			log.L.Debug("console stdin copy goroutine started")
 			bp := iobuf.Get()
 			defer iobuf.Put(bp)
-			if _, err := io.CopyBuffer(epollConsole, in, *bp); err != nil {
+			n, err := io.CopyBuffer(epollConsole, in, *bp)
+			log.L.WithFields(log.Fields{
+				"bytes": n,
+				"error": err,
+			}).Debug("console stdin copy finished")
+			if err != nil {
 				log.L.WithError(err).Debug("console stdin copy error")
 			}
 			// Close only the stdin reader when EOF/error occurs.
