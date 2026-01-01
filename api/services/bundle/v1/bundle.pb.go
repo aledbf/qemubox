@@ -25,7 +25,19 @@ type CreateRequest struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	ID    string            `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// id is the unique identifier for the bundle to create.
+	ID string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// files is a map of filename to file contents.
+	// Keys must be simple filenames without path components (e.g., "config.json", "hosts", "resolv.conf").
+	// Values are the file contents as raw bytes.
+	//
+	// SECURITY: The server validates all filenames to prevent attacks:
+	//   - Empty filenames are rejected
+	//   - Absolute paths (starting with /) are rejected
+	//   - Path separators (/ or \) are rejected - only simple filenames allowed
+	//   - "." and ".." are rejected
+	//
+	// Invalid filenames result in INVALID_ARGUMENT error.
 	Files map[string][]byte `protobuf:"bytes,2,rep,name=files,proto3" json:"files,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
@@ -80,6 +92,7 @@ type CreateResponse struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// bundle is the absolute path to the created bundle directory on the VM filesystem.
 	Bundle string `protobuf:"bytes,1,opt,name=bundle,proto3" json:"bundle,omitempty"`
 }
 

@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package containerd.vminitd.services.stdio.v1;
+
+option go_package = "github.com/aledbf/qemubox/containerd/api/services/stdio/v1;stdio";
+
+// StdIO service provides RPC-based I/O forwarding for container processes.
+// This enables attach/detach functionality by keeping I/O pipes available
+// throughout the container lifecycle.
+//
+// Unlike direct stream-based I/O, this service maintains process I/O state
+// and allows multiple clients to subscribe to output streams.
+service StdIO {
+	// WriteStdin writes data to a process's stdin.
+	// Returns the number of bytes written.
+	//
+	// Returns:
+	//   - NOT_FOUND: process with given container_id/exec_id doesn't exist
+	//   - FAILED_PRECONDITION: stdin is closed or process has exited
+	rpc WriteStdin(WriteStdinRequest) returns (WriteStdinResponse);
+
+	// ReadStdout reads data from a process's stdout.
+	// This is a server-streaming RPC that continuously sends output chunks.
+	// The stream ends when the process exits or the pipe is closed.
+	//
+	// Multiple clients can subscribe to the same stdout stream concurrently.
+	// Each subscriber receives live output (no buffering/replay).
+	//
+	// Returns:
+	//   - NOT_FOUND: process doesn't exist
+	rpc ReadStdout(ReadOutputRequest) returns (stream OutputChunk);
+
+	// ReadStderr reads data from a process's stderr.
+	// Similar to ReadStdout but for the stderr stream.
+	//
+	// Multiple clients can subscribe to the same stderr stream concurrently.
+	rpc ReadStderr(ReadOutputRequest) returns (stream OutputChunk);
+
+	// CloseStdin signals EOF on process stdin.
+	// Called when the client wants to close stdin (e.g., after Ctrl+D).
+	// After this call, WriteStdin will return FAILED_PRECONDITION.
+	//
+	// Returns:
+	//   - NOT_FOUND: process doesn't exist
+	//   - FAILED_PRECONDITION: stdin already closed
+	rpc CloseStdin(CloseStdinRequest) returns (CloseStdinResponse);
+}
+
+message WriteStdinRequest {
+	// container_id identifies the container.
+	string container_id = 1;
+
+	// exec_id identifies the exec process (empty string for init process).
+	string exec_id = 2;
+
+	// data is the bytes to write to stdin.
+	bytes data = 3;
+}
+
+message WriteStdinResponse {
+	// bytes_written is the number of bytes actually written.
+	uint32 bytes_written = 1;
+}
+
+message ReadOutputRequest {
+	// container_id identifies the container.
+	string container_id = 1;
+
+	// exec_id identifies the exec process (empty string for init process).
+	string exec_id = 2;
+}
+
+message OutputChunk {
+	// data is a chunk of output data.
+	bytes data = 1;
+
+	// eof indicates end of stream (process exited or pipe closed).
+	// When true, this is the final message and the stream will be closed.
+	bool eof = 2;
+}
+
+message CloseStdinRequest {
+	// container_id identifies the container.
+	string container_id = 1;
+
+	// exec_id identifies the exec process (empty string for init process).
+	string exec_id = 2;
+}
+
+message CloseStdinResponse {}

@@ -26,7 +26,9 @@ type InfoResponse struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Version       string `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	// version is the qemubox vminitd version (e.g., "1.0.0").
+	Version string `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	// kernel_version is the Linux kernel version running in the VM (e.g., "6.1.0").
 	KernelVersion string `protobuf:"bytes,2,opt,name=kernel_version,json=kernelVersion,proto3" json:"kernel_version,omitempty"`
 }
 
@@ -81,6 +83,8 @@ type OfflineCPURequest struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// cpu_id is the logical CPU ID to offline (zero-indexed, e.g., 0, 1, 2).
+	// This corresponds to /sys/devices/system/cpu/cpu{N}.
 	CpuID uint32 `protobuf:"varint,1,opt,name=cpu_id,json=cpuId,proto3" json:"cpu_id,omitempty"`
 }
 
@@ -128,6 +132,8 @@ type OnlineCPURequest struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// cpu_id is the logical CPU ID to online (zero-indexed, e.g., 0, 1, 2).
+	// This corresponds to /sys/devices/system/cpu/cpu{N}.
 	CpuID uint32 `protobuf:"varint,1,opt,name=cpu_id,json=cpuId,proto3" json:"cpu_id,omitempty"`
 }
 
@@ -175,6 +181,8 @@ type OfflineMemoryRequest struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// memory_id is the memory block ID to offline (zero-indexed).
+	// This corresponds to the QMP memory slot number.
 	MemoryID uint32 `protobuf:"varint,1,opt,name=memory_id,json=memoryId,proto3" json:"memory_id,omitempty"`
 }
 
@@ -222,6 +230,8 @@ type OnlineMemoryRequest struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// memory_id is the memory block ID to online (zero-indexed).
+	// This corresponds to the QMP memory slot number.
 	MemoryID uint32 `protobuf:"varint,1,opt,name=memory_id,json=memoryId,proto3" json:"memory_id,omitempty"`
 }
 
