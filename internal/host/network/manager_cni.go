@@ -124,10 +124,10 @@ func (nm *cniNetworkManager) performCNISetup(ctx context.Context, containerID st
 		// Clean up netns on failure
 		_ = cni.DeleteNetNS(containerID)
 
-		// Check if this is a veth name conflict error
-		if isVethConflictError(err) {
+		// Check if this is a resource conflict error (veth or IPAM)
+		if isResourceConflictError(err) {
 			log.G(ctx).WithError(err).WithField("containerID", containerID).
-				Warn("CNI setup failed due to veth conflict, attempting cleanup")
+				Warn("CNI setup failed due to resource conflict, attempting cleanup")
 
 			// Try to clean up orphaned resources using a unique temp netns name
 			// to avoid racing with other processes that might be using the same containerID.
@@ -138,7 +138,7 @@ func (nm *cniNetworkManager) performCNISetup(ctx context.Context, containerID st
 				_ = cni.DeleteNetNS(cleanupID)
 			}
 
-			return nil, fmt.Errorf("setup CNI network (veth conflict - orphaned resources from previous run?): %w", err)
+			return nil, fmt.Errorf("setup CNI network (resource conflict - orphaned resources from previous run?): %w", err)
 		}
 
 		return nil, fmt.Errorf("setup CNI network for %s: %w", containerID, err)
@@ -261,23 +261,31 @@ func (nm *cniNetworkManager) releaseNetworkResourcesCNI(ctx context.Context, env
 	return nil
 }
 
-// isVethConflictError detects veth naming conflicts from CNI plugin errors.
+// isResourceConflictError detects resource conflicts from CNI plugin errors.
 //
 // CNI plugins don't return structured errors, so we must parse error strings.
 // This is inherently fragile but unavoidable given the CNI interface.
 //
-// This typically happens when CNI tries to create a veth pair but the name
-// already exists from a previous run that wasn't properly cleaned up.
+// This typically happens when:
+//   - CNI tries to create a veth pair but the name already exists
+//   - IPAM plugin finds an existing IP allocation for the container ID
 //
 // Common error patterns from different CNI plugins:
-//   - "file exists" or "already exists"
+//   - "file exists" or "already exists" (veth conflicts)
+//   - "duplicate allocation" (IPAM conflicts)
 //   - Mentions "veth", "peer", or "interface"
-func isVethConflictError(err error) bool {
+func isResourceConflictError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	// Check for common error patterns (case-insensitive for robustness)
+
+	// Check for IPAM duplicate allocation
+	if strings.Contains(msg, "duplicate allocation") {
+		return true
+	}
+
+	// Check for veth/interface conflicts
 	return (strings.Contains(msg, "already exists") ||
 		strings.Contains(msg, "file exists")) &&
 		(strings.Contains(msg, "veth") ||
