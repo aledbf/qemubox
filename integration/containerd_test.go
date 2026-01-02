@@ -233,9 +233,11 @@ func runContainer(t *testing.T, client *containerd.Client, cfg testConfig, conta
 
 	// Wait for I/O copy goroutines to complete.
 	// containerd's cio.WithStreams creates io.Copy goroutines that copy from FIFO to file.
-	// We must wait for these to finish before reading the output files, otherwise we
-	// may read before all data is flushed.
+	// We must call Wait() to block until these finish, then Close() to clean up.
+	// IMPORTANT: Close() alone is NOT sufficient - it closes the FIFOs but doesn't
+	// wait for the copy goroutines. Wait() blocks until all data has been copied.
 	if io := task.IO(); io != nil {
+		io.Wait()
 		io.Close()
 	}
 
