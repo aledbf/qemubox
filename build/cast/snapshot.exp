@@ -80,28 +80,44 @@ expect -re {\$|#}
 after 1000
 
 comment "Attach to VM console"
-type_cmd "$CTR task attach snapshot-demo"
+after 500
 
-# Wait for login prompt or shell
+# Save the bash spawn id
+set bash_spawn $spawn_id
+
+# Spawn attach directly for better terminal handling
+spawn ctr --address /var/run/qemubox/containerd.sock task attach snapshot-demo
+set vm_spawn $spawn_id
+
+log_user 1
+exp_internal 0
+
+# Wait for login prompt
 expect {
-    -re {ctr: failed|error starting|Error} {
-        send_user "\nERROR: Container failed to start\n"
-        exit 1
-    }
-    -re {localhost login:} {
-        after 1000
-        type_cmd "root"
-        expect -re {Password:}
+    -re {login:} {
+        send_user "\n>>> Saw login prompt, sending root...\n"
         after 500
-        type_cmd "qemubox"
-        expect -re {root@localhost.*#|~#}
+        send "root\r"
     }
-    -re {root@localhost.*#|~#} {}
     timeout {
-        send_user "\nERROR: Login timeout\n"
+        send_user "\nERROR: Login timeout waiting for login:\n"
         exit 1
     }
 }
+
+expect {
+    -re {Password:} {
+        send_user "\n>>> Saw password prompt...\n"
+        after 500
+        send "qemubox\r"
+    }
+    timeout {
+        send_user "\nERROR: Password timeout\n"
+        exit 1
+    }
+}
+
+expect -re {root@localhost.*#|~#}
 after [expr {$CMD_DELAY * 500}]
 
 set PROMPT {root@localhost.*#|~#}
@@ -143,9 +159,13 @@ expect -re $PROMPT
 after 500
 
 comment "Logout to detach from VM"
-type_cmd "exit"
-expect -re {\$|#}
+send "exit\r"
 after 2000
+
+# Close the VM attach and switch back to bash
+catch {close}
+catch {wait}
+set spawn_id $bash_spawn
 
 # ============================================
 # PHASE 3: Create new image while VM runs
@@ -161,7 +181,7 @@ expect -re {\$|#}
 after 1000
 
 comment "Create new image using nerdctl commit"
-type_cmd "$NERDCTL commit --snapshotter erofs snapshot-demo localhost/sandbox:with-changes"
+type_cmd "$NERDCTL commit --snapshotter erofs snapshot-demo docker.io/aledbf/sandbox:with-changes"
 expect -re {\$|#}
 after 3000
 
@@ -170,13 +190,26 @@ type_cmd "$CTR images ls | grep with-changes"
 expect -re {\$|#}
 after 1000
 
+comment "Compare original image layers"
+type_cmd "$CTR images inspect ghcr.io/aledbf/qemubox/sandbox:v0.0.9 | head -12"
+expect -re {\$|#}
+after 2000
+
+comment "New image has additional layer with our changes"
+type_cmd "$CTR images inspect docker.io/aledbf/sandbox:with-changes | head -13"
+expect -re {\$|#}
+after 2000
+
 comment "Stop original VM"
 type_cmd "$CTR task kill snapshot-demo"
 expect -re {\$|#}
-after 1000
-type_cmd "$CTR container rm snapshot-demo"
+after 2000
+type_cmd "$CTR task delete snapshot-demo 2>/dev/null || true"
 expect -re {\$|#}
-after 500
+after 1000
+type_cmd "$CTR container rm snapshot-demo 2>/dev/null || true"
+expect -re {\$|#}
+after 1000
 
 # ============================================
 # PHASE 4: Run new container from our image
@@ -185,7 +218,17 @@ after 500
 comment "=== Run VM from our custom image ==="
 
 comment "Run new container from the image with our changes"
-type_cmd "$CTR run -t --rm --snapshotter erofs --runtime io.containerd.qemubox.v1 localhost/sandbox:with-changes snapshot-demo"
+type_cmd "$CTR run -d -t --snapshotter erofs --runtime io.containerd.qemubox.v1 docker.io/aledbf/sandbox:with-changes snapshot-new"
+expect -re {\$|#}
+after 2000
+
+comment "Wait for VM to boot..."
+type_cmd "sleep 8"
+expect -re {\$|#}
+after 9000
+
+comment "Attach to new VM"
+spawn ctr --address /var/run/qemubox/containerd.sock task attach snapshot-new
 
 # Wait for login
 expect {

@@ -41,9 +41,15 @@ If you need cross-platform support or rootless containers, use nerdbox.
 
 VM isolation provides a stronger security boundary than namespace-based containers, while maintaining compatibility with standard containerd tooling.
 
-## Demo
+## Demos
 
+### Boot & Docker
 [![asciicast](https://asciinema.org/a/INszYqaxkMzQtzIKIDGX8QJqi.svg)](https://asciinema.org/a/INszYqaxkMzQtzIKIDGX8QJqi)
+
+### Snapshot & Commit
+[![asciicast](https://asciinema.org/a/765288.svg)](https://asciinema.org/a/765288)
+
+Persist disk state between VM runs: make changes (files, packages), commit to a new image with `nerdctl commit`, and run a new VM with all modifications preserved.
 
 ## Quick Start
 
@@ -351,7 +357,7 @@ images/        - Container/VM image builds
 - **Filesystem merge snapshots**: Leverage containerd's [fsmerge feature](https://github.com/containerd/containerd/pull/12374) for more efficient storage
 - **Metrics and tracing**: Add TTRPC tracing to provide detailed observability into VM and container behavior
 - **Annotations for features**: Allow enabling/disabling features (CPU/memory hotplug, etc.) via OCI annotations
-- **Snapshot demo**: Demonstrate VM snapshots - restart a VM with previous state/changes preserved
+- ~~**Snapshot demo**: Demonstrate VM snapshots - restart a VM with previous state/changes preserved~~ ✓ [Done](https://asciinema.org/a/765288)
 
 ## License
 

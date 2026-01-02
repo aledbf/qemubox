@@ -23,14 +23,19 @@ echo "QemuBox Snapshot Demo - Recording to ${OUTPUT}.cast"
 CTR="ctr --address /var/run/qemubox/containerd.sock"
 NERDCTL="nerdctl --address /var/run/qemubox/containerd.sock"
 $CTR task kill snapshot-demo 2>/dev/null || true
+$CTR task kill snapshot-new 2>/dev/null || true
+$CTR task delete snapshot-demo 2>/dev/null || true
+$CTR task delete snapshot-new 2>/dev/null || true
 $CTR container rm snapshot-demo 2>/dev/null || true
+$CTR container rm snapshot-new 2>/dev/null || true
 $CTR snapshots --snapshotter erofs delete snapshot-demo 2>/dev/null || true
-$NERDCTL rmi localhost/sandbox:with-changes 2>/dev/null || true
+$CTR snapshots --snapshotter erofs delete snapshot-new 2>/dev/null || true
+$NERDCTL rmi docker.io/aledbf/sandbox:with-changes 2>/dev/null || true
 
-# Clean up orphaned CNI allocations (host-local IPAM stores by IP, content is container ID)
+# Clean up orphaned CNI allocations
 CNI_NET_DIR="/var/lib/cni/networks/qemubox-net"
 if [ -d "$CNI_NET_DIR" ]; then
-    grep -l "snapshot-demo" "$CNI_NET_DIR"/* 2>/dev/null | xargs -r sudo rm -f
+    grep -l "snapshot-demo\|snapshot-new" "$CNI_NET_DIR"/* 2>/dev/null | xargs -r sudo rm -f
 fi
 
 echo "Starting in 3 seconds..."
@@ -58,12 +63,17 @@ echo "Upload: asciinema upload ${OUTPUT}.cast"
 
 # Cleanup
 $CTR task kill snapshot-demo 2>/dev/null || true
+$CTR task kill snapshot-new 2>/dev/null || true
+$CTR task delete snapshot-demo 2>/dev/null || true
+$CTR task delete snapshot-new 2>/dev/null || true
 $CTR container rm snapshot-demo 2>/dev/null || true
+$CTR container rm snapshot-new 2>/dev/null || true
 $CTR snapshots --snapshotter erofs delete snapshot-demo 2>/dev/null || true
-$NERDCTL rmi localhost/sandbox:with-changes 2>/dev/null || true
+$CTR snapshots --snapshotter erofs delete snapshot-new 2>/dev/null || true
+$NERDCTL rmi docker.io/aledbf/sandbox:with-changes 2>/dev/null || true
 
 # Clean up CNI allocations
 CNI_NET_DIR="/var/lib/cni/networks/qemubox-net"
 if [ -d "$CNI_NET_DIR" ]; then
-    grep -l "snapshot-demo" "$CNI_NET_DIR"/* 2>/dev/null | xargs -r sudo rm -f
+    grep -l "snapshot-demo\|snapshot-new" "$CNI_NET_DIR"/* 2>/dev/null | xargs -r sudo rm -f
 fi
