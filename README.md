@@ -43,13 +43,17 @@ VM isolation provides a stronger security boundary than namespace-based containe
 
 ## Demos
 
-### Boot & Docker
-[![asciicast](https://asciinema.org/a/INszYqaxkMzQtzIKIDGX8QJqi.svg)](https://asciinema.org/a/INszYqaxkMzQtzIKIDGX8QJqi)
+### Boot & Docker-in-VM
+[![asciicast](https://asciinema.org/a/5GJ0fPswxolRL4kiUQTpry6au.svg)](https://asciinema.org/a/5GJ0fPswxolRL4kiUQTpry6au)
+
+Launch a full Ubuntu VM with Docker pre-installed. Shows ~300ms boot time with systemd, running containers inside the isolated VM - nested virtualization without the overhead.
 
 ### Snapshot & Commit
-[![asciicast](https://asciinema.org/a/765288.svg)](https://asciinema.org/a/765288)
+[![asciicast](https://asciinema.org/a/aIk4RocQFPk7I0QizhRwULKLz.svg)](https://asciinema.org/a/aIk4RocQFPk7I0QizhRwULKLz)
 
-Persist disk state between VM runs: make changes (files, packages), commit to a new image with `nerdctl commit`, and run a new VM with all modifications preserved.
+Persist disk state between VM runs: install packages, create files, then commit to a new image with `nerdctl commit`. The next VM boots with all changes preserved - like Docker commits, but for entire VMs.
+
+> **Note**: Snapshot support (for EROFS) requires a custom containerd build from [aledbf/containerd@aledbf/erofs-snapshot-narrow](https://github.com/aledbf/containerd/tree/aledbf/erofs-snapshot-narrow) until the changes are upstreamed.
 
 ## Quick Start
 
@@ -92,13 +96,13 @@ export PATH=/usr/share/qemubox/bin:$PATH
 
 # Pull an image
 ctr --address /var/run/qemubox/containerd.sock image pull \
-  --snapshotter erofs ghcr.io/aledbf/qemubox/sandbox:v0.0.10
+  --snapshotter erofs ghcr.io/aledbf/qemubox/sandbox:v0.0.11
 
 # Run with qemubox runtime
 ctr --address /var/run/qemubox/containerd.sock run -t --rm \
   --snapshotter erofs \
   --runtime io.containerd.qemubox.v1 \
-  ghcr.io/aledbf/qemubox/sandbox:v0.0.10 test-qemu-shim
+  ghcr.io/aledbf/qemubox/sandbox:v0.0.11 test-qemu-shim
 ```
 (use root:qemubox to log in)
 
@@ -357,7 +361,7 @@ images/        - Container/VM image builds
 - **Filesystem merge snapshots**: Leverage containerd's [fsmerge feature](https://github.com/containerd/containerd/pull/12374) for more efficient storage
 - **Metrics and tracing**: Add TTRPC tracing to provide detailed observability into VM and container behavior
 - **Annotations for features**: Allow enabling/disabling features (CPU/memory hotplug, etc.) via OCI annotations
-- ~~**Snapshot demo**: Demonstrate VM snapshots - restart a VM with previous state/changes preserved~~ ✓ [Done](https://asciinema.org/a/765288)
+- ~~**Snapshot demo**: Demonstrate VM snapshots - restart a VM with previous state/changes preserved~~ ✓ [Done](https://asciinema.org/a/aIk4RocQFPk7I0QizhRwULKLz)
 
 ## License
 

@@ -46,7 +46,7 @@ comment "Demonstrating persistent disk state between VM runs"
 after 1500
 
 comment "Step 1: Pull the sandbox image"
-type_cmd "$CTR image pull --snapshotter erofs ghcr.io/aledbf/qemubox/sandbox:v0.0.10"
+type_cmd "$CTR image pull --snapshotter erofs ghcr.io/aledbf/qemubox/sandbox:latest"
 
 expect {
     -re {not found|failed|error|Error|denied} {
@@ -65,7 +65,7 @@ expect {
 after [expr {$LONG_DELAY * 500}]
 
 comment "Step 2: Run VM in background"
-type_cmd "$CTR run -d -t --snapshotter erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:v0.0.10 snapshot-demo"
+type_cmd "$CTR run -d -t --snapshotter erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:latest snapshot-demo"
 expect -re {\$|#}
 after 1000
 
@@ -191,7 +191,7 @@ expect -re {\$|#}
 after 1000
 
 comment "Compare original image layers"
-type_cmd "$CTR images inspect ghcr.io/aledbf/qemubox/sandbox:v0.0.10 | head -12"
+type_cmd "$CTR images inspect ghcr.io/aledbf/qemubox/sandbox:latest | head -12"
 expect -re {\$|#}
 after 2000
 

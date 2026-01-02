@@ -4,7 +4,16 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT="${1:-qemubox-snapshot-demo}"
+NERDCTL="nerdctl --address /var/run/qemubox/containerd.sock"
+
+# Ensure cleanup on exit/interrupt
+cleanup() {
+    "$SCRIPT_DIR/cleanup.sh" snapshot-demo snapshot-new
+    $NERDCTL rmi docker.io/aledbf/sandbox:with-changes 2>/dev/null || true
+}
+trap cleanup EXIT
 
 # Check dependencies
 for cmd in asciinema expect; do
@@ -15,28 +24,13 @@ for cmd in asciinema expect; do
 done
 
 # Check expect script exists
-[ -f "snapshot.exp" ] || { echo "Error: snapshot.exp not found"; exit 1; }
+[ -f "$SCRIPT_DIR/snapshot.exp" ] || { echo "Error: snapshot.exp not found"; exit 1; }
 
 echo "QemuBox Snapshot Demo - Recording to ${OUTPUT}.cast"
 
 # Pre-cleanup to avoid conflicts from previous runs
-CTR="ctr --address /var/run/qemubox/containerd.sock"
-NERDCTL="nerdctl --address /var/run/qemubox/containerd.sock"
-$CTR task kill snapshot-demo 2>/dev/null || true
-$CTR task kill snapshot-new 2>/dev/null || true
-$CTR task delete snapshot-demo 2>/dev/null || true
-$CTR task delete snapshot-new 2>/dev/null || true
-$CTR container rm snapshot-demo 2>/dev/null || true
-$CTR container rm snapshot-new 2>/dev/null || true
-$CTR snapshots --snapshotter erofs delete snapshot-demo 2>/dev/null || true
-$CTR snapshots --snapshotter erofs delete snapshot-new 2>/dev/null || true
+"$SCRIPT_DIR/cleanup.sh" snapshot-demo snapshot-new
 $NERDCTL rmi docker.io/aledbf/sandbox:with-changes 2>/dev/null || true
-
-# Clean up orphaned CNI allocations
-CNI_NET_DIR="/var/lib/cni/networks/qemubox-net"
-if [ -d "$CNI_NET_DIR" ]; then
-    grep -l "snapshot-demo\|snapshot-new" "$CNI_NET_DIR"/* 2>/dev/null | xargs -r sudo rm -f
-fi
 
 echo "Starting in 3 seconds..."
 sleep 3
@@ -49,7 +43,7 @@ stty cols $COLS rows $ROWS 2>/dev/null || true
 
 # Record
 echo "Recording..."
-asciinema rec "${OUTPUT}.cast" -c "expect snapshot.exp" \
+asciinema rec "${OUTPUT}.cast" -c "expect $SCRIPT_DIR/snapshot.exp" \
     --cols $COLS --rows $ROWS --overwrite || {
     echo "Recording failed"
     exit 1
@@ -61,19 +55,4 @@ echo ""
 echo "Play:   asciinema play ${OUTPUT}.cast"
 echo "Upload: asciinema upload ${OUTPUT}.cast"
 
-# Cleanup
-$CTR task kill snapshot-demo 2>/dev/null || true
-$CTR task kill snapshot-new 2>/dev/null || true
-$CTR task delete snapshot-demo 2>/dev/null || true
-$CTR task delete snapshot-new 2>/dev/null || true
-$CTR container rm snapshot-demo 2>/dev/null || true
-$CTR container rm snapshot-new 2>/dev/null || true
-$CTR snapshots --snapshotter erofs delete snapshot-demo 2>/dev/null || true
-$CTR snapshots --snapshotter erofs delete snapshot-new 2>/dev/null || true
-$NERDCTL rmi docker.io/aledbf/sandbox:with-changes 2>/dev/null || true
-
-# Clean up CNI allocations
-CNI_NET_DIR="/var/lib/cni/networks/qemubox-net"
-if [ -d "$CNI_NET_DIR" ]; then
-    grep -l "snapshot-demo\|snapshot-new" "$CNI_NET_DIR"/* 2>/dev/null | xargs -r sudo rm -f
-fi
+# Cleanup handled by trap
