@@ -78,8 +78,8 @@ func (s *service) streamOutput(ctx context.Context, ch <-chan OutputData, stream
 		// Biased select: always try to drain data first (non-blocking).
 		select {
 		case data, ok := <-ch:
-			done, err := s.handleData(stream, data, ok)
-			if err != nil || done {
+			finished, err := s.sendChunk(stream, data, ok)
+			if err != nil || finished {
 				return err
 			}
 			continue
@@ -91,17 +91,17 @@ func (s *service) streamOutput(ctx context.Context, ch <-chan OutputData, stream
 		case <-ctx.Done():
 			return s.drainRemaining(ctx, ch, stream, containerID)
 		case data, ok := <-ch:
-			done, err := s.handleData(stream, data, ok)
-			if err != nil || done {
+			finished, err := s.sendChunk(stream, data, ok)
+			if err != nil || finished {
 				return err
 			}
 		}
 	}
 }
 
-// handleData processes a single data item from the channel.
-// Returns (done, error) where done=true means streaming should stop.
-func (s *service) handleData(stream outputSender, data OutputData, ok bool) (bool, error) {
+// sendChunk sends a single output chunk to the RPC stream.
+// Returns (finished, error) where finished=true means streaming should stop.
+func (s *service) sendChunk(stream outputSender, data OutputData, ok bool) (finished bool, err error) {
 	if !ok {
 		// Channel closed, send EOF.
 		return true, stream.Send(&stdiov1.OutputChunk{Eof: true})
@@ -126,13 +126,13 @@ func (s *service) drainRemaining(ctx context.Context, ch <-chan OutputData, stre
 	for {
 		select {
 		case data, ok := <-ch:
-			done, err := s.handleData(stream, data, ok)
+			finished, err := s.sendChunk(stream, data, ok)
 			if err != nil {
 				// Best effort - log and return context error
 				log.G(ctx).WithError(err).WithField("container", containerID).Debug("error sending during drain")
 				return ctx.Err()
 			}
-			if done {
+			if finished {
 				return nil
 			}
 		default:

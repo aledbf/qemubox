@@ -28,6 +28,65 @@ const (
 	defaultScheme = "fifo"
 )
 
+// fifoKeepalive manages read-side FIFO file descriptors that prevent buffer loss.
+//
+// When a process writes to a FIFO and closes it before the reader opens,
+// the kernel discards the buffered data. By holding a read-side FD open,
+// we ensure the buffer persists until containerd opens its read side.
+//
+// This pattern is borrowed from Kata Containers (process.rs stdout_r/stderr_r).
+type fifoKeepalive struct {
+	stdout io.Closer
+	stderr io.Closer
+}
+
+// Close releases both keepalive FDs. Call this AFTER all I/O is complete
+// to ensure containerd has had time to read all buffered data.
+func (k *fifoKeepalive) Close(ctx context.Context) {
+	if k.stdout != nil {
+		if err := k.stdout.Close(); err != nil {
+			log.G(ctx).WithError(err).Debug("error closing stdout keepalive FIFO")
+		}
+		k.stdout = nil
+	}
+	if k.stderr != nil {
+		if err := k.stderr.Close(); err != nil {
+			log.G(ctx).WithError(err).Debug("error closing stderr keepalive FIFO")
+		}
+		k.stderr = nil
+	}
+}
+
+// openKeepaliveFIFOs opens read-side FDs for stdout/stderr FIFOs to prevent buffer loss.
+// Returns a fifoKeepalive that should be closed after all I/O is complete.
+func openKeepaliveFIFOs(ctx context.Context, stdoutPath, stderrPath string) fifoKeepalive {
+	var k fifoKeepalive
+
+	if stdoutPath != "" {
+		if ok, _ := fifo.IsFifo(stdoutPath); ok {
+			fd, err := fifo.OpenFifo(ctx, stdoutPath, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
+			if err != nil {
+				log.G(ctx).WithError(err).Debug("failed to open stdout keepalive FIFO (non-fatal)")
+			} else {
+				k.stdout = fd
+			}
+		}
+	}
+
+	if stderrPath != "" && stderrPath != stdoutPath {
+		if ok, _ := fifo.IsFifo(stderrPath); ok {
+			fd, err := fifo.OpenFifo(ctx, stderrPath, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
+			if err != nil {
+				log.G(ctx).WithError(err).Debug("failed to open stderr keepalive FIFO (non-fatal)")
+			} else {
+				k.stderr = fd
+			}
+		}
+	}
+
+	return k
+}
+
 // isFifoScheme returns true if the path is a bare path (no scheme) or uses the fifo:// scheme.
 // These are the paths used by containerd for attach functionality.
 func isFifoScheme(path string) (bool, error) {
@@ -73,14 +132,9 @@ type IOForwarder interface {
 }
 
 type directForwarder struct {
-	guest    stdio.Stdio
-	shutdown func(context.Context) error
-
-	// FIFO keepalive: read-side FDs opened at setup, kept alive until Shutdown.
-	// This prevents FIFO buffer loss if containerd hasn't opened its read side yet.
-	// See Kata Containers pattern: process.rs stdout_r/stderr_r
-	stdoutKeepalive io.Closer
-	stderrKeepalive io.Closer
+	guest     stdio.Stdio
+	shutdown  func(context.Context) error
+	keepalive fifoKeepalive
 }
 
 func (d *directForwarder) GuestStdio() stdio.Stdio {
@@ -96,22 +150,8 @@ func (d *directForwarder) Shutdown(ctx context.Context) error {
 	if d.shutdown != nil {
 		err = d.shutdown(ctx)
 	}
-
-	// Close FIFO keepalive FDs LAST, after all I/O is complete.
-	// This ensures the FIFO buffer persists until containerd has read all data.
-	if d.stdoutKeepalive != nil {
-		if closeErr := d.stdoutKeepalive.Close(); closeErr != nil {
-			log.G(ctx).WithError(closeErr).Debug("error closing stdout keepalive FIFO")
-		}
-		d.stdoutKeepalive = nil
-	}
-	if d.stderrKeepalive != nil {
-		if closeErr := d.stderrKeepalive.Close(); closeErr != nil {
-			log.G(ctx).WithError(closeErr).Debug("error closing stderr keepalive FIFO")
-		}
-		d.stderrKeepalive = nil
-	}
-
+	// Close keepalive FDs LAST, after all I/O is complete.
+	d.keepalive.Close(ctx)
 	return err
 }
 
@@ -323,10 +363,9 @@ func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, contain
 		}
 	}
 	return pio, &directForwarder{
-		guest:           pio,
-		shutdown:        shutdown,
-		stdoutKeepalive: keepalives.stdout,
-		stderrKeepalive: keepalives.stderr,
+		guest:     pio,
+		shutdown:  shutdown,
+		keepalive: keepalives,
 	}, nil
 }
 
@@ -386,18 +425,12 @@ type outputTarget struct {
 	label  string
 }
 
-// fifoKeepalives holds the read-side FIFO FDs for keepalive purposes.
-type fifoKeepalives struct {
-	stdout io.Closer
-	stderr io.Closer
-}
-
-func copyStreams(ctx context.Context, streams [3]io.ReadWriteCloser, stdin, stdout, stderr string, done chan struct{}) (fifoKeepalives, error) {
+func copyStreams(ctx context.Context, streams [3]io.ReadWriteCloser, stdin, stdout, stderr string, done chan struct{}) (fifoKeepalive, error) {
 	var cwg sync.WaitGroup
 	var copying atomic.Int32
 	copying.Store(2)
 	var sameFile *countingWriteCloser
-	var keepalives fifoKeepalives
+	var keepalives fifoKeepalive
 
 	outputs := []outputTarget{
 		{name: stdout, stream: streams[1], label: "stdout"},
@@ -435,7 +468,7 @@ func copyStreams(ctx context.Context, streams [3]io.ReadWriteCloser, stdin, stdo
 func openOutputDestination(ctx context.Context, name, stdout, stderr string, sameFile **countingWriteCloser) (io.WriteCloser, io.Closer, error) {
 	ok, err := fifo.IsFifo(name)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("containerd-shim: checking if %q is fifo: %w", name, err)
 	}
 	if ok {
 		fw, err := fifo.OpenFifo(ctx, name, syscall.O_WRONLY, 0)

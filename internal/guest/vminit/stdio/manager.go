@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
@@ -16,12 +17,26 @@ import (
 
 const (
 	// subscriberChannelBuffer is the buffer size for subscriber output channels.
-	// This provides some slack to avoid blocking the fan-out goroutine while
-	// the RPC stream sends data.
+	//
+	// Rationale: This buffer provides slack between the fan-out goroutine (which reads
+	// from the process) and the RPC stream sender. Without buffering, a slow network
+	// would block the fan-out, potentially causing the process to block on write().
+	//
+	// 64 chunks at ~32KB max per chunk = ~2MB theoretical max before blocking.
+	// In practice, most chunks are much smaller. This handles typical burst scenarios
+	// like a process dumping a stack trace or printing a large JSON blob.
 	subscriberChannelBuffer = 64
 
 	// maxBufferedBytes is the maximum bytes to buffer per stream for late subscribers.
-	// Older data is discarded when this limit is exceeded.
+	//
+	// Rationale: When no subscriber is attached, we buffer output so late subscribers
+	// (e.g., `ctr attach` after container start) can see recent output. This is a
+	// bounded ring buffer - older data is discarded when the limit is exceeded.
+	//
+	// 256KB is chosen to capture typical startup output (logs, banners, errors) without
+	// consuming excessive memory per process. Long-running processes that emit lots of
+	// output will lose old data, which is acceptable - this is for convenience, not
+	// guaranteed delivery.
 	maxBufferedBytes = 256 * 1024
 )
 
@@ -124,21 +139,21 @@ func (m *Manager) Register(containerID, execID string, stdin io.WriteCloser, std
 
 // streamConfig holds configuration for a single output stream (stdout or stderr).
 type streamConfig struct {
-	name      string
-	getSubs   func(*processIO) *[]*subscriber
-	getBuffer func(*processIO) (*[]OutputData, *int)
+	name         string
+	getSubs      func(*processIO) *[]*subscriber
+	appendBuffer func(*processIO, OutputData, int)
 }
 
 var (
 	stdoutConfig = streamConfig{
-		name:      "stdout",
-		getSubs:   func(p *processIO) *[]*subscriber { return &p.stdoutSubs },
-		getBuffer: func(p *processIO) (*[]OutputData, *int) { return &p.stdoutBuf, &p.stdoutBufBytes },
+		name:         "stdout",
+		getSubs:      func(p *processIO) *[]*subscriber { return &p.stdoutSubs },
+		appendBuffer: (*processIO).appendToStdoutBuffer,
 	}
 	stderrConfig = streamConfig{
-		name:      "stderr",
-		getSubs:   func(p *processIO) *[]*subscriber { return &p.stderrSubs },
-		getBuffer: func(p *processIO) (*[]OutputData, *int) { return &p.stderrBuf, &p.stderrBufBytes },
+		name:         "stderr",
+		getSubs:      func(p *processIO) *[]*subscriber { return &p.stderrSubs },
+		appendBuffer: (*processIO).appendToStderrBuffer,
 	}
 )
 
@@ -156,7 +171,7 @@ func (m *Manager) fanOutReader(containerID, execID string, reader io.Reader, pio
 			pio.mu.Lock()
 			subs := *cfg.getSubs(pio)
 			if len(subs) == 0 {
-				appendBounded(cfg.getBuffer, pio, OutputData{Data: data}, maxBufferedBytes)
+				cfg.appendBuffer(pio, OutputData{Data: data}, maxBufferedBytes)
 			} else {
 				for _, sub := range subs {
 					select {
@@ -178,7 +193,7 @@ func (m *Manager) fanOutReader(containerID, execID string, reader io.Reader, pio
 			pio.mu.Lock()
 			subs := *cfg.getSubs(pio)
 			if len(subs) == 0 {
-				appendBounded(cfg.getBuffer, pio, OutputData{EOF: true}, maxBufferedBytes)
+				cfg.appendBuffer(pio, OutputData{EOF: true}, maxBufferedBytes)
 			} else {
 				for _, sub := range subs {
 					select {
@@ -195,9 +210,21 @@ func (m *Manager) fanOutReader(containerID, execID string, reader io.Reader, pio
 
 // Unregister removes a process from the manager.
 // This should be called when the process exits.
+//
+// Synchronization invariants:
+//  1. After m.mu.Unlock(), no new code can find this process (it's removed from the map)
+//  2. After pio.exited=true, no new subscribers can be added (subscribe checks this)
+//  3. pio.wg.Wait() blocks until fanOutReader goroutines finish reading all data
+//  4. Only after wg.Wait() do we close subscriber channels (ensures EOF delivery)
+//
+// The unlock-wait-lock pattern between steps 2-4 is safe because:
+//   - The process is already removed from the map (step 1)
+//   - pio.exited prevents new subscribers (step 2)
+//   - The only concurrent access is from existing subscribers draining their channels
 func (m *Manager) Unregister(containerID, execID string) {
 	key := processKey{containerID: containerID, execID: execID}
 
+	// Step 1: Remove from map. After this, no new code can find this process.
 	m.mu.Lock()
 	pio, ok := m.processes[key]
 	if !ok {
@@ -207,18 +234,17 @@ func (m *Manager) Unregister(containerID, execID string) {
 	delete(m.processes, key)
 	m.mu.Unlock()
 
-	// Mark as exited first (prevents new subscribers).
+	// Step 2: Mark as exited. After this, subscribe() returns early for late arrivals.
 	pio.mu.Lock()
 	pio.exited = true
 	close(pio.exitChan)
 	pio.mu.Unlock()
 
-	// Wait for fan-out goroutines to finish FIRST.
-	// This ensures all output data and EOF are delivered to subscribers
-	// before we close their channels.
+	// Step 3: Wait for fan-out goroutines to finish reading all process output.
+	// This ensures all data (including EOF) is sent to subscriber channels.
 	pio.wg.Wait()
 
-	// Now safe to cancel and close subscriber channels.
+	// Step 4: Now safe to close subscriber channels - all data has been delivered.
 	pio.mu.Lock()
 	for _, sub := range pio.stdoutSubs {
 		sub.cancel()
@@ -232,7 +258,7 @@ func (m *Manager) Unregister(containerID, execID string) {
 	pio.stderrSubs = nil
 	pio.mu.Unlock()
 
-	// Close stdin if not already closed.
+	// Step 5: Close stdin if not already closed.
 	if pio.stdin != nil && !pio.stdinClosed {
 		_ = pio.stdin.Close()
 	}
@@ -446,10 +472,18 @@ func (m *Manager) HasProcess(containerID, execID string) bool {
 	return ok
 }
 
+// subscriberWaitTimeout is the maximum time to wait for subscriber streams to finish.
+//
+// Rationale: This prevents WaitForIOComplete from blocking indefinitely if a subscriber
+// fails to call its done() function. This is a safety net - properly behaved subscribers
+// should complete quickly. If you hit this timeout, investigate why subscribers aren't
+// signaling completion (likely a bug in the RPC stream handling).
+const subscriberWaitTimeout = 10 * time.Second
+
 // WaitForIOComplete waits for all I/O to complete for the specified process.
 // This waits for both:
 // 1. fanOutReader goroutines to finish reading from process stdout/stderr
-// 2. Subscriber RPC streams to finish sending data to the host
+// 2. Subscriber RPC streams to finish sending data to the host (with timeout)
 //
 // This should be called before sending exit events to ensure all output has
 // been fully transmitted to the host shim.
@@ -465,25 +499,46 @@ func (m *Manager) WaitForIOComplete(containerID, execID string) {
 		return
 	}
 
-	// Wait for fanOutReader goroutines to finish reading all data
+	// Wait for fanOutReader goroutines to finish reading all data.
+	// This is unbounded because fanOutReaders are internal and always terminate.
 	pio.wg.Wait()
 	log.L.WithField("container", containerID).WithField("exec", execID).Debug("fanOutReaders complete")
 
-	// Wait for all subscriber RPC streams to finish sending data to host.
-	// This is critical: the fanOutReaders may have finished reading and sent
-	// data to subscriber channels, but the RPC streams might still be sending.
-	pio.subscriberWg.Wait()
-	log.L.WithField("container", containerID).WithField("exec", execID).Debug("I/O complete (all subscribers finished)")
+	// Wait for subscriber RPC streams with a timeout to prevent deadlock.
+	// Subscribers are external and may fail to signal completion.
+	done := make(chan struct{})
+	go func() {
+		pio.subscriberWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.L.WithField("container", containerID).WithField("exec", execID).Debug("I/O complete (all subscribers finished)")
+	case <-time.After(subscriberWaitTimeout):
+		log.L.WithField("container", containerID).WithField("exec", execID).
+			Warn("timeout waiting for subscriber streams, proceeding (possible subscriber leak)")
+	}
 }
 
-// appendBounded appends data to a buffer while enforcing a maximum size.
-// When the buffer exceeds maxBytes, older entries are removed from the front.
-func appendBounded(getBufAndSize func(*processIO) (*[]OutputData, *int), pio *processIO, data OutputData, maxBytes int) {
-	buf, size := getBufAndSize(pio)
-	*buf = append(*buf, data)
-	*size += len(data.Data)
-	for *size > maxBytes && len(*buf) > 0 {
-		*size -= len((*buf)[0].Data)
-		*buf = (*buf)[1:]
+// appendToStdoutBuffer appends data to the stdout buffer with bounded size.
+// Older entries are discarded when maxBytes is exceeded.
+func (p *processIO) appendToStdoutBuffer(data OutputData, maxBytes int) {
+	p.stdoutBuf = append(p.stdoutBuf, data)
+	p.stdoutBufBytes += len(data.Data)
+	for p.stdoutBufBytes > maxBytes && len(p.stdoutBuf) > 0 {
+		p.stdoutBufBytes -= len(p.stdoutBuf[0].Data)
+		p.stdoutBuf = p.stdoutBuf[1:]
+	}
+}
+
+// appendToStderrBuffer appends data to the stderr buffer with bounded size.
+// Older entries are discarded when maxBytes is exceeded.
+func (p *processIO) appendToStderrBuffer(data OutputData, maxBytes int) {
+	p.stderrBuf = append(p.stderrBuf, data)
+	p.stderrBufBytes += len(data.Data)
+	for p.stderrBufBytes > maxBytes && len(p.stderrBuf) > 0 {
+		p.stderrBufBytes -= len(p.stderrBuf[0].Data)
+		p.stderrBuf = p.stderrBuf[1:]
 	}
 }

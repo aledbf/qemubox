@@ -57,11 +57,8 @@ type RPCIOForwarder struct {
 	clients   []*ttrpc.Client
 	clientsMu sync.Mutex
 
-	// FIFO keepalive: read-side FDs opened before process starts, kept alive until Delete.
-	// This prevents FIFO buffer loss if containerd hasn't opened its read side yet.
-	// See Kata Containers pattern: process.rs stdout_r/stderr_r
-	stdoutKeepalive io.Closer
-	stderrKeepalive io.Closer
+	// keepalive holds read-side FIFO FDs opened before process starts.
+	keepalive fifoKeepalive
 }
 
 // NewRPCIOForwarder creates a new RPC I/O forwarder.
@@ -105,32 +102,7 @@ func (f *RPCIOForwarder) Start(ctx context.Context) error {
 	}).Debug("starting RPC I/O forwarder")
 
 	// Open FIFO keepalive FDs BEFORE starting forwarders.
-	// These read-side FDs prevent the FIFO buffer from being discarded if
-	// containerd hasn't opened its read side yet. They stay open until Shutdown().
-	// See Kata Containers pattern: process.rs pre_fifos_open()
-	if f.stdoutPath != "" {
-		if ok, _ := fifo.IsFifo(f.stdoutPath); ok {
-			// Non-blocking open - we just want to hold the FD
-			keepalive, err := fifo.OpenFifo(fwdCtx, f.stdoutPath, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
-			if err != nil {
-				log.G(fwdCtx).WithError(err).Warn("failed to open stdout keepalive FIFO (non-fatal)")
-			} else {
-				f.stdoutKeepalive = keepalive
-				log.G(fwdCtx).Debug("opened stdout keepalive FIFO")
-			}
-		}
-	}
-	if f.stderrPath != "" && f.stderrPath != f.stdoutPath {
-		if ok, _ := fifo.IsFifo(f.stderrPath); ok {
-			keepalive, err := fifo.OpenFifo(fwdCtx, f.stderrPath, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
-			if err != nil {
-				log.G(fwdCtx).WithError(err).Warn("failed to open stderr keepalive FIFO (non-fatal)")
-			} else {
-				f.stderrKeepalive = keepalive
-				log.G(fwdCtx).Debug("opened stderr keepalive FIFO")
-			}
-		}
-	}
+	f.keepalive = openKeepaliveFIFOs(fwdCtx, f.stdoutPath, f.stderrPath)
 
 	// Start stdin forwarder if stdin is configured
 	if f.stdinPath != "" {
@@ -523,22 +495,8 @@ func (f *RPCIOForwarder) Shutdown(ctx context.Context) error {
 	f.clients = nil
 	f.clientsMu.Unlock()
 
-	// Close FIFO keepalive FDs LAST, after all I/O is complete.
-	// This ensures the FIFO buffer persists until containerd has read all data.
-	if f.stdoutKeepalive != nil {
-		if err := f.stdoutKeepalive.Close(); err != nil {
-			log.G(ctx).WithError(err).Debug("error closing stdout keepalive FIFO")
-		}
-		f.stdoutKeepalive = nil
-		log.G(ctx).Debug("closed stdout keepalive FIFO")
-	}
-	if f.stderrKeepalive != nil {
-		if err := f.stderrKeepalive.Close(); err != nil {
-			log.G(ctx).WithError(err).Debug("error closing stderr keepalive FIFO")
-		}
-		f.stderrKeepalive = nil
-		log.G(ctx).Debug("closed stderr keepalive FIFO")
-	}
+	// Close keepalive FDs LAST, after all I/O is complete.
+	f.keepalive.Close(ctx)
 
 	return nil
 }

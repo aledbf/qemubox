@@ -1234,8 +1234,16 @@ func (s *service) waitForIOBeforeExit(ctx context.Context, ev *types.Envelope) {
 	}).Debug("waiting for I/O forwarder to complete before forwarding TaskExit")
 
 	// Wait for I/O with a timeout to prevent blocking the event loop indefinitely.
-	// If the timeout is reached, we proceed anyway - it's better to deliver the exit
-	// event late than to block forever.
+	//
+	// Rationale: 30 seconds is chosen to handle slow networks and large output buffers.
+	// Typical I/O completes in <1s, but edge cases (large logs, network congestion) may
+	// take longer. If the timeout is reached, we proceed with the exit event anyway -
+	// it's better to deliver the exit event with potentially missing output than to
+	// block forever and deadlock the shim.
+	//
+	// Trade-off: Too short = data loss on slow systems; too long = delayed exit events.
+	// 30s is conservative but safe. If you're hitting this timeout regularly, investigate
+	// your I/O pipeline (network latency, subscriber throughput).
 	const ioWaitTimeout = 30 * time.Second
 	done := make(chan struct{})
 	go func() {

@@ -426,7 +426,6 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 		fmt.Sprintf("-vsock-rpc-port=%d", vsock.DefaultRPCPort),
 		fmt.Sprintf("-vsock-stream-port=%d", vsock.DefaultStreamPort),
 		fmt.Sprintf("-vsock-cid=%d", q.guestCID),
-		"-debug",
 	}
 	initArgs = append(initArgs, startOpts.InitArgs...)
 
