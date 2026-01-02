@@ -241,28 +241,23 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 	logger := log.G(ctx).WithField("container", f.containerID).WithField("direction", streamName)
 	logger.Debug("starting output forwarder")
 
-	// Open FIFO for reading first to prevent O_WRONLY from blocking.
-	// This "dummy reader" keeps the FIFO open so writes don't fail with SIGPIPE
-	// when there's no real reader (e.g., before ctr attach connects).
-	// We use O_RDONLY|O_NONBLOCK to avoid blocking if no writer exists yet.
-	logger.WithField("path", path).Debug("opening output fifo for reading (dummy reader)")
-	fifoReader, err := fifo.OpenFifo(ctx, path, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		logger.WithError(err).Error("failed to open output fifo for reading")
-		return
-	}
-	defer func() { _ = fifoReader.Close() }()
-	logger.Debug("opened output fifo for reading")
-
-	// Now open for writing - won't block because we have a reader above
-	logger.Debug("opening output fifo for writing")
+	// Open FIFO for writing. This blocks until containerd opens the FIFO for reading.
+	// This synchronization ensures containerd is ready to receive data before we write,
+	// preventing a race where data is written and the FIFO closed before containerd reads.
+	//
+	// We use fifo.OpenFifo which handles the blocking gracefully with context cancellation.
+	logger.WithField("path", path).Debug("opening output fifo for writing (will block until reader ready)")
 	fifoWriter, err := fifo.OpenFifo(ctx, path, syscall.O_WRONLY, 0)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			logger.Debug("output fifo open cancelled")
+			return
+		}
 		logger.WithError(err).Error("failed to open output fifo")
 		return
 	}
 	defer func() { _ = fifoWriter.Close() }()
-	logger.Debug("opened output fifo for writing")
+	logger.Debug("opened output fifo for writing (reader is ready)")
 
 	// Retry loop for connection and streaming
 	retry := newRetryState()
