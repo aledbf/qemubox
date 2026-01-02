@@ -403,7 +403,7 @@ if [ "$SHIM_ONLY" = true ]; then
     echo "  → Installing shim binaries to /usr/share/qemubox/bin..."
     mkdir -p /usr/share/qemubox/bin
     # Only install qemubox-specific binaries
-    for bin in containerd-shim-qemubox-v1 vminitd qemu-system-x86_64 qemu-img; do
+    for bin in containerd-shim-qemubox-v1 vminitd qemu-system-x86_64; do
         if [ -f "${SCRIPT_DIR}/usr/share/qemubox/bin/${bin}" ]; then
             cp "${SCRIPT_DIR}/usr/share/qemubox/bin/${bin}" /usr/share/qemubox/bin/
             chmod +x "/usr/share/qemubox/bin/${bin}"

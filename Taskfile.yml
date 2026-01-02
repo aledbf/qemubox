@@ -162,7 +162,7 @@ tasks:
         echo "✓ Containerd built: _output/containerd, _output/containerd-shim-runc-v2"
 
   build:qemu:
-    desc: Build QEMU binaries and firmware (qemu-system-x86_64, qemu-img, BIOS files)
+    desc: Build QEMU binaries and firmware (qemu-system-x86_64, BIOS files)
     cmds:
       - |
         set -eou pipefail
@@ -177,7 +177,7 @@ tasks:
           --build-arg QEMU_JOBS=8 \
           --output type=local,dest={{.OUTPUT_DIR}} \
           .
-        echo "✓ QEMU built: _output/bin/qemu-system-x86_64, _output/bin/qemu-img"
+        echo "✓ QEMU built: _output/bin/qemu-system-x86_64"
         echo "✓ QEMU firmware: _output/share/qemubox/qemu/"
 
   # ==========================================================================

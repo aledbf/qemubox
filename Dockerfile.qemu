@@ -170,7 +170,6 @@ RUN --mount=type=cache,sharing=locked,id=qemu-runtime-aptlib,target=/var/lib/apt
 
 # Copy QEMU binaries
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64
-COPY --from=builder /opt/qemu/bin/qemu-img /usr/local/bin/qemu-img
 
 # Copy BIOS/firmware files needed for boot
 COPY --from=builder /opt/qemu/share/qemu/ /usr/share/qemubox/qemu/
@@ -184,7 +183,6 @@ FROM scratch AS extract
 
 # Copy QEMU binaries
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
-COPY --from=builder /opt/qemu/bin/qemu-img /bin/qemu-img
 
 # Copy BIOS/firmware files needed for boot
 COPY --from=builder /opt/qemu/share/qemu/bios.bin /share/qemubox/qemu/bios.bin
