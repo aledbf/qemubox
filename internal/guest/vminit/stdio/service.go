@@ -87,7 +87,7 @@ func (s *service) streamOutput(ctx context.Context, ch <-chan OutputData, stream
 		// Step 1: Non-blocking receive - prioritize data over cancellation
 		select {
 		case data, ok := <-ch:
-			finished, err := s.sendChunk(stream, data, ok)
+			finished, err := sendChunk(stream, data, ok)
 			if err != nil || finished {
 				return err
 			}
@@ -100,9 +100,9 @@ func (s *service) streamOutput(ctx context.Context, ch <-chan OutputData, stream
 		select {
 		case <-ctx.Done():
 			// Context cancelled, but there may be data in flight - drain it
-			return s.drainRemaining(ctx, ch, stream, containerID)
+			return drainRemaining(ctx, ch, stream, containerID)
 		case data, ok := <-ch:
-			finished, err := s.sendChunk(stream, data, ok)
+			finished, err := sendChunk(stream, data, ok)
 			if err != nil || finished {
 				return err
 			}
@@ -112,7 +112,7 @@ func (s *service) streamOutput(ctx context.Context, ch <-chan OutputData, stream
 
 // sendChunk sends a single output chunk to the RPC stream.
 // Returns (finished, error) where finished=true means streaming should stop.
-func (s *service) sendChunk(stream outputSender, data OutputData, ok bool) (finished bool, err error) {
+func sendChunk(stream outputSender, data OutputData, ok bool) (finished bool, err error) {
 	if !ok {
 		// Channel closed, send EOF.
 		return true, stream.Send(&stdiov1.OutputChunk{Eof: true})
@@ -133,11 +133,11 @@ func (s *service) sendChunk(stream outputSender, data OutputData, ok bool) (fini
 }
 
 // drainRemaining drains any remaining data from the channel after context cancellation.
-func (s *service) drainRemaining(ctx context.Context, ch <-chan OutputData, stream outputSender, containerID string) error {
+func drainRemaining(ctx context.Context, ch <-chan OutputData, stream outputSender, containerID string) error {
 	for {
 		select {
 		case data, ok := <-ch:
-			finished, err := s.sendChunk(stream, data, ok)
+			finished, err := sendChunk(stream, data, ok)
 			if err != nil {
 				// Best effort - log and return context error
 				log.G(ctx).WithError(err).WithField("container", containerID).Debug("error sending during drain")

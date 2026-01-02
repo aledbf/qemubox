@@ -132,11 +132,13 @@ type forwardIOSetup struct {
 
 // IOForwarder owns a complete I/O forwarding lifecycle.
 //
-// This interface is always non-nil when returned from forwardIO/forwardIOWithIDs.
-// Use noopForwarder for cases where no actual I/O forwarding is needed (passthrough mode).
+// Design note: This interface uses the Null Object Pattern. It is always non-nil
+// when returned from forwardIO/forwardIOWithIDs, even for passthrough or null I/O.
+// This eliminates nil checks at all call sites (5+ locations) and simplifies the
+// calling code. The tradeoff is an extra noopForwarder type that does nothing.
 //
 // Implementations:
-//   - noopForwarder: No-op implementation for passthrough or null I/O.
+//   - noopForwarder: Null object for passthrough or null I/O.
 //   - directForwarder: Uses synchronous io.Copy goroutines.
 //   - RPCIOForwarder: Uses TTRPC streaming for attach support.
 type IOForwarder interface {
@@ -205,7 +207,7 @@ func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forw
 
 	u, err := url.Parse(pio.Stdout)
 	if err != nil {
-		return forwardIOSetup{}, fmt.Errorf("unable to parse stdout uri: %w", err)
+		return forwardIOSetup{}, fmt.Errorf("failed to parse stdout uri: %w", err)
 	}
 	if u.Scheme == "" {
 		u.Scheme = defaultScheme
@@ -240,7 +242,7 @@ func setupFileScheme(ctx context.Context, vmi vm.Instance, pio stdio.Stdio, stdo
 	if pio.Stderr != "" && pio.Stderr != pio.Stdout {
 		stderrURL, err := url.Parse(pio.Stderr)
 		if err != nil {
-			return forwardIOSetup{}, fmt.Errorf("unable to parse stderr uri: %w", err)
+			return forwardIOSetup{}, fmt.Errorf("failed to parse stderr uri: %w", err)
 		}
 		if stderrURL.Scheme == "file" || stderrURL.Scheme == "" {
 			stderrFilePath = stderrURL.Path

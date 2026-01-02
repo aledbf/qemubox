@@ -14,31 +14,15 @@ import (
 
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
+
+	"github.com/aledbf/qemubox/containerd/internal/iotimeouts"
 )
 
+// Package-level aliases for shared constants.
+// These are defined in iotimeouts to ensure coordinated values across host and guest.
 const (
-	// subscriberChannelBuffer is the buffer size for subscriber output channels.
-	//
-	// Rationale: This buffer provides slack between the fan-out goroutine (which reads
-	// from the process) and the RPC stream sender. Without buffering, a slow network
-	// would block the fan-out, potentially causing the process to block on write().
-	//
-	// 64 chunks at ~32KB max per chunk = ~2MB theoretical max before blocking.
-	// In practice, most chunks are much smaller. This handles typical burst scenarios
-	// like a process dumping a stack trace or printing a large JSON blob.
-	subscriberChannelBuffer = 64
-
-	// maxBufferedBytes is the maximum bytes to buffer per stream for late subscribers.
-	//
-	// Rationale: When no subscriber is attached, we buffer output so late subscribers
-	// (e.g., `ctr attach` after container start) can see recent output. This is a
-	// bounded ring buffer - older data is discarded when the limit is exceeded.
-	//
-	// 256KB is chosen to capture typical startup output (logs, banners, errors) without
-	// consuming excessive memory per process. Long-running processes that emit lots of
-	// output will lose old data, which is acceptable - this is for convenience, not
-	// guaranteed delivery.
-	maxBufferedBytes = 256 * 1024
+	subscriberChannelBuffer = iotimeouts.SubscriberChannelBuffer
+	maxBufferedBytes        = iotimeouts.MaxBufferedBytes
 )
 
 // processKey uniquely identifies a process within a container.
@@ -335,12 +319,20 @@ func (m *Manager) CloseStdin(containerID, execID string) error {
 	return nil
 }
 
+// streamType identifies stdout vs stderr for buffer/subscriber operations.
+type streamType int
+
+const (
+	streamStdout streamType = iota
+	streamStderr
+)
+
 // SubscribeStdout subscribes to a process's stdout stream.
 // Returns a channel that receives output chunks and a done function.
 // The caller MUST call the done function when finished processing the stream
 // to signal that I/O is complete (this is required for WaitForIOComplete to work).
 func (m *Manager) SubscribeStdout(ctx context.Context, containerID, execID string) (<-chan OutputData, func(), error) {
-	return m.subscribe(ctx, containerID, execID, func(p *processIO) *[]*subscriber { return &p.stdoutSubs })
+	return m.subscribe(ctx, containerID, execID, streamStdout)
 }
 
 // SubscribeStderr subscribes to a process's stderr stream.
@@ -348,10 +340,10 @@ func (m *Manager) SubscribeStdout(ctx context.Context, containerID, execID strin
 // The caller MUST call the done function when finished processing the stream
 // to signal that I/O is complete (this is required for WaitForIOComplete to work).
 func (m *Manager) SubscribeStderr(ctx context.Context, containerID, execID string) (<-chan OutputData, func(), error) {
-	return m.subscribe(ctx, containerID, execID, func(p *processIO) *[]*subscriber { return &p.stderrSubs })
+	return m.subscribe(ctx, containerID, execID, streamStderr)
 }
 
-func (m *Manager) subscribe(ctx context.Context, containerID, execID string, getSubs func(*processIO) *[]*subscriber) (<-chan OutputData, func(), error) {
+func (m *Manager) subscribe(ctx context.Context, containerID, execID string, stream streamType) (<-chan OutputData, func(), error) {
 	key := processKey{containerID: containerID, execID: execID}
 
 	m.mu.RLock()
@@ -363,14 +355,14 @@ func (m *Manager) subscribe(ctx context.Context, containerID, execID string, get
 	}
 
 	pio.mu.Lock()
-	buffered := m.drainBufferLocked(pio, getSubs)
+	buffered := m.drainBufferLocked(pio, stream)
 
 	if pio.exited {
 		pio.mu.Unlock()
 		return m.subscribeToExitedProcess(containerID, execID, buffered)
 	}
 
-	ch, doneFunc := m.createActiveSubscriber(ctx, containerID, execID, pio, getSubs, buffered)
+	ch, doneFunc := m.createActiveSubscriber(ctx, containerID, execID, pio, stream, buffered)
 	pio.mu.Unlock()
 
 	m.sendBufferedData(containerID, ch, buffered)
@@ -378,13 +370,14 @@ func (m *Manager) subscribe(ctx context.Context, containerID, execID string, get
 }
 
 // drainBufferLocked extracts buffered data for the stream. Must be called with pio.mu held.
-func (m *Manager) drainBufferLocked(pio *processIO, getSubs func(*processIO) *[]*subscriber) []OutputData {
+func (m *Manager) drainBufferLocked(pio *processIO, stream streamType) []OutputData {
 	var buffered []OutputData
-	if getSubs(pio) == &pio.stdoutSubs {
+	switch stream {
+	case streamStdout:
 		buffered = append(buffered, pio.stdoutBuf...)
 		pio.stdoutBuf = nil
 		pio.stdoutBufBytes = 0
-	} else {
+	case streamStderr:
 		buffered = append(buffered, pio.stderrBuf...)
 		pio.stderrBuf = nil
 		pio.stderrBufBytes = 0
@@ -408,13 +401,13 @@ func (m *Manager) subscribeToExitedProcess(containerID, execID string, buffered 
 }
 
 // createActiveSubscriber creates a subscriber for a running process. Must be called with pio.mu held.
-func (m *Manager) createActiveSubscriber(ctx context.Context, containerID, execID string, pio *processIO, getSubs func(*processIO) *[]*subscriber, buffered []OutputData) (chan OutputData, func()) {
+func (m *Manager) createActiveSubscriber(ctx context.Context, containerID, execID string, pio *processIO, stream streamType, buffered []OutputData) (chan OutputData, func()) {
 	_, cancel := context.WithCancel(ctx)
 	ch := make(chan OutputData, subscriberChannelBuffer)
 	done := make(chan struct{})
 	sub := &subscriber{ch: ch, cancel: cancel, done: done}
 
-	subs := getSubs(pio)
+	subs := m.getSubscribers(pio, stream)
 	*subs = append(*subs, sub)
 	pio.subscriberWg.Add(1)
 
@@ -424,7 +417,7 @@ func (m *Manager) createActiveSubscriber(ctx context.Context, containerID, execI
 	// Cleanup goroutine: wait for done, then clean up.
 	go func() {
 		<-done
-		m.removeSubscriber(containerID, execID, sub, getSubs)
+		m.removeSubscriber(containerID, execID, sub, stream)
 		pio.subscriberWg.Done()
 	}()
 
@@ -434,6 +427,18 @@ func (m *Manager) createActiveSubscriber(ctx context.Context, containerID, execI
 	}
 
 	return ch, doneFunc
+}
+
+// getSubscribers returns a pointer to the subscriber slice for the given stream type.
+func (m *Manager) getSubscribers(pio *processIO, stream streamType) *[]*subscriber {
+	switch stream {
+	case streamStdout:
+		return &pio.stdoutSubs
+	case streamStderr:
+		return &pio.stderrSubs
+	default:
+		return &pio.stdoutSubs // fallback, should never happen
+	}
 }
 
 // sendBufferedData sends buffered data to the subscriber channel.
@@ -451,7 +456,7 @@ func (m *Manager) sendBufferedData(containerID string, ch chan OutputData, buffe
 	}
 }
 
-func (m *Manager) removeSubscriber(containerID, execID string, sub *subscriber, getSubs func(*processIO) *[]*subscriber) {
+func (m *Manager) removeSubscriber(containerID, execID string, sub *subscriber, stream streamType) {
 	key := processKey{containerID: containerID, execID: execID}
 
 	m.mu.RLock()
@@ -465,7 +470,7 @@ func (m *Manager) removeSubscriber(containerID, execID string, sub *subscriber, 
 	pio.mu.Lock()
 	defer pio.mu.Unlock()
 
-	subs := getSubs(pio)
+	subs := m.getSubscribers(pio, stream)
 	for i, s := range *subs {
 		if s == sub {
 			*subs = append((*subs)[:i], (*subs)[i+1:]...)
@@ -492,22 +497,9 @@ func (m *Manager) DroppedStats() (chunks, bytes int64) {
 	return m.droppedChunks.Load(), m.droppedBytes.Load()
 }
 
-// subscriberWaitTimeout is the maximum time to wait for subscriber streams to finish.
-//
-// Rationale: This prevents WaitForIOComplete from blocking indefinitely if a subscriber
-// fails to call its done() function. This is a safety net - properly behaved subscribers
-// should complete quickly. If you hit this timeout, investigate why subscribers aren't
-// signaling completion (likely a bug in the RPC stream handling).
-//
-// COORDINATION NOTE: The host shim (service.go) has a separate ioWaitTimeout (30s) that
-// must be >= this value. The host waits for its forwarder goroutines, which in turn wait
-// for the guest RPC stream to complete. The host timeout accounts for:
-//   - This guest timeout (10s)
-//   - Network latency for RPC completion signal
-//   - Host-side FIFO flush time
-//
-// If you change this value, review the host's ioWaitTimeout as well.
-const subscriberWaitTimeout = 10 * time.Second
+// subscriberWaitTimeout uses the shared constant from iotimeouts.
+// See iotimeouts.SubscriberWaitTimeout for documentation.
+const subscriberWaitTimeout = iotimeouts.SubscriberWaitTimeout
 
 // WaitForIOComplete waits for all I/O to complete for the specified process.
 // This waits for both:

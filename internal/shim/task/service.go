@@ -92,6 +92,7 @@ import (
 	"github.com/aledbf/qemubox/containerd/api/services/vmevents/v1"
 	"github.com/aledbf/qemubox/containerd/internal/host/network"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/aledbf/qemubox/containerd/internal/iotimeouts"
 	"github.com/aledbf/qemubox/containerd/internal/shim/cpuhotplug"
 	"github.com/aledbf/qemubox/containerd/internal/shim/lifecycle"
 	"github.com/aledbf/qemubox/containerd/internal/shim/memhotplug"
@@ -1219,20 +1220,7 @@ func (s *service) waitForIOBeforeExit(ctx context.Context, ev *types.Envelope) {
 	}).Debug("waiting for I/O forwarder to complete before forwarding TaskExit")
 
 	// Wait for I/O with a timeout to prevent blocking the event loop indefinitely.
-	//
-	// Rationale: 30 seconds is chosen to handle slow networks and large output buffers.
-	// Typical I/O completes in <1s, but edge cases (large logs, network congestion) may
-	// take longer. If the timeout is reached, we proceed with the exit event anyway -
-	// it's better to deliver the exit event with potentially missing output than to
-	// block forever and deadlock the shim.
-	//
-	// Trade-off: Too short = data loss on slow systems; too long = delayed exit events.
-	// 30s is conservative but safe. If you're hitting this timeout regularly, investigate
-	// your I/O pipeline (network latency, subscriber throughput).
-	//
-	// COORDINATION NOTE: This must be >= guest's subscriberWaitTimeout (10s in manager.go).
-	// The breakdown is: guest wait (10s) + network latency (~1s) + FIFO flush (~1s) + margin.
-	const ioWaitTimeout = 30 * time.Second
+	// See iotimeouts.HostIOWaitTimeout for rationale and coordination notes.
 	done := make(chan struct{})
 	go func() {
 		forwarder.WaitForComplete()
@@ -1245,11 +1233,11 @@ func (s *service) waitForIOBeforeExit(ctx context.Context, ev *types.Envelope) {
 			"container": taskExit.ContainerID,
 			"exec":      execID,
 		}).Debug("I/O forwarder complete, forwarding TaskExit")
-	case <-time.After(ioWaitTimeout):
+	case <-time.After(iotimeouts.HostIOWaitTimeout):
 		log.G(ctx).WithFields(log.Fields{
 			"container": taskExit.ContainerID,
 			"exec":      execID,
-			"timeout":   ioWaitTimeout,
+			"timeout":   iotimeouts.HostIOWaitTimeout,
 		}).Warn("timeout waiting for I/O forwarder, proceeding with TaskExit")
 	}
 }

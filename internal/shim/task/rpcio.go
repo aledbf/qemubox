@@ -17,13 +17,14 @@ import (
 
 	stdiov1 "github.com/aledbf/qemubox/containerd/api/services/stdio/v1"
 	"github.com/aledbf/qemubox/containerd/internal/iobuf"
+	"github.com/aledbf/qemubox/containerd/internal/iotimeouts"
 )
 
+// Package-level aliases for shared constants.
+// These are defined in iotimeouts to ensure coordinated values across host and guest.
 const (
-	// outputRetryInitialDelay is the initial delay for output forwarding retry.
-	outputRetryInitialDelay = 100 * time.Millisecond
-	// outputRetryMaxDelay is the maximum delay between retries.
-	outputRetryMaxDelay = 2 * time.Second
+	outputRetryInitialDelay = iotimeouts.OutputRetryInitialDelay
+	outputRetryMaxDelay     = iotimeouts.OutputRetryMaxDelay
 	// outputRetryMaxAttempts is the maximum number of retry attempts before giving up.
 	// 0 means retry indefinitely until context is cancelled or done is signaled.
 	outputRetryMaxAttempts = 0
