@@ -281,21 +281,14 @@ func (s *service) shutdown(ctx context.Context) error {
 	s.controllerMu.Unlock()
 
 	// Shutdown IO for container and execs
-	if s.container != nil {
-		if s.container.io != nil && s.container.io.init.forwarder != nil {
-			if err := s.container.io.init.forwarder.Shutdown(ctx); err != nil {
-				errs = append(errs, fmt.Errorf("container %q io shutdown: %w", s.containerID, err))
-			}
+	if s.container != nil && s.container.io != nil {
+		// Forwarder is always non-nil when io is set (noopForwarder for passthrough mode)
+		if err := s.container.io.init.forwarder.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("container %q io shutdown: %w", s.containerID, err))
 		}
-		if s.container.io != nil {
-			for execID, pio := range s.container.io.exec {
-				forwarder := pio.forwarder
-				if forwarder == nil {
-					continue
-				}
-				if err := forwarder.Shutdown(ctx); err != nil {
-					errs = append(errs, fmt.Errorf("container %q exec %q io shutdown: %w", s.containerID, execID, err))
-				}
+		for execID, pio := range s.container.io.exec {
+			if err := pio.forwarder.Shutdown(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("container %q exec %q io shutdown: %w", s.containerID, execID, err))
 			}
 		}
 	}
@@ -536,9 +529,10 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	resp, err := tc.Create(ctx, vr)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("failed to create task")
-		if c.io != nil && c.io.init.forwarder != nil {
-			if err := c.io.init.forwarder.Shutdown(ctx); err != nil {
-				log.G(ctx).WithError(err).Error("failed to shutdown io after create failure")
+		// Forwarder is always non-nil when io is set (noopForwarder for passthrough mode)
+		if c.io != nil {
+			if shutdownErr := c.io.init.forwarder.Shutdown(ctx); shutdownErr != nil {
+				log.G(ctx).WithError(shutdownErr).Error("failed to shutdown io after create failure")
 			}
 		}
 		return nil, errgrpc.ToGRPC(err)
@@ -546,11 +540,10 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 
 	// Start the I/O forwarder AFTER guest has created the process and registered with I/O manager.
 	// This ensures the RPC I/O subscriber can find the process.
-	if ioForwarder != nil {
-		if err := ioForwarder.Start(ctx); err != nil {
-			log.G(ctx).WithError(err).Error("failed to start I/O forwarder")
-			// Don't fail the create, just log the error - I/O may not work but container is created
-		}
+	// Note: forwarder is always non-nil (noopForwarder for passthrough mode), so Start() is always safe.
+	if err := ioForwarder.Start(ctx); err != nil {
+		log.G(ctx).WithError(err).Error("failed to start I/O forwarder")
+		// Don't fail the create, just log the error - I/O may not work but container is created
 	}
 
 	log.G(ctx).WithFields(log.Fields{
@@ -739,7 +732,8 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Warn("delete task failed")
 		if r.ExecID == "" {
 			s.containerMu.Lock()
-			if s.container != nil && s.container.io != nil && s.container.io.init.forwarder != nil {
+			// Forwarder is always non-nil when io is set (noopForwarder for passthrough mode)
+			if s.container != nil && s.container.io != nil {
 				if ioErr := s.container.io.init.forwarder.Shutdown(ctx); ioErr != nil {
 					log.G(ctx).WithError(ioErr).Warn("failed to shutdown io after delete failure")
 				}
@@ -772,10 +766,9 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 				}
 			}
 		} else {
+			// Forwarder is always non-nil when io is set (noopForwarder for passthrough mode)
 			if s.container.io != nil {
-				if s.container.io.init.forwarder != nil {
-					ioForwarders = append(ioForwarders, s.container.io.init.forwarder)
-				}
+				ioForwarders = append(ioForwarders, s.container.io.init.forwarder)
 				for _, pio := range s.container.io.exec {
 					ioForwarders = append(ioForwarders, pio.forwarder)
 				}
@@ -799,10 +792,8 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	}
 
 	// Execute cleanup operations
+	// Forwarders are always non-nil (noopForwarder for passthrough mode)
 	for i, forwarder := range ioForwarders {
-		if forwarder == nil {
-			continue
-		}
 		if err := forwarder.Shutdown(ctx); err != nil {
 			if i == 0 && r.ExecID == "" {
 				log.G(ctx).WithError(err).Error("failed to shutdown io after delete")
@@ -895,10 +886,9 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 			forwarder: execForwarder,
 		}
 	} else {
-		if execForwarder != nil {
-			if err := execForwarder.Shutdown(ctx); err != nil {
-				log.G(ctx).WithError(err).Error("failed to shutdown exec io after container not found")
-			}
+		// Forwarder is always non-nil (noopForwarder for passthrough mode)
+		if shutdownErr := execForwarder.Shutdown(ctx); shutdownErr != nil {
+			log.G(ctx).WithError(shutdownErr).Error("failed to shutdown exec io after container not found")
 		}
 		s.containerMu.Unlock()
 		return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "container %q not found", r.ID)
@@ -919,14 +909,13 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 
 	if err != nil {
 		s.containerMu.Lock()
-		if s.container != nil && s.containerID == r.ID {
-			if s.container.io != nil {
-				if pio, ok := s.container.io.exec[r.ExecID]; ok && pio.forwarder != nil {
-					if err := pio.forwarder.Shutdown(ctx); err != nil {
-						log.G(ctx).WithError(err).Error("failed to shutdown exec io after exec failure")
-					}
-					delete(s.container.io.exec, r.ExecID)
+		if s.container != nil && s.containerID == r.ID && s.container.io != nil {
+			// Forwarder is always non-nil when exec io is set (noopForwarder for passthrough mode)
+			if pio, ok := s.container.io.exec[r.ExecID]; ok {
+				if shutdownErr := pio.forwarder.Shutdown(ctx); shutdownErr != nil {
+					log.G(ctx).WithError(shutdownErr).Error("failed to shutdown exec io after exec failure")
 				}
+				delete(s.container.io.exec, r.ExecID)
 			}
 		}
 		s.containerMu.Unlock()
@@ -935,11 +924,10 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 
 	// Start the I/O forwarder AFTER guest has created the exec process and registered with I/O manager.
 	// This ensures the RPC I/O subscriber can find the process.
-	if execForwarder != nil {
-		if err := execForwarder.Start(ctx); err != nil {
-			log.G(ctx).WithError(err).Error("failed to start exec I/O forwarder")
-			// Don't fail the exec, just log the error - I/O may not work but exec is created
-		}
+	// Note: forwarder is always non-nil (noopForwarder for passthrough mode), so Start() is always safe.
+	if err := execForwarder.Start(ctx); err != nil {
+		log.G(ctx).WithError(err).Error("failed to start exec I/O forwarder")
+		// Don't fail the exec, just log the error - I/O may not work but exec is created
 	}
 
 	return resp, nil
@@ -1051,20 +1039,17 @@ func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptyp
 	// close to the guest via RPC.
 	if r.Stdin {
 		s.containerMu.Lock()
-		if s.container != nil && s.containerID == r.ID {
+		if s.container != nil && s.containerID == r.ID && s.container.io != nil {
+			// Forwarder is always non-nil when io is set (noopForwarder for passthrough mode)
 			if r.ExecID == "" {
 				// Container stdin
-				if s.container.io != nil && s.container.io.init.forwarder != nil {
-					s.container.io.init.forwarder.CloseStdin()
-					log.G(ctx).Debug("signaled RPC forwarder to close container stdin")
-				}
+				s.container.io.init.forwarder.CloseStdin()
+				log.G(ctx).Debug("signaled forwarder to close container stdin")
 			} else {
 				// Exec stdin
-				if s.container.io != nil {
-					if pio, ok := s.container.io.exec[r.ExecID]; ok && pio.forwarder != nil {
-						pio.forwarder.CloseStdin()
-						log.G(ctx).WithField("exec", r.ExecID).Debug("signaled RPC forwarder to close exec stdin")
-					}
+				if pio, ok := s.container.io.exec[r.ExecID]; ok {
+					pio.forwarder.CloseStdin()
+					log.G(ctx).WithField("exec", r.ExecID).Debug("signaled forwarder to close exec stdin")
 				}
 			}
 		}
@@ -1244,6 +1229,9 @@ func (s *service) waitForIOBeforeExit(ctx context.Context, ev *types.Envelope) {
 	// Trade-off: Too short = data loss on slow systems; too long = delayed exit events.
 	// 30s is conservative but safe. If you're hitting this timeout regularly, investigate
 	// your I/O pipeline (network latency, subscriber throughput).
+	//
+	// COORDINATION NOTE: This must be >= guest's subscriberWaitTimeout (10s in manager.go).
+	// The breakdown is: guest wait (10s) + network latency (~1s) + FIFO flush (~1s) + margin.
 	const ioWaitTimeout = 30 * time.Second
 	done := make(chan struct{})
 	go func() {

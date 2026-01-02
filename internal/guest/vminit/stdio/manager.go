@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/containerd/errdefs"
@@ -99,6 +100,10 @@ type processIO struct {
 type Manager struct {
 	mu        sync.RWMutex
 	processes map[processKey]*processIO
+
+	// Metrics for monitoring data loss. These are cumulative across all processes.
+	droppedChunks atomic.Int64 // Total chunks dropped due to slow subscribers
+	droppedBytes  atomic.Int64 // Total bytes dropped due to slow subscribers
 }
 
 // NewManager creates a new I/O manager.
@@ -177,7 +182,11 @@ func (m *Manager) fanOutReader(containerID, execID string, reader io.Reader, pio
 					select {
 					case sub.ch <- OutputData{Data: data}:
 					default:
-						log.L.WithField("container", containerID).WithField("stream", cfg.name).Warn("dropping data for slow subscriber")
+						// Track dropped data for diagnostics
+						m.droppedChunks.Add(1)
+						m.droppedBytes.Add(int64(len(data)))
+						log.L.WithField("container", containerID).WithField("stream", cfg.name).
+							WithField("droppedBytes", len(data)).Warn("dropping data for slow subscriber")
 					}
 				}
 			}
@@ -433,7 +442,11 @@ func (m *Manager) sendBufferedData(containerID string, ch chan OutputData, buffe
 		select {
 		case ch <- data:
 		default:
-			log.L.WithField("container", containerID).Warn("dropping buffered data for slow subscriber")
+			// Track dropped buffered data for diagnostics
+			m.droppedChunks.Add(1)
+			m.droppedBytes.Add(int64(len(data.Data)))
+			log.L.WithField("container", containerID).
+				WithField("droppedBytes", len(data.Data)).Warn("dropping buffered data for slow subscriber")
 		}
 	}
 }
@@ -472,12 +485,28 @@ func (m *Manager) HasProcess(containerID, execID string) bool {
 	return ok
 }
 
+// DroppedStats returns the cumulative count of dropped chunks and bytes.
+// These metrics help diagnose slow subscriber issues in production.
+// Non-zero values indicate data loss due to subscriber backpressure.
+func (m *Manager) DroppedStats() (chunks, bytes int64) {
+	return m.droppedChunks.Load(), m.droppedBytes.Load()
+}
+
 // subscriberWaitTimeout is the maximum time to wait for subscriber streams to finish.
 //
 // Rationale: This prevents WaitForIOComplete from blocking indefinitely if a subscriber
 // fails to call its done() function. This is a safety net - properly behaved subscribers
 // should complete quickly. If you hit this timeout, investigate why subscribers aren't
 // signaling completion (likely a bug in the RPC stream handling).
+//
+// COORDINATION NOTE: The host shim (service.go) has a separate ioWaitTimeout (30s) that
+// must be >= this value. The host waits for its forwarder goroutines, which in turn wait
+// for the guest RPC stream to complete. The host timeout accounts for:
+//   - This guest timeout (10s)
+//   - Network latency for RPC completion signal
+//   - Host-side FIFO flush time
+//
+// If you change this value, review the host's ioWaitTimeout as well.
 const subscriberWaitTimeout = 10 * time.Second
 
 // WaitForIOComplete waits for all I/O to complete for the specified process.

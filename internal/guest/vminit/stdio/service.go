@@ -71,11 +71,20 @@ type outputSender interface {
 }
 
 // streamOutput streams data from the channel to the RPC stream.
-// It uses a "biased select" pattern that prioritizes draining data from the
-// channel before honoring context cancellation to prevent data loss.
+//
+// This function uses a "biased select" pattern to prevent data loss on cancellation.
+// The problem: A standard "select { case <-ctx.Done(): ... case data := <-ch: ... }"
+// may choose ctx.Done() even when data is available, causing data loss.
+//
+// Solution: We first try a non-blocking receive from the data channel. Only if no
+// data is immediately available do we wait on both channels. This ensures we always
+// drain available data before checking for cancellation.
+//
+// Even after ctx.Done() fires, we call drainRemaining() to send any buffered data
+// that arrived between our last receive and the cancellation signal.
 func (s *service) streamOutput(ctx context.Context, ch <-chan OutputData, stream outputSender, containerID string) error {
 	for {
-		// Biased select: always try to drain data first (non-blocking).
+		// Step 1: Non-blocking receive - prioritize data over cancellation
 		select {
 		case data, ok := <-ch:
 			finished, err := s.sendChunk(stream, data, ok)
@@ -84,11 +93,13 @@ func (s *service) streamOutput(ctx context.Context, ch <-chan OutputData, stream
 			}
 			continue
 		default:
+			// No data immediately available, fall through to blocking select
 		}
 
-		// No data immediately available - wait for data or cancellation.
+		// Step 2: Blocking wait - only check cancellation when no data pending
 		select {
 		case <-ctx.Done():
+			// Context cancelled, but there may be data in flight - drain it
 			return s.drainRemaining(ctx, ch, stream, containerID)
 		case data, ok := <-ch:
 			finished, err := s.sendChunk(stream, data, ok)

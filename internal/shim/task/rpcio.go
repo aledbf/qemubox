@@ -262,7 +262,7 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 		if err != nil {
 			attempts++
 			if outputRetryMaxAttempts > 0 && attempts >= outputRetryMaxAttempts {
-				logger.WithError(err).WithField("attempts", attempts).Error("retry limit reached")
+				logger.WithError(err).WithField("attempts", attempts).Error("failed to get stdio client after max retries")
 				return
 			}
 			logger.WithError(err).WithField("retryDelay", retryDelay).Debug("failed to get stdio client, will retry")
@@ -295,7 +295,7 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 			}
 			attempts++
 			if outputRetryMaxAttempts > 0 && attempts >= outputRetryMaxAttempts {
-				logger.WithError(err).WithField("attempts", attempts).Error("retry limit reached")
+				logger.WithError(err).WithField("attempts", attempts).Error("failed to start output stream after max retries")
 				return
 			}
 			logger.WithError(err).WithField("retryDelay", retryDelay).Debug("failed to start output stream, will retry")
@@ -332,7 +332,7 @@ func (f *RPCIOForwarder) forwardOutput(ctx context.Context, streamName, path str
 		// For other errors, retry with backoff
 		attempts++
 		if outputRetryMaxAttempts > 0 && attempts >= outputRetryMaxAttempts {
-			logger.WithError(streamErr).WithField("attempts", attempts).Error("retry limit reached")
+			logger.WithError(streamErr).WithField("attempts", attempts).Error("output stream failed after max retries")
 			return
 		}
 		logger.WithError(streamErr).WithField("retryDelay", retryDelay).Debug("output stream error, will retry")

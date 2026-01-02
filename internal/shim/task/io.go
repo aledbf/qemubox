@@ -34,6 +34,23 @@ const (
 // the kernel discards the buffered data. By holding a read-side FD open,
 // we ensure the buffer persists until containerd opens its read side.
 //
+// Race this prevents:
+//
+//	Without keepalive:
+//	  1. Process writes "hello\n" to FIFO
+//	  2. Process exits, closes write end
+//	  3. Kernel discards buffer (no readers!)
+//	  4. Containerd opens FIFO for reading
+//	  5. Containerd sees EOF, never gets "hello\n"
+//
+//	With keepalive:
+//	  1. We open read end (keepalive FD)
+//	  2. Process writes "hello\n" to FIFO
+//	  3. Process exits, closes write end
+//	  4. Containerd opens FIFO for reading
+//	  5. Containerd reads "hello\n", then EOF
+//	  6. We close keepalive FD (after I/O complete)
+//
 // This pattern is borrowed from Kata Containers (process.rs stdout_r/stderr_r).
 type fifoKeepalive struct {
 	stdout io.Closer
@@ -115,9 +132,13 @@ type forwardIOSetup struct {
 
 // IOForwarder owns a complete I/O forwarding lifecycle.
 //
+// This interface is always non-nil when returned from forwardIO/forwardIOWithIDs.
+// Use noopForwarder for cases where no actual I/O forwarding is needed (passthrough mode).
+//
 // Implementations:
-//   - directForwarder: Uses synchronous io.Copy goroutines. Start/CloseStdin/WaitForComplete are no-ops.
-//   - RPCIOForwarder: Uses TTRPC streaming. All methods are active.
+//   - noopForwarder: No-op implementation for passthrough or null I/O.
+//   - directForwarder: Uses synchronous io.Copy goroutines.
+//   - RPCIOForwarder: Uses TTRPC streaming for attach support.
 type IOForwarder interface {
 	// GuestStdio returns the stdio config to pass to the guest.
 	GuestStdio() stdio.Stdio
@@ -130,6 +151,18 @@ type IOForwarder interface {
 	// WaitForComplete blocks until I/O is complete (without shutting down).
 	WaitForComplete()
 }
+
+// noopForwarder is a no-op IOForwarder for passthrough or null I/O modes.
+// All methods are safe to call but do nothing.
+type noopForwarder struct {
+	guest stdio.Stdio
+}
+
+func (n *noopForwarder) GuestStdio() stdio.Stdio        { return n.guest }
+func (n *noopForwarder) Start(context.Context) error    { return nil }
+func (n *noopForwarder) Shutdown(context.Context) error { return nil }
+func (n *noopForwarder) CloseStdin()                    {}
+func (n *noopForwarder) WaitForComplete()               {}
 
 type directForwarder struct {
 	guest     stdio.Stdio
@@ -275,7 +308,8 @@ func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, contain
 	}
 	pio := sio
 	if pio.IsNull() {
-		return pio, nil, nil
+		// Return noopForwarder instead of nil to simplify caller code (no nil checks needed)
+		return pio, &noopForwarder{guest: pio}, nil
 	}
 
 	// For non-TTY mode with fifo:// scheme (or bare paths) on all configured streams,
@@ -314,7 +348,8 @@ func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, contain
 		return stdio.Stdio{}, nil, err
 	}
 	if setup.passthrough {
-		return setup.pio, &directForwarder{guest: setup.pio}, nil
+		// Passthrough mode: guest handles I/O directly, use noopForwarder
+		return setup.pio, &noopForwarder{guest: setup.pio}, nil
 	}
 	pio = setup.pio
 	streams := setup.streams
