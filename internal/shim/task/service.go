@@ -73,6 +73,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	eventstypes "github.com/containerd/containerd/api/events"
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
 	"github.com/containerd/containerd/api/types"
 	"github.com/containerd/containerd/v2/core/runtime"
@@ -85,6 +86,7 @@ import (
 	"github.com/containerd/errdefs/pkg/errgrpc"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
+	"github.com/containerd/typeurl/v2"
 
 	bundleAPI "github.com/aledbf/qemubox/containerd/api/services/bundle/v1"
 	"github.com/aledbf/qemubox/containerd/api/services/vmevents/v1"
@@ -619,6 +621,14 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 				s.requestShutdownAndExit(ctx, "vm event stream closed")
 				return
 			}
+
+			// For TaskExit events, wait for I/O forwarder to complete before forwarding.
+			// This ensures all stdout/stderr data is written to FIFOs before containerd
+			// receives the exit event, preventing a race where the exit arrives before output.
+			if ev.Topic == runtime.TaskExitEventTopic {
+				s.waitForIOBeforeExit(ctx, ev)
+			}
+
 			s.send(ev)
 		}
 	}()
@@ -1156,6 +1166,79 @@ func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.
 	}
 	defer cleanup()
 	return taskAPI.NewTTRPCTaskClient(vmc).Stats(ctx, r)
+}
+
+// getIOForwarder returns the I/O forwarder for the given container/exec ID.
+// Returns nil if no forwarder is found.
+func (s *service) getIOForwarder(containerID, execID string) IOForwarder {
+	s.containerMu.Lock()
+	defer s.containerMu.Unlock()
+
+	if s.container == nil || s.container.io == nil {
+		return nil
+	}
+
+	// Check if container ID matches
+	if s.containerID != containerID {
+		return nil
+	}
+
+	if execID == "" {
+		// Init process
+		return s.container.io.init.forwarder
+	}
+	// Exec process
+	if pio, ok := s.container.io.exec[execID]; ok {
+		return pio.forwarder
+	}
+	return nil
+}
+
+// waitForIOBeforeExit waits for the I/O forwarder to complete before forwarding a TaskExit event.
+// This ensures that all stdout/stderr data is written to FIFOs before containerd receives the exit event.
+func (s *service) waitForIOBeforeExit(ctx context.Context, ev *types.Envelope) {
+	// Parse the event to get container/exec IDs
+	if ev.Event == nil {
+		return
+	}
+
+	v, err := typeurl.UnmarshalAny(ev.Event)
+	if err != nil {
+		log.G(ctx).WithError(err).Debug("failed to unmarshal event for I/O wait")
+		return
+	}
+
+	taskExit, ok := v.(*eventstypes.TaskExit)
+	if !ok {
+		return
+	}
+
+	// Get the exec ID (empty for init process)
+	execID := ""
+	if taskExit.ID != taskExit.ContainerID {
+		execID = taskExit.ID
+	}
+
+	forwarder := s.getIOForwarder(taskExit.ContainerID, execID)
+	if forwarder == nil {
+		log.G(ctx).WithFields(log.Fields{
+			"container": taskExit.ContainerID,
+			"exec":      execID,
+		}).Debug("no I/O forwarder found for TaskExit, proceeding")
+		return
+	}
+
+	log.G(ctx).WithFields(log.Fields{
+		"container": taskExit.ContainerID,
+		"exec":      execID,
+	}).Debug("waiting for I/O forwarder to complete before forwarding TaskExit")
+
+	forwarder.WaitForComplete()
+
+	log.G(ctx).WithFields(log.Fields{
+		"container": taskExit.ContainerID,
+		"exec":      execID,
+	}).Debug("I/O forwarder complete, forwarding TaskExit")
 }
 
 func (s *service) send(evt interface{}) {

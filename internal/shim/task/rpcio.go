@@ -374,12 +374,16 @@ func (f *RPCIOForwarder) streamOutput(ctx context.Context, logger *log.Entry, st
 
 		if len(chunk.Data) > 0 {
 			logger.WithField("bytes", len(chunk.Data)).Debug("received data from guest, writing to fifo")
-			_, err = fifoWriter.Write(chunk.Data)
+			n, err := fifoWriter.Write(chunk.Data)
 			if err != nil {
 				logger.WithError(err).Warn("error writing to output fifo")
 				// FIFO write errors are terminal - don't retry
 				return nil
 			}
+			if n != len(chunk.Data) {
+				logger.WithField("expected", len(chunk.Data)).WithField("actual", n).Warn("short write to output fifo")
+			}
+			logger.WithField("bytesWritten", n).Debug("successfully wrote data to fifo")
 		}
 	}
 }
@@ -463,6 +467,19 @@ func (f *RPCIOForwarder) CloseStdin() {
 	case f.stdinCloser <- struct{}{}:
 	default:
 	}
+}
+
+// WaitForComplete blocks until all I/O forwarder goroutines complete naturally.
+// This should be called when waiting for I/O to finish (e.g., before forwarding
+// exit events) without forcing shutdown. Returns immediately if not started.
+func (f *RPCIOForwarder) WaitForComplete() {
+	f.mu.Lock()
+	started := f.started
+	f.mu.Unlock()
+	if !started {
+		return
+	}
+	f.wg.Wait()
 }
 
 // Shutdown stops all I/O forwarding and cleans up resources.

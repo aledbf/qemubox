@@ -59,11 +59,13 @@ type forwardIOSetup struct {
 // Start begins forwarding (no-op for direct I/O).
 // Shutdown stops forwarding and cleans up resources.
 // CloseStdin signals stdin closure (no-op for direct I/O).
+// WaitForComplete blocks until I/O is complete (without shutting down).
 type IOForwarder interface {
 	GuestStdio() stdio.Stdio
 	Start(ctx context.Context) error
 	Shutdown(ctx context.Context) error
 	CloseStdin()
+	WaitForComplete()
 }
 
 type directForwarder struct {
@@ -87,6 +89,11 @@ func (d *directForwarder) Shutdown(ctx context.Context) error {
 }
 
 func (d *directForwarder) CloseStdin() {}
+
+func (d *directForwarder) WaitForComplete() {
+	// Direct forwarder uses synchronous io.Copy goroutines.
+	// WaitForComplete is a no-op since the shutdown function handles waiting.
+}
 
 func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forwardIOSetup, error) {
 	log.G(ctx).WithFields(log.Fields{
