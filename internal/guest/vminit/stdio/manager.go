@@ -304,20 +304,7 @@ func (m *Manager) subscribe(ctx context.Context, containerID, execID string, get
 
 	pio.mu.Lock()
 
-	if pio.exited {
-		// Process already exited, return a channel with EOF.
-		ch := make(chan OutputData, 1)
-		ch <- OutputData{EOF: true}
-		close(ch)
-		pio.mu.Unlock()
-		return ch, nil
-	}
-
-	// Create subscriber with buffered channel.
-	ctx, cancel := context.WithCancel(ctx)
-	ch := make(chan OutputData, 64) // Buffer to avoid blocking the fan-out.
-	sub := &subscriber{ch: ch, cancel: cancel}
-
+	// Get any buffered data for this stream (stdout or stderr).
 	var buffered []OutputData
 	if getSubs(pio) == &pio.stdoutSubs {
 		buffered = append(buffered, pio.stdoutBuf...)
@@ -328,6 +315,28 @@ func (m *Manager) subscribe(ctx context.Context, containerID, execID string, get
 		pio.stderrBuf = nil
 		pio.stderrBufBytes = 0
 	}
+
+	if pio.exited {
+		// Process already exited. Drain any buffered data, then send EOF.
+		// This handles the case where a fast process (like /bin/echo) exits
+		// before the RPC subscriber attaches - the buffered output must still
+		// be delivered.
+		ch := make(chan OutputData, len(buffered)+1)
+		for _, data := range buffered {
+			ch <- data
+		}
+		ch <- OutputData{EOF: true}
+		close(ch)
+		log.L.WithField("container", containerID).WithField("exec", execID).
+			WithField("bufferedChunks", len(buffered)).Debug("late subscriber received buffered data (process already exited)")
+		pio.mu.Unlock()
+		return ch, nil
+	}
+
+	// Create subscriber with buffered channel.
+	ctx, cancel := context.WithCancel(ctx)
+	ch := make(chan OutputData, 64) // Buffer to avoid blocking the fan-out.
+	sub := &subscriber{ch: ch, cancel: cancel}
 
 	subs := getSubs(pio)
 	*subs = append(*subs, sub)

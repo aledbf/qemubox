@@ -120,12 +120,30 @@ func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forw
 
 // setupFileScheme handles the "file://" URI scheme.
 // It creates VM-side streams and saves the original file path for host-side copying.
-func setupFileScheme(ctx context.Context, vmi vm.Instance, pio stdio.Stdio, filePath string) (forwardIOSetup, error) {
-	log.G(ctx).WithField("filePath", filePath).Debug("file scheme: using file path for logging")
+func setupFileScheme(ctx context.Context, vmi vm.Instance, pio stdio.Stdio, stdoutFilePath string) (forwardIOSetup, error) {
+	log.G(ctx).WithField("stdoutFilePath", stdoutFilePath).Debug("file scheme: using file path for logging")
 
-	// Validate parent directory can be created
-	if err := os.MkdirAll(filepath.Dir(filePath), 0750); err != nil {
-		return forwardIOSetup{}, fmt.Errorf("failed to create parent directory: %w", err)
+	// Validate parent directory can be created for stdout
+	if err := os.MkdirAll(filepath.Dir(stdoutFilePath), 0750); err != nil {
+		return forwardIOSetup{}, fmt.Errorf("failed to create parent directory for stdout: %w", err)
+	}
+
+	// Parse stderr path - it may be different from stdout
+	stderrFilePath := stdoutFilePath // default to same as stdout
+	if pio.Stderr != "" && pio.Stderr != pio.Stdout {
+		stderrURL, err := url.Parse(pio.Stderr)
+		if err != nil {
+			return forwardIOSetup{}, fmt.Errorf("unable to parse stderr uri: %w", err)
+		}
+		if stderrURL.Scheme == "file" || stderrURL.Scheme == "" {
+			stderrFilePath = stderrURL.Path
+			// Validate parent directory for stderr if different
+			if stderrFilePath != stdoutFilePath {
+				if err := os.MkdirAll(filepath.Dir(stderrFilePath), 0750); err != nil {
+					return forwardIOSetup{}, fmt.Errorf("failed to create parent directory for stderr: %w", err)
+				}
+			}
+		}
 	}
 
 	// createStreams replaces pio.Stdout/Stderr with stream:// URIs for the VM
@@ -137,18 +155,19 @@ func setupFileScheme(ctx context.Context, vmi vm.Instance, pio stdio.Stdio, file
 	log.G(ctx).WithFields(log.Fields{
 		"stdout":         streamPio.Stdout,
 		"stderr":         streamPio.Stderr,
-		"stdoutFilePath": filePath,
+		"stdoutFilePath": stdoutFilePath,
+		"stderrFilePath": stderrFilePath,
 	}).Debug("file scheme: created streams, will copy to file on host")
 
 	// Return setup with:
 	// - streamPio: Contains stream:// URIs for VM
-	// - stdoutFilePath/stderrFilePath: Original file path for host-side copyStreams
+	// - stdoutFilePath/stderrFilePath: Original file paths for host-side copyStreams
 	return forwardIOSetup{
 		pio:            streamPio,
 		streams:        streams,
 		usePIOPaths:    true,
-		stdoutFilePath: filePath,
-		stderrFilePath: filePath,
+		stdoutFilePath: stdoutFilePath,
+		stderrFilePath: stderrFilePath,
 	}, nil
 }
 
