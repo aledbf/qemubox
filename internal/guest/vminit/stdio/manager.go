@@ -24,6 +24,7 @@ type processKey struct {
 type subscriber struct {
 	ch     chan OutputData
 	cancel context.CancelFunc
+	done   chan struct{} // Closed when the subscriber's RPC stream finishes
 }
 
 // OutputData represents a chunk of output data sent to subscribers.
@@ -59,7 +60,12 @@ type processIO struct {
 	exitChan chan struct{}
 
 	// Goroutine synchronization.
-	wg sync.WaitGroup
+	wg sync.WaitGroup // Tracks fanOutReader goroutines
+
+	// Subscriber stream synchronization.
+	// Tracks active RPC subscriber streams so we can wait for them to finish
+	// sending all data before signaling I/O complete.
+	subscriberWg sync.WaitGroup
 }
 
 // Manager maintains I/O state for all container processes.
@@ -336,10 +342,14 @@ func (m *Manager) subscribe(ctx context.Context, containerID, execID string, get
 	// Create subscriber with buffered channel.
 	ctx, cancel := context.WithCancel(ctx)
 	ch := make(chan OutputData, 64) // Buffer to avoid blocking the fan-out.
-	sub := &subscriber{ch: ch, cancel: cancel}
+	done := make(chan struct{})
+	sub := &subscriber{ch: ch, cancel: cancel, done: done}
 
 	subs := getSubs(pio)
 	*subs = append(*subs, sub)
+
+	// Track this subscriber in the WaitGroup so WaitForIOComplete can wait for it.
+	pio.subscriberWg.Add(1)
 
 	log.L.WithField("container", containerID).WithField("exec", execID).
 		WithField("bufferedChunks", len(buffered)).Debug("subscriber registered")
@@ -355,10 +365,16 @@ func (m *Manager) subscribe(ctx context.Context, containerID, execID string, get
 		}
 	}
 
-	// Remove subscriber when context is cancelled.
+	// Wait for subscriber to signal done, then clean up.
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-done:
+			// Subscriber finished processing
+		case <-ctx.Done():
+			// Context cancelled
+		}
 		m.removeSubscriber(containerID, execID, sub, getSubs)
+		pio.subscriberWg.Done()
 	}()
 
 	return ch, nil
@@ -398,9 +414,13 @@ func (m *Manager) HasProcess(containerID, execID string) bool {
 	return ok
 }
 
-// WaitForIOComplete waits for all I/O goroutines (fanOutReaders) to complete
-// for the specified process. This should be called before sending exit events
-// to ensure all output has been delivered to subscribers.
+// WaitForIOComplete waits for all I/O to complete for the specified process.
+// This waits for both:
+// 1. fanOutReader goroutines to finish reading from process stdout/stderr
+// 2. Subscriber RPC streams to finish sending data to the host
+//
+// This should be called before sending exit events to ensure all output has
+// been fully transmitted to the host shim.
 // Returns immediately if the process is not registered.
 func (m *Manager) WaitForIOComplete(containerID, execID string) {
 	key := processKey{containerID: containerID, execID: execID}
@@ -415,7 +435,52 @@ func (m *Manager) WaitForIOComplete(containerID, execID string) {
 
 	// Wait for fanOutReader goroutines to finish reading all data
 	pio.wg.Wait()
-	log.L.WithField("container", containerID).WithField("exec", execID).Debug("I/O complete")
+	log.L.WithField("container", containerID).WithField("exec", execID).Debug("fanOutReaders complete")
+
+	// Wait for all subscriber RPC streams to finish sending data to host.
+	// This is critical: the fanOutReaders may have finished reading and sent
+	// data to subscriber channels, but the RPC streams might still be sending.
+	pio.subscriberWg.Wait()
+	log.L.WithField("container", containerID).WithField("exec", execID).Debug("I/O complete (all subscribers finished)")
+}
+
+// SubscriberDone signals that a subscriber's RPC stream has finished.
+// This should be called by the RPC stream handler after it has sent all data
+// (including EOF) to the host. It allows WaitForIOComplete to know when all
+// output has been fully transmitted.
+func (m *Manager) SubscriberDone(containerID, execID, streamName string) {
+	key := processKey{containerID: containerID, execID: execID}
+
+	m.mu.RLock()
+	pio, ok := m.processes[key]
+	m.mu.RUnlock()
+
+	if !ok {
+		return
+	}
+
+	pio.mu.Lock()
+	defer pio.mu.Unlock()
+
+	// Find the subscriber for this stream and close its done channel.
+	var subs *[]*subscriber
+	if streamName == "stdout" {
+		subs = &pio.stdoutSubs
+	} else {
+		subs = &pio.stderrSubs
+	}
+
+	for _, sub := range *subs {
+		select {
+		case <-sub.done:
+			// Already closed
+		default:
+			close(sub.done)
+			log.L.WithField("container", containerID).WithField("exec", execID).
+				WithField("stream", streamName).Debug("subscriber marked as done")
+			return // Only mark one subscriber per call
+		}
+	}
 }
 
 func (m *Manager) bufferOutputLocked(pio *processIO, streamName string, data OutputData) {

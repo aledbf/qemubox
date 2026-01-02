@@ -52,6 +52,10 @@ func (s *service) ReadStdout(ctx context.Context, req *stdiov1.ReadOutputRequest
 		return toGRPCError(err)
 	}
 
+	// Signal completion when the RPC stream finishes. This allows WaitForIOComplete
+	// to know when all output has been fully transmitted to the host.
+	defer s.manager.SubscriberDone(req.ContainerId, req.ExecId, "stdout")
+
 	return s.streamOutput(ctx, ch, stream, "stdout", req.ContainerId, req.ExecId)
 }
 
@@ -63,6 +67,10 @@ func (s *service) ReadStderr(ctx context.Context, req *stdiov1.ReadOutputRequest
 	if err != nil {
 		return toGRPCError(err)
 	}
+
+	// Signal completion when the RPC stream finishes. This allows WaitForIOComplete
+	// to know when all output has been fully transmitted to the host.
+	defer s.manager.SubscriberDone(req.ContainerId, req.ExecId, "stderr")
 
 	return s.streamOutput(ctx, ch, stream, "stderr", req.ContainerId, req.ExecId)
 }
