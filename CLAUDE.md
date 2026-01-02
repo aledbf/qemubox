@@ -301,7 +301,7 @@ task build:qemu
 # Option 2: Use system package manager
 sudo apt-get install qemu-system-x86
 
-# Option 3: Install to beacon directory
+# Option 3: Install to qemubox directory
 sudo mkdir -p /usr/share/qemubox/bin
 sudo cp /usr/bin/qemu-system-x86_64 /usr/share/qemubox/bin/
 ```
@@ -441,7 +441,7 @@ From `internal/guest/vminit/task/service.go`:
 
 ### CNI-Based Networking
 
-Beacon uses **CNI (Container Network Interface)** exclusively for all network management:
+qemubox uses **CNI (Container Network Interface)** exclusively for all network management:
 
 - Standard CNI plugin chains for network configuration
 - Integration with CNI ecosystem (Calico, Cilium, etc.)
@@ -507,16 +507,22 @@ See `examples/cni/` for more configuration examples.
 
 ### Firewall Rules
 
-```bash
-# View beacon firewall rules
-nft list ruleset | grep qemubox_runner
+Firewall rules are managed entirely by the **CNI firewall plugin**, which creates per-IP chains:
 
-# Tables created:
-# - beacon_runner_filter (forwarding)
-# - beacon_runner_nat (postrouting NAT)
+```bash
+# View CNI firewall rules
+nft list ruleset | grep CNI
+
+# Chains created by CNI firewall plugin:
+# - CNI-FORWARD (in filter table) - forwarding rules
+# - CNI-ADMIN (in filter table) - admin rules
+# - CNI-<hash> (in nat table) - per-container NAT/masquerade rules
+
+# Example: View NAT rules for container IPs
+nft list chain ip nat POSTROUTING | grep CNI
 ```
 
-**CNI Mode**: Firewall rules managed by CNI firewall plugin (iptables/nftables)
+**Note**: The CNI firewall plugin uses iptables-nft backend, creating rules in the standard `ip nat` and `ip filter` tables with `CNI-*` prefixed chains.
 
 ---
 
