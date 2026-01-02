@@ -1,4 +1,8 @@
+<div align="center">
+
 # qemubox
+
+**Lightweight VM isolation for containers**
 
 [![CI](https://github.com/aledbf/qemubox/actions/workflows/ci.yml/badge.svg)](https://github.com/aledbf/qemubox/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/aledbf/qemubox/branch/main/graph/badge.svg)](https://codecov.io/gh/aledbf/qemubox)
@@ -6,40 +10,36 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/aledbf/qemubox/containerd.svg)](https://pkg.go.dev/github.com/aledbf/qemubox/containerd)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-**Experimental** containerd runtime that runs each container in its own lightweight VM using QEMU/KVM.
+*Run each container in its own lightweight QEMU/KVM virtual machine*
 
-This project started as a fork of [nerdbox](https://github.com/containerd/nerdbox).
+[Quick Start](#quick-start) • [Demos](#demos) • [Architecture](#architecture) • [Documentation](#documentation)
 
-- Linux only (requires KVM)
-- One VM per container for strong isolation
-- Standard CNI networking
-- EROFS snapshots for efficient storage
+</div>
 
-## Why Fork?
+---
 
-[nerdbox](https://github.com/containerd/nerdbox) is an excellent project that pioneered the "shim-level VM isolation" approach for containerd. It uses [libkrun](https://github.com/containers/libkrun) as its VMM, enabling cross-platform support (Linux, macOS, Windows) and rootless operation.
+> **TL;DR**: Experimental containerd runtime providing VM-level isolation with ~300ms boot times.
+> Get the security of VMs with the UX of containers.
 
-**qemubox** takes a different path:
+## Features
 
-| | nerdbox | qemubox |
-|---|---------|---------|
-| **VMM** | libkrun (Rust) | QEMU/KVM |
-| **Platforms** | Linux, macOS, Windows | Linux only |
-| **Focus** | Cross-platform, rootless | Server workloads, KVM features |
-| **Networking** | libkrun networking | Standard CNI plugins |
+- ✅ **Strong isolation** — One VM per container via KVM hardware virtualization
+- ✅ **Fast boot** — ~300ms with optimized kernel and systemd
+- ✅ **Standard networking** — CNI plugin compatible (Calico, Cilium, etc.)
+- ✅ **Efficient storage** — EROFS snapshots with inline compression
+- ✅ **Snapshot & commit** — Persist VM state like Docker images
+- ✅ **containerd native** — Works with existing tooling (ctr, nerdctl, crictl)
 
-We forked because we wanted:
+## Table of Contents
 
-1. **QEMU's maturity** - Battle-tested VMM with extensive device support, debugging tools (QMP, gdbstub), and broad kernel compatibility
-2. **Standard CNI networking** - Reuse existing CNI plugins (Calico, Cilium, etc.) instead of custom networking
-3. **KVM-specific features** - CPU/memory hotplug, vhost-net, virtio-fs, and other Linux-specific optimizations
-4. **Simpler deployment** - Single static binary VMM without Rust runtime dependencies
-
-If you need cross-platform support or rootless containers, use nerdbox.
-
-## Why VMs?
-
-VM isolation provides a stronger security boundary than namespace-based containers, while maintaining compatibility with standard containerd tooling.
+- [Demos](#demos)
+- [Design Choices](#design-choices)
+- [Quick Start](#quick-start)
+- [Architecture](#architecture)
+- [Security](#security)
+- [Comparison](#comparison)
+- [Development](#development)
+- [Roadmap](#roadmap)
 
 ## Demos
 
@@ -54,6 +54,34 @@ Launch a full Ubuntu VM with Docker pre-installed. Shows ~300ms boot time with s
 Persist disk state between VM runs: install packages, create files, then commit to a new image with `nerdctl commit`. The next VM boots with all changes preserved - like Docker commits, but for entire VMs.
 
 > **Note**: Snapshot support (for EROFS) requires a custom containerd build from [aledbf/containerd@aledbf/erofs-snapshot-narrow](https://github.com/aledbf/containerd/tree/aledbf/erofs-snapshot-narrow) until the changes are upstreamed.
+
+---
+
+## Design Choices
+
+qemubox is inspired by [nerdbox](https://github.com/containerd/nerdbox), which pioneered the "shim-level VM isolation" approach for containerd using [libkrun](https://github.com/containers/libkrun).
+
+**qemubox** takes a different path, optimized for Linux server workloads:
+
+| | nerdbox | qemubox |
+|---|---------|---------|
+| **VMM** | libkrun (Rust) | QEMU/KVM |
+| **Platforms** | Linux, macOS, Windows | Linux only |
+| **Focus** | Cross-platform, rootless | Server workloads, KVM features |
+| **Networking** | libkrun networking | Standard CNI plugins |
+
+**Why QEMU/KVM?**
+
+1. **QEMU's maturity** - Battle-tested VMM with extensive device support, debugging tools (QMP, gdbstub), and broad kernel compatibility
+2. **Standard CNI networking** - Reuse existing CNI plugins (Calico, Cilium, etc.) instead of custom networking
+3. **KVM-specific features** - CPU/memory hotplug, vhost-net, virtio-fs, and other Linux-specific optimizations
+4. **Simpler deployment** - Single static binary VMM without Rust runtime dependencies
+
+If you need cross-platform support or rootless containers, check out [nerdbox](https://github.com/containerd/nerdbox).
+
+## Why VMs?
+
+VM isolation provides a stronger security boundary than namespace-based containers, while maintaining compatibility with standard containerd tooling.
 
 ## Quick Start
 
@@ -107,6 +135,15 @@ ctr --address /var/run/qemubox/containerd.sock run -t --rm \
 (use root:qemubox to log in)
 
 ## Architecture
+
+**Key components:**
+- **Shim**: Manages VM lifecycle and proxies I/O via vsock
+- **CNI**: Standard CNI plugin chains for networking
+- **QEMU**: Boots lightweight VMs with virtio devices
+- **vminitd**: Init daemon inside VM that runs crun
+
+<details>
+<summary>📐 View Architecture Diagram</summary>
 
 ```mermaid
 graph LR
@@ -178,11 +215,7 @@ graph LR
     linkStyle 8 stroke-width:2px,stroke:#00acc1,stroke-dasharray:3 6
 ```
 
-**Key components:**
-- **Shim**: Manages VM lifecycle and proxies I/O via vsock
-- **CNI**: Standard CNI plugin chains for networking
-- **QEMU**: Boots lightweight VMs with virtio devices
-- **vminitd**: Init daemon inside VM that runs crun
+</details>
 
 ## How It Works
 
@@ -193,7 +226,8 @@ graph LR
 5. **crun** starts the container process with resource limits
 6. Container I/O flows through vsock to containerd
 
-### Container Lifecycle
+<details>
+<summary>📊 View Container Lifecycle Sequence Diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -289,6 +323,8 @@ sequenceDiagram
     end
 ```
 
+</details>
+
 ## Security
 
 Multiple isolation layers:
@@ -337,13 +373,6 @@ examples/      - Example configurations
 hack/          - Development scripts
 images/        - Container/VM image builds
 ```
-
-## Documentation
-
-- [`CLAUDE.md`](CLAUDE.md) - Architecture and development guide
-- [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) - Configuration reference
-- [`deploy/config/`](deploy/config/) - Production configurations
-- [`examples/`](examples/) - Example configurations (config.json, CNI)
 
 ## Comparison
 
