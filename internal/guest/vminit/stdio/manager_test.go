@@ -9,17 +9,6 @@ import (
 	"time"
 )
 
-// mockReadCloser wraps a bytes.Buffer to implement io.ReadCloser
-type mockReadCloser struct {
-	*bytes.Buffer
-	closed bool
-}
-
-func (m *mockReadCloser) Close() error {
-	m.closed = true
-	return nil
-}
-
 // blockingReader is a reader that blocks until closed
 type blockingReader struct {
 	data   chan []byte
@@ -209,7 +198,7 @@ func TestManagerConcurrentSubscribers(t *testing.T) {
 	var wg sync.WaitGroup
 	received := make([]bool, numSubscribers)
 
-	for i := 0; i < numSubscribers; i++ {
+	for i := range numSubscribers {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
