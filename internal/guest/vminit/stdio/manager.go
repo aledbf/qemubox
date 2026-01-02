@@ -366,12 +366,17 @@ func (m *Manager) subscribe(ctx context.Context, containerID, execID string, get
 	}
 
 	// Wait for subscriber to signal done, then clean up.
+	// IMPORTANT: We must wait for 'done' to be closed before decrementing subscriberWg.
+	// The 'done' channel is closed by SubscriberDone when the RPC stream finishes.
+	// Even if ctx.Done() fires first (e.g., from Unregister calling sub.cancel()),
+	// we still wait for 'done' to ensure the stream has actually finished sending data.
 	go func() {
 		select {
 		case <-done:
-			// Subscriber finished processing
+			// Subscriber finished processing normally
 		case <-ctx.Done():
-			// Context cancelled
+			// Context cancelled (e.g., by Unregister) - still wait for stream to finish
+			<-done
 		}
 		m.removeSubscriber(containerID, execID, sub, getSubs)
 		pio.subscriberWg.Done()
