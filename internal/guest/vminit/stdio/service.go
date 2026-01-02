@@ -72,12 +72,40 @@ type outputSender interface {
 	Send(*stdiov1.OutputChunk) error
 }
 
+// streamOutput streams data from the channel to the RPC stream.
+// It uses a "biased select" pattern (from Kata Containers) that prioritizes
+// draining data from the channel before honoring context cancellation.
+// This ensures no data is lost when the context is cancelled while data
+// is still buffered in the channel.
 func (s *service) streamOutput(ctx context.Context, ch <-chan OutputData, stream outputSender, streamName, containerID, execID string) error {
 	for {
+		// Biased select: always try to drain data first (non-blocking).
+		// This prevents data loss when ctx.Done() fires while data is available.
+		select {
+		case data, ok := <-ch:
+			if !ok {
+				// Channel closed, send EOF.
+				log.G(ctx).WithField("container", containerID).WithField("stream", streamName).Debug("stream channel closed")
+				return stream.Send(&stdiov1.OutputChunk{Eof: true})
+			}
+
+			if err := s.sendChunk(ctx, stream, data, streamName, containerID); err != nil {
+				return err
+			}
+			if data.EOF {
+				return nil
+			}
+			continue // Loop back to drain more data
+		default:
+			// No data available, proceed to blocking select
+		}
+
+		// No data immediately available - now wait for either data or cancellation.
 		select {
 		case <-ctx.Done():
-			log.G(ctx).WithField("container", containerID).WithField("stream", streamName).Debug("stream cancelled")
-			return ctx.Err()
+			// Context cancelled, but drain any remaining data first.
+			log.G(ctx).WithField("container", containerID).WithField("stream", streamName).Debug("stream context cancelled, draining remaining data")
+			return s.drainAndClose(ctx, ch, stream, streamName, containerID)
 
 		case data, ok := <-ch:
 			if !ok {
@@ -86,26 +114,64 @@ func (s *service) streamOutput(ctx context.Context, ch <-chan OutputData, stream
 				return stream.Send(&stdiov1.OutputChunk{Eof: true})
 			}
 
-			log.G(ctx).WithField("container", containerID).WithField("stream", streamName).
-				WithField("bytes", len(data.Data)).WithField("eof", data.EOF).Debug("received chunk from channel")
-
-			chunk := &stdiov1.OutputChunk{
-				Data: data.Data,
-				Eof:  data.EOF,
-			}
-
-			if err := stream.Send(chunk); err != nil {
-				if errors.Is(err, io.EOF) {
-					return nil
-				}
-				log.G(ctx).WithError(err).WithField("container", containerID).WithField("stream", streamName).Warn("error sending chunk")
+			if err := s.sendChunk(ctx, stream, data, streamName, containerID); err != nil {
 				return err
 			}
-
 			if data.EOF {
-				log.G(ctx).WithField("container", containerID).WithField("stream", streamName).Debug("stream EOF")
 				return nil
 			}
+		}
+	}
+}
+
+// sendChunk sends a single chunk to the stream.
+func (s *service) sendChunk(ctx context.Context, stream outputSender, data OutputData, streamName, containerID string) error {
+	log.G(ctx).WithField("container", containerID).WithField("stream", streamName).
+		WithField("bytes", len(data.Data)).WithField("eof", data.EOF).Debug("received chunk from channel")
+
+	chunk := &stdiov1.OutputChunk{
+		Data: data.Data,
+		Eof:  data.EOF,
+	}
+
+	if err := stream.Send(chunk); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		log.G(ctx).WithError(err).WithField("container", containerID).WithField("stream", streamName).Warn("error sending chunk")
+		return err
+	}
+
+	if data.EOF {
+		log.G(ctx).WithField("container", containerID).WithField("stream", streamName).Debug("stream EOF")
+	}
+	return nil
+}
+
+// drainAndClose drains remaining data from the channel after context cancellation.
+// This ensures no data is lost even when the RPC context is cancelled.
+func (s *service) drainAndClose(ctx context.Context, ch <-chan OutputData, stream outputSender, streamName, containerID string) error {
+	for {
+		select {
+		case data, ok := <-ch:
+			if !ok {
+				// Channel closed
+				log.G(ctx).WithField("container", containerID).WithField("stream", streamName).Debug("channel closed while draining")
+				return stream.Send(&stdiov1.OutputChunk{Eof: true})
+			}
+
+			// Best effort send - ignore errors since context is already cancelled
+			if err := s.sendChunk(ctx, stream, data, streamName, containerID); err != nil {
+				log.G(ctx).WithError(err).WithField("container", containerID).WithField("stream", streamName).Debug("error sending during drain")
+				return ctx.Err()
+			}
+			if data.EOF {
+				return nil
+			}
+		default:
+			// No more data to drain
+			log.G(ctx).WithField("container", containerID).WithField("stream", streamName).Debug("drain complete, no more data")
+			return ctx.Err()
 		}
 	}
 }
