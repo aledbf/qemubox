@@ -14,6 +14,17 @@ import (
 	"github.com/containerd/log"
 )
 
+const (
+	// subscriberChannelBuffer is the buffer size for subscriber output channels.
+	// This provides some slack to avoid blocking the fan-out goroutine while
+	// the RPC stream sends data.
+	subscriberChannelBuffer = 64
+
+	// maxBufferedBytes is the maximum bytes to buffer per stream for late subscribers.
+	// Older data is discarded when this limit is exceeded.
+	maxBufferedBytes = 256 * 1024
+)
+
 // processKey uniquely identifies a process within a container.
 type processKey struct {
 	containerID string
@@ -101,47 +112,57 @@ func (m *Manager) Register(containerID, execID string, stdin io.WriteCloser, std
 	// Start fan-out goroutines for stdout and stderr.
 	if stdout != nil {
 		pio.wg.Add(1)
-		go m.fanOutReader(containerID, execID, "stdout", stdout, pio, func(p *processIO) *[]*subscriber { return &p.stdoutSubs })
+		go m.fanOutReader(containerID, execID, stdout, pio, stdoutConfig)
 	}
 	if stderr != nil {
 		pio.wg.Add(1)
-		go m.fanOutReader(containerID, execID, "stderr", stderr, pio, func(p *processIO) *[]*subscriber { return &p.stderrSubs })
+		go m.fanOutReader(containerID, execID, stderr, pio, stderrConfig)
 	}
 
 	log.L.WithField("container", containerID).WithField("exec", execID).Debug("registered process I/O")
 }
 
-// fanOutReader reads from a reader and distributes data to all subscribers.
-func (m *Manager) fanOutReader(containerID, execID, streamName string, reader io.Reader, pio *processIO, getSubs func(*processIO) *[]*subscriber) {
-	defer pio.wg.Done()
+// streamConfig holds configuration for a single output stream (stdout or stderr).
+type streamConfig struct {
+	name    string
+	getSubs func(*processIO) *[]*subscriber
+	buffer  func(*Manager, *processIO, OutputData)
+}
 
-	log.L.WithField("container", containerID).WithField("stream", streamName).Debug("fanOutReader started")
+var (
+	stdoutConfig = streamConfig{
+		name:    "stdout",
+		getSubs: func(p *processIO) *[]*subscriber { return &p.stdoutSubs },
+		buffer:  (*Manager).bufferStdout,
+	}
+	stderrConfig = streamConfig{
+		name:    "stderr",
+		getSubs: func(p *processIO) *[]*subscriber { return &p.stderrSubs },
+		buffer:  (*Manager).bufferStderr,
+	}
+)
+
+// fanOutReader reads from a reader and distributes data to all subscribers.
+func (m *Manager) fanOutReader(containerID, execID string, reader io.Reader, pio *processIO, cfg streamConfig) {
+	defer pio.wg.Done()
 
 	buf := make([]byte, 32*1024) // 32KB buffer
 	for {
 		n, err := reader.Read(buf)
-		log.L.WithField("container", containerID).WithField("stream", streamName).
-			WithField("n", n).WithField("err", err).Debug("fanOutReader read result")
-
 		if n > 0 {
 			data := make([]byte, n)
 			copy(data, buf[:n])
 
 			pio.mu.Lock()
-			subs := *getSubs(pio)
+			subs := *cfg.getSubs(pio)
 			if len(subs) == 0 {
-				log.L.WithField("container", containerID).WithField("stream", streamName).
-					WithField("bytes", n).Debug("buffering data (no subscribers)")
-				m.bufferOutputLocked(pio, streamName, OutputData{Data: data})
+				cfg.buffer(m, pio, OutputData{Data: data})
 			} else {
-				log.L.WithField("container", containerID).WithField("stream", streamName).
-					WithField("bytes", n).WithField("subscriberCount", len(subs)).Debug("sending data to subscribers")
 				for _, sub := range subs {
 					select {
 					case sub.ch <- OutputData{Data: data}:
 					default:
-						// Slow subscriber, drop data to avoid blocking.
-						log.L.WithField("container", containerID).WithField("stream", streamName).Warn("dropping data for slow subscriber")
+						log.L.WithField("container", containerID).WithField("stream", cfg.name).Warn("dropping data for slow subscriber")
 					}
 				}
 			}
@@ -149,19 +170,15 @@ func (m *Manager) fanOutReader(containerID, execID, streamName string, reader io
 		}
 
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				log.L.WithField("container", containerID).WithField("stream", streamName).Debug("fanOutReader got EOF")
-			} else {
-				log.L.WithError(err).WithField("container", containerID).WithField("stream", streamName).Warn("error reading from process")
+			if !errors.Is(err, io.EOF) {
+				log.L.WithError(err).WithField("container", containerID).WithField("stream", cfg.name).Warn("error reading from process")
 			}
 
 			// Send or buffer EOF for subscribers.
 			pio.mu.Lock()
-			subs := *getSubs(pio)
-			log.L.WithField("container", containerID).WithField("stream", streamName).
-				WithField("subscriberCount", len(subs)).Debug("sending EOF to subscribers")
+			subs := *cfg.getSubs(pio)
 			if len(subs) == 0 {
-				m.bufferOutputLocked(pio, streamName, OutputData{EOF: true})
+				cfg.buffer(m, pio, OutputData{EOF: true})
 			} else {
 				for _, sub := range subs {
 					select {
@@ -284,20 +301,22 @@ func (m *Manager) CloseStdin(containerID, execID string) error {
 }
 
 // SubscribeStdout subscribes to a process's stdout stream.
-// Returns a channel that receives output chunks.
-// The caller should cancel the context when done.
-func (m *Manager) SubscribeStdout(ctx context.Context, containerID, execID string) (<-chan OutputData, error) {
+// Returns a channel that receives output chunks and a done function.
+// The caller MUST call the done function when finished processing the stream
+// to signal that I/O is complete (this is required for WaitForIOComplete to work).
+func (m *Manager) SubscribeStdout(ctx context.Context, containerID, execID string) (<-chan OutputData, func(), error) {
 	return m.subscribe(ctx, containerID, execID, func(p *processIO) *[]*subscriber { return &p.stdoutSubs })
 }
 
 // SubscribeStderr subscribes to a process's stderr stream.
-// Returns a channel that receives output chunks.
-// The caller should cancel the context when done.
-func (m *Manager) SubscribeStderr(ctx context.Context, containerID, execID string) (<-chan OutputData, error) {
+// Returns a channel that receives output chunks and a done function.
+// The caller MUST call the done function when finished processing the stream
+// to signal that I/O is complete (this is required for WaitForIOComplete to work).
+func (m *Manager) SubscribeStderr(ctx context.Context, containerID, execID string) (<-chan OutputData, func(), error) {
 	return m.subscribe(ctx, containerID, execID, func(p *processIO) *[]*subscriber { return &p.stderrSubs })
 }
 
-func (m *Manager) subscribe(ctx context.Context, containerID, execID string, getSubs func(*processIO) *[]*subscriber) (<-chan OutputData, error) {
+func (m *Manager) subscribe(ctx context.Context, containerID, execID string, getSubs func(*processIO) *[]*subscriber) (<-chan OutputData, func(), error) {
 	key := processKey{containerID: containerID, execID: execID}
 
 	m.mu.RLock()
@@ -305,12 +324,26 @@ func (m *Manager) subscribe(ctx context.Context, containerID, execID string, get
 	m.mu.RUnlock()
 
 	if !ok {
-		return nil, fmt.Errorf("process not found: %w", errdefs.ErrNotFound)
+		return nil, nil, fmt.Errorf("process not found: %w", errdefs.ErrNotFound)
 	}
 
 	pio.mu.Lock()
+	buffered := m.drainBufferLocked(pio, getSubs)
 
-	// Get any buffered data for this stream (stdout or stderr).
+	if pio.exited {
+		pio.mu.Unlock()
+		return m.subscribeToExitedProcess(containerID, execID, buffered)
+	}
+
+	ch, doneFunc := m.createActiveSubscriber(ctx, containerID, execID, pio, getSubs, buffered)
+	pio.mu.Unlock()
+
+	m.sendBufferedData(containerID, ch, buffered)
+	return ch, doneFunc, nil
+}
+
+// drainBufferLocked extracts buffered data for the stream. Must be called with pio.mu held.
+func (m *Manager) drainBufferLocked(pio *processIO, getSubs func(*processIO) *[]*subscriber) []OutputData {
 	var buffered []OutputData
 	if getSubs(pio) == &pio.stdoutSubs {
 		buffered = append(buffered, pio.stdoutBuf...)
@@ -321,68 +354,62 @@ func (m *Manager) subscribe(ctx context.Context, containerID, execID string, get
 		pio.stderrBuf = nil
 		pio.stderrBufBytes = 0
 	}
+	return buffered
+}
 
-	if pio.exited {
-		// Process already exited. Drain any buffered data, then send EOF.
-		// This handles the case where a fast process (like /bin/echo) exits
-		// before the RPC subscriber attaches - the buffered output must still
-		// be delivered.
-		ch := make(chan OutputData, len(buffered)+1)
-		for _, data := range buffered {
-			ch <- data
-		}
-		ch <- OutputData{EOF: true}
-		close(ch)
-		log.L.WithField("container", containerID).WithField("exec", execID).
-			WithField("bufferedChunks", len(buffered)).Debug("late subscriber received buffered data (process already exited)")
-		pio.mu.Unlock()
-		return ch, nil
+// subscribeToExitedProcess creates a channel with buffered data and EOF for a process that has already exited.
+func (m *Manager) subscribeToExitedProcess(containerID, execID string, buffered []OutputData) (<-chan OutputData, func(), error) {
+	ch := make(chan OutputData, len(buffered)+1)
+	for _, data := range buffered {
+		ch <- data
 	}
+	ch <- OutputData{EOF: true}
+	close(ch)
 
-	// Create subscriber with buffered channel.
-	ctx, cancel := context.WithCancel(ctx)
-	ch := make(chan OutputData, 64) // Buffer to avoid blocking the fan-out.
+	log.L.WithField("container", containerID).WithField("exec", execID).
+		WithField("bufferedChunks", len(buffered)).Debug("late subscriber received buffered data (process already exited)")
+
+	return ch, func() {}, nil
+}
+
+// createActiveSubscriber creates a subscriber for a running process. Must be called with pio.mu held.
+func (m *Manager) createActiveSubscriber(ctx context.Context, containerID, execID string, pio *processIO, getSubs func(*processIO) *[]*subscriber, buffered []OutputData) (chan OutputData, func()) {
+	_, cancel := context.WithCancel(ctx)
+	ch := make(chan OutputData, subscriberChannelBuffer)
 	done := make(chan struct{})
 	sub := &subscriber{ch: ch, cancel: cancel, done: done}
 
 	subs := getSubs(pio)
 	*subs = append(*subs, sub)
-
-	// Track this subscriber in the WaitGroup so WaitForIOComplete can wait for it.
 	pio.subscriberWg.Add(1)
 
 	log.L.WithField("container", containerID).WithField("exec", execID).
 		WithField("bufferedChunks", len(buffered)).Debug("subscriber registered")
-	pio.mu.Unlock()
 
+	// Cleanup goroutine: wait for done, then clean up.
+	go func() {
+		<-done
+		m.removeSubscriber(containerID, execID, sub, getSubs)
+		pio.subscriberWg.Done()
+	}()
+
+	var doneOnce sync.Once
+	doneFunc := func() {
+		doneOnce.Do(func() { close(done) })
+	}
+
+	return ch, doneFunc
+}
+
+// sendBufferedData sends buffered data to the subscriber channel.
+func (m *Manager) sendBufferedData(containerID string, ch chan OutputData, buffered []OutputData) {
 	for _, data := range buffered {
-		log.L.WithField("container", containerID).WithField("bytes", len(data.Data)).
-			WithField("eof", data.EOF).Debug("sending buffered data to new subscriber")
 		select {
 		case ch <- data:
 		default:
 			log.L.WithField("container", containerID).Warn("dropping buffered data for slow subscriber")
 		}
 	}
-
-	// Wait for subscriber to signal done, then clean up.
-	// IMPORTANT: We must wait for 'done' to be closed before decrementing subscriberWg.
-	// The 'done' channel is closed by SubscriberDone when the RPC stream finishes.
-	// Even if ctx.Done() fires first (e.g., from Unregister calling sub.cancel()),
-	// we still wait for 'done' to ensure the stream has actually finished sending data.
-	go func() {
-		select {
-		case <-done:
-			// Subscriber finished processing normally
-		case <-ctx.Done():
-			// Context cancelled (e.g., by Unregister) - still wait for stream to finish
-			<-done
-		}
-		m.removeSubscriber(containerID, execID, sub, getSubs)
-		pio.subscriberWg.Done()
-	}()
-
-	return ch, nil
 }
 
 func (m *Manager) removeSubscriber(containerID, execID string, sub *subscriber, getSubs func(*processIO) *[]*subscriber) {
@@ -449,57 +476,16 @@ func (m *Manager) WaitForIOComplete(containerID, execID string) {
 	log.L.WithField("container", containerID).WithField("exec", execID).Debug("I/O complete (all subscribers finished)")
 }
 
-// SubscriberDone signals that a subscriber's RPC stream has finished.
-// This should be called by the RPC stream handler after it has sent all data
-// (including EOF) to the host. It allows WaitForIOComplete to know when all
-// output has been fully transmitted.
-func (m *Manager) SubscriberDone(containerID, execID, streamName string) {
-	key := processKey{containerID: containerID, execID: execID}
-
-	m.mu.RLock()
-	pio, ok := m.processes[key]
-	m.mu.RUnlock()
-
-	if !ok {
-		return
-	}
-
-	pio.mu.Lock()
-	defer pio.mu.Unlock()
-
-	// Find the subscriber for this stream and close its done channel.
-	var subs *[]*subscriber
-	if streamName == "stdout" {
-		subs = &pio.stdoutSubs
-	} else {
-		subs = &pio.stderrSubs
-	}
-
-	for _, sub := range *subs {
-		select {
-		case <-sub.done:
-			// Already closed
-		default:
-			close(sub.done)
-			log.L.WithField("container", containerID).WithField("exec", execID).
-				WithField("stream", streamName).Debug("subscriber marked as done")
-			return // Only mark one subscriber per call
-		}
+func (m *Manager) bufferStdout(pio *processIO, data OutputData) {
+	pio.stdoutBuf = append(pio.stdoutBuf, data)
+	pio.stdoutBufBytes += len(data.Data)
+	for pio.stdoutBufBytes > maxBufferedBytes && len(pio.stdoutBuf) > 0 {
+		pio.stdoutBufBytes -= len(pio.stdoutBuf[0].Data)
+		pio.stdoutBuf = pio.stdoutBuf[1:]
 	}
 }
 
-func (m *Manager) bufferOutputLocked(pio *processIO, streamName string, data OutputData) {
-	const maxBufferedBytes = 256 * 1024
-	if streamName == "stdout" {
-		pio.stdoutBuf = append(pio.stdoutBuf, data)
-		pio.stdoutBufBytes += len(data.Data)
-		for pio.stdoutBufBytes > maxBufferedBytes && len(pio.stdoutBuf) > 0 {
-			pio.stdoutBufBytes -= len(pio.stdoutBuf[0].Data)
-			pio.stdoutBuf = pio.stdoutBuf[1:]
-		}
-		return
-	}
-
+func (m *Manager) bufferStderr(pio *processIO, data OutputData) {
 	pio.stderrBuf = append(pio.stderrBuf, data)
 	pio.stderrBufBytes += len(data.Data)
 	for pio.stderrBufBytes > maxBufferedBytes && len(pio.stderrBuf) > 0 {

@@ -55,16 +55,20 @@ type forwardIOSetup struct {
 }
 
 // IOForwarder owns a complete I/O forwarding lifecycle.
-// GuestStdio returns the stdio config to pass to the guest.
-// Start begins forwarding (no-op for direct I/O).
-// Shutdown stops forwarding and cleans up resources.
-// CloseStdin signals stdin closure (no-op for direct I/O).
-// WaitForComplete blocks until I/O is complete (without shutting down).
+//
+// Implementations:
+//   - directForwarder: Uses synchronous io.Copy goroutines. Start/CloseStdin/WaitForComplete are no-ops.
+//   - RPCIOForwarder: Uses TTRPC streaming. All methods are active.
 type IOForwarder interface {
+	// GuestStdio returns the stdio config to pass to the guest.
 	GuestStdio() stdio.Stdio
+	// Start begins forwarding. Must be called after guest process is created.
 	Start(ctx context.Context) error
+	// Shutdown stops forwarding and cleans up resources.
 	Shutdown(ctx context.Context) error
+	// CloseStdin signals that stdin should be closed.
 	CloseStdin()
+	// WaitForComplete blocks until I/O is complete (without shutting down).
 	WaitForComplete()
 }
 
