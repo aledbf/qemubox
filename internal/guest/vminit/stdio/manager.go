@@ -389,6 +389,26 @@ func (m *Manager) HasProcess(containerID, execID string) bool {
 	return ok
 }
 
+// WaitForIOComplete waits for all I/O goroutines (fanOutReaders) to complete
+// for the specified process. This should be called before sending exit events
+// to ensure all output has been delivered to subscribers.
+// Returns immediately if the process is not registered.
+func (m *Manager) WaitForIOComplete(containerID, execID string) {
+	key := processKey{containerID: containerID, execID: execID}
+
+	m.mu.RLock()
+	pio, ok := m.processes[key]
+	m.mu.RUnlock()
+
+	if !ok {
+		return
+	}
+
+	// Wait for fanOutReader goroutines to finish reading all data
+	pio.wg.Wait()
+	log.L.WithField("container", containerID).WithField("exec", execID).Debug("I/O complete")
+}
+
 func (m *Manager) bufferOutputLocked(pio *processIO, streamName string, data OutputData) {
 	const maxBufferedBytes = 256 * 1024
 	if streamName == "stdout" {
