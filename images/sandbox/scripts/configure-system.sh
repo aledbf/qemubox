@@ -37,4 +37,12 @@ EOF
 echo "Setting root password..."
 echo 'root:qemubox' | chpasswd
 
+# -------------------------------------------------
+# 6. Disable MOTD
+# -------------------------------------------------
+echo "Disabling MOTD..."
+rm -rf /etc/update-motd.d/*
+truncate -s 0 /etc/motd
+sed -i 's/^session.*pam_motd.so/#&/' /etc/pam.d/sshd
+
 echo "✅ System configuration complete"

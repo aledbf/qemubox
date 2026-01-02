@@ -464,6 +464,8 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 		"console=ttyS0",
 		"quiet",                          // Reduce boot messages for faster boot
 		"loglevel=3",                     // Minimal kernel logging (errors only)
+		"systemd.show_status=0",          // Disable systemd status messages
+		"systemd.log_level=warning",      // Reduce systemd logging
 		"panic=1",                        // Reboot 1 second after kernel panic
 		"net.ifnames=0", "biosdevname=0", // Predictable network naming
 		"systemd.unified_cgroup_hierarchy=1", // Force cgroup v2
