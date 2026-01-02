@@ -70,9 +70,9 @@ expect -re {\$|#}
 after 1000
 
 comment "Wait for VM to boot..."
-type_cmd "sleep 10"
+type_cmd "sleep 3"
 expect -re {\$|#}
-after 11000
+after 4000
 
 comment "Check VM is running"
 type_cmd "$CTR task ls | grep snapshot-demo"
@@ -223,9 +223,9 @@ expect -re {\$|#}
 after 2000
 
 comment "Wait for VM to boot..."
-type_cmd "sleep 8"
+type_cmd "sleep 3"
 expect -re {\$|#}
-after 9000
+after 4000
 
 comment "Attach to new VM"
 spawn ctr --address /var/run/qemubox/containerd.sock task attach snapshot-new
