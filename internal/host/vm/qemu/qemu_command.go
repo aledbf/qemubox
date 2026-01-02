@@ -35,6 +35,14 @@ func (b *qemuCommandBuilder) setBIOSPath(path string) *qemuCommandBuilder {
 	return b
 }
 
+// setNoDefaults disables all default devices (-nodefaults).
+// This prevents QEMU from creating default NIC (e1000e), VGA, serial, etc.
+// All required devices must be explicitly added.
+func (b *qemuCommandBuilder) setNoDefaults() *qemuCommandBuilder {
+	b.args = append(b.args, "-nodefaults")
+	return b
+}
+
 // setMachine sets the machine type and options (-machine option).
 // Example: setMachine("q35", "accel=kvm", "kernel-irqchip=on")
 func (b *qemuCommandBuilder) setMachine(machineType string, options ...string) *qemuCommandBuilder {

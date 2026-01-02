@@ -395,7 +395,7 @@ tasks:
           QEMUBOX_SNAPSHOTTER="{{.INTEGRATION_SNAPSHOTTER}}" \
           QEMUBOX_FIFO_DIR="/run/qemubox/containerd/fifo" \
           QEMUBOX_TEST_ID="${TEST_ID}" \
-          go test -v -tags=integration -run TestContainerdRunQemubox -count=1 ./integration -test.v || {
+          go test -v -tags=integration -count=1 ./integration -test.v || {
             echo "---- qemubox-containerd logs for ${TEST_ID} ----"
             ${SUDO} journalctl -u qemubox-containerd --no-pager -n 200 | grep "${TEST_ID}" || true
             echo "---- qemubox-containerd logs ----"

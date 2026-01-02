@@ -24,6 +24,15 @@ func TestSetBIOSPath(t *testing.T) {
 	assertArgs(t, args, want)
 }
 
+func TestSetNoDefaults(t *testing.T) {
+	args := newQemuCommandBuilder().
+		setNoDefaults().
+		build()
+
+	want := []string{"-nodefaults"}
+	assertArgs(t, args, want)
+}
+
 func TestSetMachine(t *testing.T) {
 	tests := []struct {
 		name        string

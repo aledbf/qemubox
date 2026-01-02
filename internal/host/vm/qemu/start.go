@@ -121,6 +121,13 @@ func (q *Instance) validateConfiguration() error {
 		return fmt.Errorf("max CPUs (%d) cannot be less than boot CPUs (%d)", q.resourceCfg.MaxCPUs, q.resourceCfg.BootCPUs)
 	}
 
+	// Require at least one network interface from CNI
+	// VMs without networking cannot communicate with the host via vsock properly
+	// and will fail during guest initialization
+	if len(q.nets) == 0 {
+		return fmt.Errorf("no network interface configured: call AddNetwork() before Start()")
+	}
+
 	return nil
 }
 
@@ -492,6 +499,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string) ([]string, error) {
 
 	// Build QEMU command using fluent builder pattern
 	builder := newQemuCommandBuilder().
+		setNoDefaults(). // Disable default devices (prevents e1000e NIC needing ROM files)
 		setBIOSPath(paths.QemuSharePath(cfg.Paths)).
 		// Optimize: use kernel IRQ chip, disable HPET
 		setMachine("q35", "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on").
