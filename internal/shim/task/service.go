@@ -158,16 +158,18 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 		return nil, fmt.Errorf("initialize network manager: %w", err)
 	}
 
+	vmLM := lifecycle.NewManager()
 	s := &service{
 		events:                   make(chan any, eventChannelBuffer),
 		cpuHotplugControllers:    make(map[string]cpuhotplug.CPUHotplugController),
 		memoryHotplugControllers: make(map[string]memhotplug.MemoryHotplugController),
 		networkManager:           nm,
-		vmLifecycle:              lifecycle.NewManager(),
+		vmLifecycle:              vmLM,
 		platformMounts:           platformMounts.New(),
 		platformNetwork:          netMgr,
 		initiateShutdown:         sd.Shutdown,
 		shutdownSvc:              sd,
+		connManager:              NewConnectionManager(vmLM.DialClient, vmLM.DialClientWithRetry),
 	}
 	sd.RegisterCallback(s.shutdown)
 
@@ -263,9 +265,8 @@ type service struct {
 	inflight            atomic.Int64   // Count of in-flight RPC calls for graceful shutdown
 	exitFunc            func(code int) // Exit function (default: os.Exit), injectable for testing
 
-	initStarted  atomic.Bool   // True once the init process has been started
-	taskClientMu sync.Mutex    // Protects taskClient
-	taskClient   *ttrpc.Client // Reused for unary task RPCs to avoid repeated vsock dials
+	initStarted atomic.Bool // True once the init process has been started
+	connManager *ConnectionManager
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
@@ -310,15 +311,10 @@ func (s *service) shutdown(ctx context.Context) error {
 		s.container.mountCleanup = nil
 	}
 
-	// Close the cached task client before shutting down the VM.
-	s.taskClientMu.Lock()
-	if s.taskClient != nil {
-		if err := s.taskClient.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("task client close: %w", err))
-		}
-		s.taskClient = nil
+	// Close the connection manager before shutting down the VM.
+	if err := s.connManager.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("connection manager close: %w", err))
 	}
-	s.taskClientMu.Unlock()
 
 	// Shutdown VM (idempotent)
 	// IMPORTANT: This must happen BEFORE network cleanup so QEMU can exit cleanly
@@ -357,49 +353,24 @@ func (s *service) shutdown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// getTaskClient dials a fresh TTRPC client for RPC calls.
-// Each RPC gets its own vsock connection to avoid multiplexing issues.
+// getTaskClient returns the cached TTRPC client for task RPC calls.
+//
+// The ConnectionManager maintains a single cached connection for all unary task RPCs
+// (State, Start, Delete, etc.), avoiding repeated vsock dials that can fail with ENODEV.
 //
 // The cached client from vmLifecycle.Client() is dedicated to the event stream.
 // Sharing a TTRPC connection between streaming RPCs (event stream) and unary RPCs
-// (State, Start, Delete) causes vsock write errors ("no such device") because
-// the vsock layer doesn't handle mixed traffic well on a single connection.
+// causes vsock write errors ("no such device") because the vsock layer doesn't
+// handle mixed traffic well on a single connection.
 //
-// The caller must call the cleanup function when done to close the connection.
+// The returned cleanup function is a no-op - the ConnectionManager owns the client lifecycle.
 func (s *service) getTaskClient(ctx context.Context) (*ttrpc.Client, func(), error) {
-	s.taskClientMu.Lock()
-	if s.taskClient != nil {
-		log.G(ctx).Debug("getTaskClient: using cached task client")
-		vmc := s.taskClient
-		s.taskClientMu.Unlock()
-		return vmc, func() {}, nil
-	}
-	s.taskClientMu.Unlock()
-
-	log.G(ctx).Debug("getTaskClient: dialing new task client")
-	vmc, err := s.vmLifecycle.DialClientWithRetry(ctx, taskClientRetryTimeout)
+	vmc, err := s.connManager.GetClient(ctx)
 	if err != nil {
-		log.G(ctx).WithError(err).Error("failed to dial task client")
+		log.G(ctx).WithError(err).Error("getTaskClient: failed to get client from connection manager")
 		return nil, nil, errgrpc.ToGRPC(err)
 	}
-	cleanup := func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close task client")
-		}
-	}
-	return vmc, cleanup, nil
-}
-
-func (s *service) storeTaskClient(vmc *ttrpc.Client) bool {
-	s.taskClientMu.Lock()
-	defer s.taskClientMu.Unlock()
-	if s.taskClient != nil {
-		log.L.Debug("storeTaskClient: cached task client already set")
-		return false
-	}
-	log.L.Debug("storeTaskClient: caching task client")
-	s.taskClient = vmc
-	return true
+	return vmc, func() {}, nil
 }
 
 // Create a new initial process and container with the underlying OCI runtime.
@@ -525,28 +496,20 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	// Dial TTRPC client
+	// Dial TTRPC client and store in connection manager for reuse.
+	// The connection manager owns the client lifecycle from this point.
 	rpcClient, err := s.vmLifecycle.DialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
-	storedClient := s.storeTaskClient(rpcClient)
-	if storedClient {
-		log.G(ctx).Debug("create: cached task client for unary RPCs")
-	}
+	s.connManager.SetClient(rpcClient)
+	log.G(ctx).Debug("create: cached task client in connection manager")
 	defer func() {
-		if rpcClient == nil {
-			return
-		}
-		if retErr != nil && storedClient {
-			s.taskClientMu.Lock()
-			if s.taskClient == rpcClient {
-				s.taskClient = nil
+		if retErr != nil {
+			// On failure, close the connection manager to clean up
+			if err := s.connManager.Close(); err != nil {
+				log.G(ctx).WithError(err).Warn("failed to close connection manager after create failure")
 			}
-			s.taskClientMu.Unlock()
-		}
-		if err := rpcClient.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close ttrpc client")
 		}
 	}()
 
@@ -637,18 +600,15 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		"t_create": time.Since(preCreate),
 	}).Info("task successfully created")
 
-	if storedClient {
-		rpcClient = nil
-	}
-
 	c.pid = resp.Pid
 	s.containerMu.Lock()
 	s.container = c
 	s.containerID = r.ID
 	s.containerMu.Unlock()
 
-	// Start hotplug controllers
-	callbacks := resources.CreateVMClientCallbacks(s.vmLifecycle.DialClient)
+	// Start hotplug controllers using the connection manager for client reuse.
+	// This avoids repeated vsock dials that can fail with ENODEV.
+	callbacks := resources.CreateVMClientCallbacks(s.connManager.GetClient)
 	if cpuCtrl := resources.StartCPUHotplug(ctx, r.ID, vmi, resourceCfg, callbacks); cpuCtrl != nil {
 		s.controllerMu.Lock()
 		s.cpuHotplugControllers[r.ID] = cpuCtrl
