@@ -220,49 +220,6 @@ func ctrCmdContext(ctx context.Context, t *testing.T, socket, namespace string, 
 	return stdout.String(), nil
 }
 
-// ctrCmdWithSnapshotter runs a ctr command with snapshotter specified.
-// The snapshotter flag is placed after the subcommand (e.g., "snapshots --snapshotter erofs prepare").
-func ctrCmdWithSnapshotter(t *testing.T, socket, namespace, snapshotter string, args ...string) (string, error) {
-	t.Helper()
-	// Insert --snapshotter after the first arg (the subcommand like "snapshots")
-	if len(args) > 0 {
-		newArgs := []string{args[0], "--snapshotter", snapshotter}
-		newArgs = append(newArgs, args[1:]...)
-		args = newArgs
-	}
-	fullArgs := append([]string{"--address", socket, "-n", namespace}, args...)
-	cmd := exec.Command("ctr", fullArgs...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err != nil {
-		return stdout.String(), fmt.Errorf("ctr %s: %v\nstderr: %s", strings.Join(args, " "), err, stderr.String())
-	}
-	return stdout.String(), nil
-}
-
-// ctrCmdContextWithSnapshotter runs a ctr command with context and snapshotter specified.
-func ctrCmdContextWithSnapshotter(ctx context.Context, t *testing.T, socket, namespace, snapshotter string, args ...string) (string, error) {
-	t.Helper()
-	// Insert --snapshotter after the first arg (the subcommand like "snapshots")
-	if len(args) > 0 {
-		newArgs := []string{args[0], "--snapshotter", snapshotter}
-		newArgs = append(newArgs, args[1:]...)
-		args = newArgs
-	}
-	fullArgs := append([]string{"--address", socket, "-n", namespace}, args...)
-	cmd := exec.CommandContext(ctx, "ctr", fullArgs...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err != nil {
-		return stdout.String(), fmt.Errorf("ctr %s: %v\nstderr: %s", strings.Join(args, " "), err, stderr.String())
-	}
-	return stdout.String(), nil
-}
-
 // startCtrEvents starts `ctr events` and returns a channel of events.
 func startCtrEvents(ctx context.Context, t *testing.T, socket, namespace string) (<-chan ctrEvent, func()) {
 	t.Helper()
@@ -329,7 +286,6 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	} else {
 		containerID = fmt.Sprintf("%s-shim-%d", containerID, time.Now().UnixNano()%10000)
 	}
-	snapshotID := containerID
 
 	// Set up log collector to capture logs specific to this container
 	logCollector := newTestLogCollector(t, containerID)
@@ -362,7 +318,7 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 		t.Fatalf("list images: %v", err)
 	}
 
-	// Cleanup function for container and snapshot
+	// Cleanup function for container
 	cleanup := func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cleanupCancel()
@@ -372,25 +328,15 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 		ctrCmdContext(cleanupCtx, t, cfg.Socket, cfg.Namespace, "task", "delete", "-f", containerID)
 
-		// Delete container
+		// Delete container (with snapshot cleanup)
 		ctrCmdContext(cleanupCtx, t, cfg.Socket, cfg.Namespace, "container", "delete", containerID)
-
-		// Delete snapshot (snapshots subcommand requires --snapshotter flag)
-		ctrCmdContextWithSnapshotter(cleanupCtx, t, cfg.Socket, cfg.Namespace, cfg.Snapshotter, "snapshots", "rm", snapshotID)
 	}
 	defer cleanup()
 
-	// Create snapshot - snapshotter is specified at the snapshots subcommand level
-	t.Log("creating snapshot...")
-	if _, err := ctrCmdWithSnapshotter(t, cfg.Socket, cfg.Namespace, cfg.Snapshotter, "snapshots", "prepare", snapshotID, cfg.Image); err != nil {
-		t.Fatalf("create snapshot: %v", err)
-	}
-
-	// Create container
+	// Create container - containerd will automatically create a snapshot from the image
 	t.Log("creating container...")
 	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "container", "create",
 		"--snapshotter", cfg.Snapshotter,
-		"--snapshot", snapshotID,
 		"--runtime", cfg.Runtime,
 		cfg.Image, containerID,
 		"/bin/sh", "-c", "sleep 5",
