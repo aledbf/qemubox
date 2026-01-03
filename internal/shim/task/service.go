@@ -760,6 +760,142 @@ func isProcessAlreadyFinished(err error) bool {
 	return strings.Contains(err.Error(), "process already finished")
 }
 
+type deleteCleanup struct {
+	ioForwarders     []IOForwarder
+	cpuController    cpuhotplug.CPUHotplugController
+	memController    memhotplug.MemoryHotplugController
+	mountCleanup     func(context.Context) error
+	needNetworkClean bool
+	needVMShutdown   bool
+}
+
+func (s *service) cleanupOnDeleteFailure(ctx context.Context, id string) {
+	var (
+		ioForwarder  IOForwarder
+		mountCleanup func(context.Context) error
+	)
+
+	s.containerMu.Lock()
+	if s.container != nil && s.container.io != nil {
+		ioForwarder = s.container.io.init.forwarder
+	}
+	if s.container != nil {
+		mountCleanup = s.container.mountCleanup
+		s.container.mountCleanup = nil
+	}
+	s.containerMu.Unlock()
+
+	if ioForwarder != nil {
+		if ioErr := ioForwarder.Shutdown(ctx); ioErr != nil {
+			log.G(ctx).WithError(ioErr).Warn("failed to shutdown io after delete failure")
+		}
+	}
+
+	s.intentionalShutdown.Store(true)
+	if shutdownErr := s.vmLifecycle.Shutdown(ctx); shutdownErr != nil {
+		if !isProcessAlreadyFinished(shutdownErr) {
+			log.G(ctx).WithError(shutdownErr).Warn("failed to shutdown VM after delete error")
+		}
+	}
+
+	env := &network.Environment{ID: id}
+	if netErr := s.networkManager.ReleaseNetworkResources(ctx, env); netErr != nil {
+		log.G(ctx).WithError(netErr).WithField("id", id).Warn("failed to release network resources after delete failure")
+	}
+	if mountCleanup != nil {
+		if err := mountCleanup(ctx); err != nil {
+			log.G(ctx).WithError(err).WithField("id", id).Warn("failed to cleanup mounts after delete failure")
+		}
+	}
+}
+
+func (s *service) collectDeleteCleanup(r *taskAPI.DeleteRequest) deleteCleanup {
+	var cleanup deleteCleanup
+
+	s.containerMu.Lock()
+	if s.container != nil && s.containerID == r.ID {
+		if r.ExecID != "" {
+			if s.container.io != nil {
+				if pio, ok := s.container.io.exec[r.ExecID]; ok {
+					cleanup.ioForwarders = append(cleanup.ioForwarders, pio.forwarder)
+					delete(s.container.io.exec, r.ExecID)
+				}
+			}
+		} else {
+			if s.container.io != nil {
+				cleanup.ioForwarders = append(cleanup.ioForwarders, s.container.io.init.forwarder)
+				for _, pio := range s.container.io.exec {
+					cleanup.ioForwarders = append(cleanup.ioForwarders, pio.forwarder)
+				}
+			}
+			cleanup.mountCleanup = s.container.mountCleanup
+			cleanup.needNetworkClean = true
+			cleanup.needVMShutdown = true
+			s.container = nil
+			s.containerID = ""
+		}
+	}
+	s.containerMu.Unlock()
+
+	if r.ExecID == "" {
+		s.controllerMu.Lock()
+		cleanup.cpuController = s.cpuHotplugControllers[r.ID]
+		delete(s.cpuHotplugControllers, r.ID)
+		cleanup.memController = s.memoryHotplugControllers[r.ID]
+		delete(s.memoryHotplugControllers, r.ID)
+		s.controllerMu.Unlock()
+	}
+
+	return cleanup
+}
+
+func (s *service) runDeleteCleanup(ctx context.Context, r *taskAPI.DeleteRequest, cleanup deleteCleanup) {
+	for i, forwarder := range cleanup.ioForwarders {
+		if err := forwarder.Shutdown(ctx); err != nil {
+			if i == 0 && r.ExecID == "" {
+				log.G(ctx).WithError(err).Error("failed to shutdown io after delete")
+			} else {
+				log.G(ctx).WithError(err).WithField("exec", r.ExecID).Error("failed to shutdown exec io after delete")
+			}
+		}
+	}
+
+	if cleanup.cpuController != nil {
+		cleanup.cpuController.Stop()
+	}
+	if cleanup.memController != nil {
+		cleanup.memController.Stop()
+	}
+
+	if cleanup.needVMShutdown {
+		log.G(ctx).Info("container deleted, shutting down VM")
+		s.intentionalShutdown.Store(true)
+		if err := s.vmLifecycle.Shutdown(ctx); err != nil {
+			if !isProcessAlreadyFinished(err) {
+				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
+			}
+		}
+	}
+
+	if cleanup.needNetworkClean {
+		env := &network.Environment{ID: r.ID}
+		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
+			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
+		}
+	}
+
+	if cleanup.mountCleanup != nil {
+		if err := cleanup.mountCleanup(ctx); err != nil {
+			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup mounts during delete")
+		}
+	}
+
+	if cleanup.needVMShutdown {
+		log.G(ctx).Info("VM and network cleanup complete, scheduling shim exit")
+		go s.requestShutdownAndExit(ctx, "container deleted")
+	}
+}
+
 // Delete the initial process and container.
 func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAPI.DeleteResponse, error) {
 	s.inflight.Add(1)
@@ -790,138 +926,13 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	if err != nil {
 		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Warn("delete task failed")
 		if r.ExecID == "" {
-			s.containerMu.Lock()
-			// Forwarder is always non-nil when io is set (noopForwarder for passthrough mode)
-			if s.container != nil && s.container.io != nil {
-				if ioErr := s.container.io.init.forwarder.Shutdown(ctx); ioErr != nil {
-					log.G(ctx).WithError(ioErr).Warn("failed to shutdown io after delete failure")
-				}
-			}
-			mountCleanup := func() func(context.Context) error {
-				if s.container == nil {
-					return nil
-				}
-				cleanup := s.container.mountCleanup
-				s.container.mountCleanup = nil
-				return cleanup
-			}()
-			s.containerMu.Unlock()
-
-			s.intentionalShutdown.Store(true)
-			if shutdownErr := s.vmLifecycle.Shutdown(ctx); shutdownErr != nil {
-				if !isProcessAlreadyFinished(shutdownErr) {
-					log.G(ctx).WithError(shutdownErr).Warn("failed to shutdown VM after delete error")
-				}
-			}
-
-			// Release network resources even on delete failure to prevent CNI leaks
-			env := &network.Environment{ID: r.ID}
-			if netErr := s.networkManager.ReleaseNetworkResources(ctx, env); netErr != nil {
-				log.G(ctx).WithError(netErr).WithField("id", r.ID).Warn("failed to release network resources after delete failure")
-			}
-			if mountCleanup != nil {
-				if err := mountCleanup(ctx); err != nil {
-					log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup mounts after delete failure")
-				}
-			}
+			s.cleanupOnDeleteFailure(ctx, r.ID)
 		}
 		return resp, err
 	}
 
-	// Extract cleanup targets
-	var ioForwarders []IOForwarder
-	var cpuController cpuhotplug.CPUHotplugController
-	var memController memhotplug.MemoryHotplugController
-	var mountCleanup func(context.Context) error
-	var needNetworkClean, needVMShutdown bool
-
-	s.containerMu.Lock()
-	if s.container != nil && s.containerID == r.ID {
-		if r.ExecID != "" {
-			if s.container.io != nil {
-				if pio, ok := s.container.io.exec[r.ExecID]; ok {
-					ioForwarders = append(ioForwarders, pio.forwarder)
-					delete(s.container.io.exec, r.ExecID)
-				}
-			}
-		} else {
-			// Forwarder is always non-nil when io is set (noopForwarder for passthrough mode)
-			if s.container.io != nil {
-				ioForwarders = append(ioForwarders, s.container.io.init.forwarder)
-				for _, pio := range s.container.io.exec {
-					ioForwarders = append(ioForwarders, pio.forwarder)
-				}
-			}
-			mountCleanup = s.container.mountCleanup
-			needNetworkClean = true
-			needVMShutdown = true
-			s.container = nil
-			s.containerID = ""
-		}
-	}
-	s.containerMu.Unlock()
-
-	// Get controllers (only for container, not exec)
-	if r.ExecID == "" {
-		s.controllerMu.Lock()
-		cpuController = s.cpuHotplugControllers[r.ID]
-		delete(s.cpuHotplugControllers, r.ID)
-		memController = s.memoryHotplugControllers[r.ID]
-		delete(s.memoryHotplugControllers, r.ID)
-		s.controllerMu.Unlock()
-	}
-
-	// Execute cleanup operations
-	// Forwarders are always non-nil (noopForwarder for passthrough mode)
-	for i, forwarder := range ioForwarders {
-		if err := forwarder.Shutdown(ctx); err != nil {
-			if i == 0 && r.ExecID == "" {
-				log.G(ctx).WithError(err).Error("failed to shutdown io after delete")
-			} else {
-				log.G(ctx).WithError(err).WithField("exec", r.ExecID).Error("failed to shutdown exec io after delete")
-			}
-		}
-	}
-
-	if cpuController != nil {
-		cpuController.Stop()
-	}
-	if memController != nil {
-		memController.Stop()
-	}
-
-	// Shutdown VM first
-	if needVMShutdown {
-		log.G(ctx).Info("container deleted, shutting down VM")
-		s.intentionalShutdown.Store(true)
-		if err := s.vmLifecycle.Shutdown(ctx); err != nil {
-			if !isProcessAlreadyFinished(err) {
-				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
-			}
-		}
-	}
-
-	// Release network resources AFTER VM shutdown but BEFORE scheduling shim exit
-	// This prevents the race where requestShutdownAndExit() calls exit(0) before
-	// CNI cleanup completes, leaving orphaned firewall rules
-	if needNetworkClean {
-		env := &network.Environment{ID: r.ID}
-		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
-			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
-		}
-	}
-
-	if mountCleanup != nil {
-		if err := mountCleanup(ctx); err != nil {
-			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup mounts during delete")
-		}
-	}
-
-	// Schedule shim exit after all cleanup is complete
-	if needVMShutdown {
-		log.G(ctx).Info("VM and network cleanup complete, scheduling shim exit")
-		go s.requestShutdownAndExit(ctx, "container deleted")
-	}
+	delCleanup := s.collectDeleteCleanup(r)
+	s.runDeleteCleanup(ctx, r, delCleanup)
 
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("delete task completed")
 	return resp, nil
