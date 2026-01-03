@@ -108,10 +108,13 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 		return nil, err
 	}
 
+	var mountCleanup func(context.Context) error
 	if len(r.Rootfs) != 0 && (len(r.Rootfs) != 1 || r.Rootfs[0].Type != "bind" || r.Rootfs[0].Source != rootfs) {
 		log.G(ctx).WithField("mounts", r.Rootfs).Info("mounting rootfs components")
 		mdir := filepath.Join(r.Bundle, "mounts")
-		if err := mountutil.All(ctx, rootfs, mdir, r.Rootfs); err != nil {
+		var err error
+		mountCleanup, err = mountutil.All(ctx, rootfs, mdir, r.Rootfs)
+		if err != nil {
 			return nil, err
 		}
 		log.G(ctx).WithField("rootfs", rootfs).Info("rootfs components mounted")
@@ -132,6 +135,9 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 		streams,
 	)
 	if err := p.Create(ctx, config); err != nil {
+		if mountCleanup != nil {
+			_ = mountCleanup(context.WithoutCancel(ctx))
+		}
 		return nil, err
 	}
 	container := &Container{
@@ -140,6 +146,7 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 		process:         p,
 		processes:       make(map[string]process.Process),
 		reservedProcess: make(map[string]struct{}),
+		mountCleanup:    mountCleanup,
 	}
 	pid := p.Pid()
 	if pid > 0 {
@@ -223,6 +230,7 @@ type Container struct {
 	process         process.Process
 	processes       map[string]process.Process
 	reservedProcess map[string]struct{}
+	mountCleanup    func(context.Context) error
 }
 
 // All processes in the container
@@ -356,6 +364,16 @@ func (c *Container) Delete(ctx context.Context, r *task.DeleteRequest) (process.
 	}
 	if r.ExecID != "" {
 		c.ProcessRemove(r.ExecID)
+		return p, nil
+	}
+	c.mu.Lock()
+	cleanup := c.mountCleanup
+	c.mountCleanup = nil
+	c.mu.Unlock()
+	if cleanup != nil {
+		if err := cleanup(ctx); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to cleanup mounts after delete")
+		}
 	}
 	return p, nil
 }

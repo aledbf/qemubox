@@ -137,6 +137,8 @@ const (
 	// 2 seconds allows for brief VM pauses (e.g., during snapshot operations)
 	// without triggering shim shutdown, while still detecting genuine VM failures quickly.
 	eventStreamReconnectTimeout = 2 * time.Second
+
+	defaultNamespace = "default"
 )
 
 var (
@@ -194,6 +196,8 @@ type container struct {
 
 	// I/O state for init and exec processes.
 	io *taskIO
+	// mountCleanup releases host-side mount manager state.
+	mountCleanup func(context.Context) error
 }
 
 type execIO struct {
@@ -267,6 +271,7 @@ func (s *service) shutdown(ctx context.Context) error {
 	defer s.containerMu.Unlock()
 
 	var errs []error
+	var mountCleanup func(context.Context) error
 
 	// Stop hotplug controllers before VM shutdown
 	s.controllerMu.Lock()
@@ -292,6 +297,10 @@ func (s *service) shutdown(ctx context.Context) error {
 			}
 		}
 	}
+	if s.container != nil {
+		mountCleanup = s.container.mountCleanup
+		s.container.mountCleanup = nil
+	}
 
 	// Shutdown VM (idempotent)
 	// IMPORTANT: This must happen BEFORE network cleanup so QEMU can exit cleanly
@@ -304,6 +313,12 @@ func (s *service) shutdown(ctx context.Context) error {
 		env := &network.Environment{ID: s.containerID}
 		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
 			log.G(ctx).WithError(err).WithField("id", s.containerID).Warn("failed to release network resources")
+		}
+	}
+
+	if mountCleanup != nil {
+		if err := mountCleanup(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("mount cleanup: %w", err))
 		}
 	}
 
@@ -437,10 +452,12 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	}
 
 	// Setup mounts
-	m, err := s.platformMounts.Setup(ctx, vmi, r.ID, r.Rootfs, b.Rootfs, r.Bundle+"/mounts")
+	setupResult, err := s.platformMounts.Setup(ctx, vmi, r.ID, r.Rootfs, b.Rootfs, r.Bundle+"/mounts")
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	mountCleanup := setupResult.Cleanup
+	m := setupResult.Mounts
 
 	// Setup networking
 	netnsPath := "/var/run/netns/" + r.ID
@@ -449,12 +466,17 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	// Cleanup network resources on any error
+	// Cleanup network resources and mounts on any error
 	defer func() {
 		if retErr != nil {
 			env := &network.Environment{ID: r.ID}
 			if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
 				log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup network resources after failure")
+			}
+			if mountCleanup != nil {
+				if err := mountCleanup(context.WithoutCancel(ctx)); err != nil {
+					log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup mounts after failure")
+				}
 			}
 		}
 	}()
@@ -554,6 +576,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 			},
 			exec: make(map[string]processIOState),
 		},
+		mountCleanup: mountCleanup,
 	}
 	tc := taskAPI.NewTTRPCTaskClient(rpcClient)
 	resp, err := tc.Create(ctx, vr)
@@ -774,6 +797,14 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 					log.G(ctx).WithError(ioErr).Warn("failed to shutdown io after delete failure")
 				}
 			}
+			mountCleanup := func() func(context.Context) error {
+				if s.container == nil {
+					return nil
+				}
+				cleanup := s.container.mountCleanup
+				s.container.mountCleanup = nil
+				return cleanup
+			}()
 			s.containerMu.Unlock()
 
 			s.intentionalShutdown.Store(true)
@@ -788,6 +819,11 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 			if netErr := s.networkManager.ReleaseNetworkResources(ctx, env); netErr != nil {
 				log.G(ctx).WithError(netErr).WithField("id", r.ID).Warn("failed to release network resources after delete failure")
 			}
+			if mountCleanup != nil {
+				if err := mountCleanup(ctx); err != nil {
+					log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup mounts after delete failure")
+				}
+			}
 		}
 		return resp, err
 	}
@@ -796,6 +832,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	var ioForwarders []IOForwarder
 	var cpuController cpuhotplug.CPUHotplugController
 	var memController memhotplug.MemoryHotplugController
+	var mountCleanup func(context.Context) error
 	var needNetworkClean, needVMShutdown bool
 
 	s.containerMu.Lock()
@@ -815,6 +852,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 					ioForwarders = append(ioForwarders, pio.forwarder)
 				}
 			}
+			mountCleanup = s.container.mountCleanup
 			needNetworkClean = true
 			needVMShutdown = true
 			s.container = nil
@@ -870,6 +908,12 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		env := &network.Environment{ID: r.ID}
 		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
 			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
+		}
+	}
+
+	if mountCleanup != nil {
+		if err := mountCleanup(ctx); err != nil {
+			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup mounts during delete")
 		}
 	}
 
@@ -1369,7 +1413,10 @@ func (s *service) requestShutdownAndExit(ctx context.Context, reason string) {
 }
 
 func (s *service) forward(ctx context.Context, publisher shim.Publisher, ready chan<- struct{}) {
-	ns, _ := namespaces.Namespace(ctx)
+	ns, ok := namespaces.Namespace(ctx)
+	if !ok || ns == "" {
+		ns = defaultNamespace
+	}
 	ctx = namespaces.WithNamespace(context.WithoutCancel(ctx), ns)
 
 	close(ready)
