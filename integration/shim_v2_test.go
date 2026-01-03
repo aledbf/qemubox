@@ -301,7 +301,9 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	}
 	t.Logf("task created with pid %d", task.Pid())
 	defer func() {
-		if _, err := task.Delete(ctx); err != nil {
+		// Use WithProcessKill to force cleanup even if task is in CREATED state
+		// (e.g., when Start fails)
+		if _, err := task.Delete(ctx, containerd.WithProcessKill); err != nil {
 			t.Logf("cleanup task: %v", err)
 		}
 	}()
