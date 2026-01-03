@@ -18,7 +18,6 @@ require (
 	github.com/containerd/typeurl/v2 v2.2.3
 	github.com/containernetworking/cni v1.3.0
 	github.com/docker/docker v28.5.2+incompatible
-	github.com/docker/go-events v0.0.0-20250808211157-605354379745
 	github.com/mdlayher/vsock v1.2.1
 	github.com/moby/sys/userns v0.1.0
 	github.com/opencontainers/runc v1.2.3
@@ -41,6 +40,7 @@ require (
 	github.com/cyphar/filepath-securejoin v0.5.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
+	github.com/docker/go-events v0.0.0-20250808211157-605354379745 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
