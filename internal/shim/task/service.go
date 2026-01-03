@@ -137,6 +137,9 @@ const (
 	// 2 seconds allows for brief VM pauses (e.g., during snapshot operations)
 	// without triggering shim shutdown, while still detecting genuine VM failures quickly.
 	eventStreamReconnectTimeout = 2 * time.Second
+	// taskClientRetryTimeout is how long we retry vsock dial for unary task RPCs.
+	// This smooths over transient vsock routing issues (e.g., CID reuse).
+	taskClientRetryTimeout = 1 * time.Second
 
 	defaultNamespace = "default"
 )
@@ -348,7 +351,7 @@ func (s *service) shutdown(ctx context.Context) error {
 //
 // The caller must call the cleanup function when done to close the connection.
 func (s *service) getTaskClient(ctx context.Context) (*ttrpc.Client, func(), error) {
-	vmc, err := s.vmLifecycle.DialClient(ctx)
+	vmc, err := s.vmLifecycle.DialClientWithRetry(ctx, taskClientRetryTimeout)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("failed to dial task client")
 		return nil, nil, errgrpc.ToGRPC(err)
