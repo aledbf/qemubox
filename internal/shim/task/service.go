@@ -709,16 +709,12 @@ func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Cli
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("start: request received")
 
-	vmc, err := s.vmLifecycle.DialClientWithRetry(ctx, 30*time.Second)
+	vmc, cleanup, err := s.dialTaskClient(ctx)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("start: failed to get client")
-		return nil, errgrpc.ToGRPC(err)
+		return nil, err
 	}
-	defer func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close ttrpc client")
-		}
-	}()
+	defer cleanup()
 
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("start: calling guest")
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
@@ -760,15 +756,11 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		}
 	}
 
-	vmc, err := s.vmLifecycle.DialClient(ctx)
+	vmc, cleanup, err := s.dialTaskClient(ctx)
 	if err != nil {
-		return nil, errgrpc.ToGRPC(err)
+		return nil, err
 	}
-	defer func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close ttrpc client")
-		}
-	}()
+	defer cleanup()
 
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Delete(ctx, r)
@@ -895,15 +887,11 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("exec request")
 
-	vmc, err := s.vmLifecycle.DialClient(ctx)
+	vmc, cleanup, err := s.dialTaskClient(ctx)
 	if err != nil {
-		return nil, errgrpc.ToGRPC(err)
+		return nil, err
 	}
-	defer func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close ttrpc client")
-		}
-	}()
+	defer cleanup()
 
 	vmi, err := s.vmLifecycle.Instance()
 	if err != nil {
