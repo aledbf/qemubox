@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -301,8 +302,11 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	}
 	t.Logf("task created with pid %d", task.Pid())
 	defer func() {
-		// Use WithProcessKill to force cleanup even if task is in CREATED state
-		// (e.g., when Start fails)
+		// Try to kill the task first (may fail if not started, that's ok)
+		_ = task.Kill(ctx, syscall.SIGKILL)
+		// Wait briefly for kill to take effect
+		time.Sleep(100 * time.Millisecond)
+		// Delete with force kill option
 		if _, err := task.Delete(ctx, containerd.WithProcessKill); err != nil {
 			t.Logf("cleanup task: %v", err)
 		}
