@@ -329,7 +329,6 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	t.Log("pulling image...")
 	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "image", "pull",
 		"--snapshotter", cfg.Snapshotter,
-		"--unpack",
 		cfg.Image,
 	); err != nil {
 		t.Fatalf("pull image: %v", err)
