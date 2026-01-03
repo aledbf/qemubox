@@ -12,6 +12,7 @@ import (
 
 	eventsapi "github.com/containerd/containerd/api/events"
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/events"
 	"github.com/containerd/containerd/v2/core/runtime"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
@@ -93,7 +94,7 @@ func (t *eventTracker) maybeDoneLocked() {
 	t.closeDone()
 }
 
-func (t *eventTracker) handleEvent(e *eventsapi.Envelope) {
+func (t *eventTracker) handleEvent(e *events.Envelope) {
 	if e == nil || e.Event == nil {
 		return
 	}
