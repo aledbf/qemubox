@@ -5,7 +5,7 @@
 # - containerd shim for qemubox runtime
 
 # Base image versions
-ARG GO_VERSION=1.25.4
+ARG GO_VERSION=1.25.5
 ARG BASE_DEBIAN_DISTRO="bookworm"
 ARG GOLANG_IMAGE="golang:${GO_VERSION}-${BASE_DEBIAN_DISTRO}"
 
