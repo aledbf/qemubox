@@ -3,16 +3,15 @@
 package qemu
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/containerd/log"
+	qmpapi "github.com/digitalocean/go-qemu/qmp"
 
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 )
@@ -20,12 +19,9 @@ import (
 // qmpClient implements QEMU Machine Protocol (QMP) client.
 // QMP is a JSON-RPC protocol for controlling QEMU via a Unix socket.
 type qmpClient struct {
-	conn    net.Conn
-	scanner *bufio.Scanner
-	encoder *json.Encoder
+	monitor *qmpapi.SocketMonitor
+	events  <-chan qmpapi.Event
 
-	nextID         atomic.Uint64
-	pending        map[uint64]chan *qmpResponse
 	mu             sync.Mutex
 	closed         atomic.Bool
 	commandTimeout time.Duration // Timeout for QMP commands (default: 5 seconds)
@@ -35,18 +31,12 @@ type qmpClient struct {
 	eventLoopDone chan struct{}
 }
 
-type qmpCommand struct {
-	Execute   string         `json:"execute"`
-	Arguments map[string]any `json:"arguments,omitempty"`
-	ID        uint64         `json:"id,omitempty"`
-}
-
 type qmpResponse struct {
-	Return any            `json:"return,omitempty"`
-	Error  *qmpError      `json:"error,omitempty"`
-	ID     uint64         `json:"id,omitempty"`
-	Event  string         `json:"event,omitempty"`
-	Data   map[string]any `json:"data,omitempty"`
+	Return any             `json:"return,omitempty"`
+	Error  *qmpError       `json:"error,omitempty"`
+	ID     json.RawMessage `json:"id,omitempty"`
+	Event  string          `json:"event,omitempty"`
+	Data   map[string]any  `json:"data,omitempty"`
 }
 
 type qmpError struct {
@@ -80,61 +70,38 @@ func newQMPClient(ctx context.Context, socketPath string) (*qmpClient, error) {
 		return nil, fmt.Errorf("QMP socket not available: %w", err)
 	}
 
-	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "unix", socketPath)
+	monitor, err := qmpapi.NewSocketMonitor("unix", socketPath, qmpDefaultTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to QMP socket: %w", err)
 	}
 
-	qmp := &qmpClient{
-		conn:           conn,
-		scanner:        bufio.NewScanner(conn),
-		encoder:        json.NewEncoder(conn),
-		pending:        make(map[uint64]chan *qmpResponse),
-		commandTimeout: qmpDefaultTimeout,
-		eventLoopDone:  make(chan struct{}),
-	}
-	// QMP can emit large JSON objects; ensure we don't drop events due to scanner limits.
-	qmp.scanner.Buffer(make([]byte, 0, qmpBufferInitial), qmpBufferMax)
-
-	// Read QMP greeting
-	if !qmp.scanner.Scan() {
-		_ = conn.Close()
-		return nil, fmt.Errorf("failed to read QMP greeting")
-	}
-
-	var greeting struct {
-		QMP struct {
-			Version struct {
-				QEMU struct {
-					Major int `json:"major"`
-					Minor int `json:"minor"`
-					Micro int `json:"micro"`
-				} `json:"qemu"`
-			} `json:"version"`
-			Capabilities []string `json:"capabilities"`
-		} `json:"QMP"`
-	}
-
-	if err := json.Unmarshal(qmp.scanner.Bytes(), &greeting); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("failed to parse QMP greeting: %w", err)
+	if err := monitor.Connect(); err != nil {
+		_ = monitor.Disconnect()
+		return nil, fmt.Errorf("failed to negotiate QMP capabilities: %w", err)
 	}
 
 	log.G(ctx).WithFields(log.Fields{
-		"major": greeting.QMP.Version.QEMU.Major,
-		"minor": greeting.QMP.Version.QEMU.Minor,
-		"micro": greeting.QMP.Version.QEMU.Micro,
+		"major": monitor.Version.QEMU.Major,
+		"minor": monitor.Version.QEMU.Minor,
+		"micro": monitor.Version.QEMU.Micro,
 	}).Debug("qemu: connected to QMP")
 
-	// Start event loop in background BEFORE sending commands
-	go qmp.eventLoop(ctx)
-
-	// Enter command mode
-	if _, err := qmp.execute(ctx, "qmp_capabilities", nil); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("failed to negotiate QMP capabilities: %w", err)
+	eventCtx := context.WithoutCancel(ctx)
+	events, err := monitor.Events(eventCtx)
+	if err != nil && err != qmpapi.ErrEventsNotSupported {
+		_ = monitor.Disconnect()
+		return nil, fmt.Errorf("failed to subscribe to QMP events: %w", err)
 	}
+
+	qmp := &qmpClient{
+		monitor:        monitor,
+		events:         events,
+		commandTimeout: qmpDefaultTimeout,
+		eventLoopDone:  make(chan struct{}),
+	}
+
+	// Start event loop in background AFTER connecting
+	go qmp.eventLoop(eventCtx)
 
 	return qmp, nil
 }
@@ -172,35 +139,43 @@ func (q *qmpClient) sendCommand(ctx context.Context, command string, args map[st
 		return nil, err
 	}
 
-	id := q.nextID.Add(1)
-
-	respChan := make(chan *qmpResponse, 1)
-	q.mu.Lock()
-	if q.pending == nil {
-		q.mu.Unlock()
-		return nil, fmt.Errorf("QMP client closed")
-	}
-	q.pending[id] = respChan
-	q.mu.Unlock()
-
-	cmd := qmpCommand{
-		Execute:   command,
-		Arguments: args,
-		ID:        id,
+	cmd := qmpapi.Command{
+		Execute: command,
+		Args:    args,
 	}
 
-	if err := q.encoder.Encode(cmd); err != nil {
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
-		return nil, fmt.Errorf("failed to send QMP command %s: %w", command, err)
+	payload, err := json.Marshal(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode QMP command %s: %w", command, err)
 	}
 
 	// Use configured timeout
-	timeout := q.commandTimeout
+	timeout := q.getCommandTimeout()
 	if timeout == 0 {
 		timeout = qmpDefaultTimeout
 	}
+
+	respChan := make(chan *qmpResponse, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		raw, err := q.monitor.Run(payload)
+		if err != nil {
+			errChan <- err
+			return
+		}
+
+		var resp qmpResponse
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			errChan <- fmt.Errorf("failed to parse QMP response for %s: %w", command, err)
+			return
+		}
+		if resp.Error != nil {
+			errChan <- fmt.Errorf("QMP error for %s: %s: %s", command, resp.Error.Class, resp.Error.Desc)
+			return
+		}
+
+		respChan <- &resp
+	}()
 
 	// Wait for response with timeout
 	select {
@@ -208,19 +183,12 @@ func (q *qmpClient) sendCommand(ctx context.Context, command string, args map[st
 		if resp == nil {
 			return nil, fmt.Errorf("QMP response channel closed for %s", command)
 		}
-		if resp.Error != nil {
-			return nil, fmt.Errorf("QMP error for %s: %s: %s", command, resp.Error.Class, resp.Error.Desc)
-		}
 		return resp, nil
+	case err := <-errChan:
+		return nil, fmt.Errorf("failed to send QMP command %s: %w", command, err)
 	case <-ctx.Done():
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
 		return nil, ctx.Err()
 	case <-time.After(timeout):
-		q.mu.Lock()
-		delete(q.pending, id)
-		q.mu.Unlock()
 		return nil, fmt.Errorf("timeout (%v) waiting for QMP response to %s", timeout, command)
 	}
 }
@@ -298,47 +266,25 @@ func (q *qmpClient) handleEvent(ctx context.Context, resp *qmpResponse) {
 func (q *qmpClient) eventLoop(ctx context.Context) {
 	defer close(q.eventLoopDone)
 
-	for q.scanner.Scan() {
-		if q.closed.Load() {
-			return
-		}
-
-		var resp qmpResponse
-		if err := json.Unmarshal(q.scanner.Bytes(), &resp); err != nil {
-			log.G(ctx).WithError(err).Warn("qemu: failed to parse QMP message")
-			continue
-		}
-
-		// Handle asynchronous events (no ID)
-		if resp.Event != "" {
-			q.handleEvent(ctx, &resp)
-			continue
-		}
-
-		// Handle command responses
-		q.mu.Lock()
-		ch, ok := q.pending[resp.ID]
-		if ok {
-			delete(q.pending, resp.ID)
-		}
-		q.mu.Unlock()
-
-		if ok {
-			select {
-			case ch <- &resp:
-			default:
-				// Channel closed or nobody waiting
-			}
-		}
+	if q.events == nil {
+		return
 	}
 
-	// Scanner stopped (connection closed or error)
-	if err := q.scanner.Err(); err != nil {
-		// After quit command or Close(), connection errors are expected
-		if q.closed.Load() {
-			log.G(ctx).WithError(err).Trace("qemu: QMP connection closed")
-		} else {
-			log.G(ctx).WithError(err).Debug("qemu: QMP scanner error")
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-q.events:
+			if !ok {
+				return
+			}
+			if q.closed.Load() {
+				return
+			}
+			q.handleEvent(ctx, &qmpResponse{
+				Event: ev.Event,
+				Data:  ev.Data,
+			})
 		}
 	}
 }
@@ -694,35 +640,22 @@ func (q *qmpClient) UnplugMemory(ctx context.Context, slotID int) error {
 //
 // The shutdown sequence is carefully ordered to avoid races with eventLoop:
 // 1. Mark as closed (prevents new commands)
-// 2. Close the connection (causes scanner.Scan() to return false)
-// 3. Wait for eventLoop to exit (ensures it won't access pending channels)
-// 4. Clean up any remaining pending channels
+// 2. Disconnect the monitor (closes the socket)
+// 3. Wait for eventLoop to exit
 func (q *qmpClient) Close() error {
 	if !q.closed.CompareAndSwap(false, true) {
 		return nil // Already closed
 	}
 
-	// Close connection first - this will cause scanner.Scan() to return false
-	// and the eventLoop to exit gracefully
-	err := q.conn.Close()
+	err := q.monitor.Disconnect()
 
-	// Wait for eventLoop to exit with a timeout
-	// This ensures eventLoop won't race with pending channel cleanup
+	// Wait for eventLoop to exit with a timeout.
 	select {
 	case <-q.eventLoopDone:
 		// eventLoop exited cleanly
 	case <-time.After(100 * time.Millisecond):
-		// Timeout - eventLoop may have already exited or is stuck
-		// Proceed with cleanup anyway
+		// Timeout - eventLoop may have already exited or is stuck.
 	}
-
-	// Now safe to clean up pending channels
-	q.mu.Lock()
-	for _, ch := range q.pending {
-		close(ch)
-	}
-	q.pending = nil
-	q.mu.Unlock()
 
 	return err
 }
@@ -734,4 +667,10 @@ func (q *qmpClient) checkClosed() error {
 		return fmt.Errorf("QMP client closed")
 	}
 	return nil
+}
+
+func (q *qmpClient) getCommandTimeout() time.Duration {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.commandTimeout
 }

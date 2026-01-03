@@ -54,8 +54,6 @@ const (
 	// Unix socket and buffer size limits
 	maxUnixSocketPath = 107             // UNIX_PATH_MAX on Linux
 	consoleBufferSize = 8 * 1024        // Console FIFO read buffer
-	qmpBufferInitial  = 64 * 1024       // QMP scanner initial buffer
-	qmpBufferMax      = 1024 * 1024     // QMP scanner max buffer
 	qmpDefaultTimeout = 5 * time.Second // Default QMP command timeout
 )
 
