@@ -586,6 +586,13 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 		for {
 			ev, err := sc.Recv()
 			if err != nil {
+				log.G(ctx).WithError(err).WithFields(log.Fields{
+					"error_type":      fmt.Sprintf("%T", err),
+					"is_eof":          errors.Is(err, io.EOF),
+					"is_shutdown":     errors.Is(err, shutdown.ErrShutdown),
+					"is_ttrpc_closed": errors.Is(err, ttrpc.ErrClosed),
+				}).Warn("event stream recv error")
+
 				if s.intentionalShutdown.Load() {
 					log.G(ctx).Info("vm event stream closed (intentional shutdown)")
 					return
@@ -660,9 +667,11 @@ func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Cli
 		// Success! Don't close the old client here - it might be the cached client
 		// from the VM instance which is shared. The event forwarder will track
 		// which clients it owns and can close them when appropriate.
+		log.G(ctx).Info("event stream reconnect: success")
 		return newClient, newStream, true
 	}
 
+	log.G(ctx).WithField("timeout", eventStreamReconnectTimeout).Warn("event stream reconnect: timeout expired")
 	return nil, nil, false
 }
 

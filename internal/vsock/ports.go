@@ -8,8 +8,8 @@ const (
 	// GuestCID is the guest context ID for vsock communication.
 	// CID 0 is reserved for the hypervisor.
 	// CID 1 is reserved for the host.
-	// CID 2 is used by QEMU for host<->guest communication.
-	// CID 3 is assigned to the guest VM.
+	// CID 2 is the host CID in standard vsock setups (often the QEMU side).
+	// CID 3 is assigned to the guest VM by qemubox.
 	GuestCID = 3
 
 	// DefaultRPCPort is the vsock port for TTRPC RPC communication

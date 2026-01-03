@@ -6,8 +6,6 @@
 
 [![CI](https://github.com/aledbf/qemubox/actions/workflows/ci.yml/badge.svg)](https://github.com/aledbf/qemubox/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/aledbf/qemubox/branch/main/graph/badge.svg)](https://codecov.io/gh/aledbf/qemubox)
-[![Go Report Card](https://goreportcard.com/badge/github.com/aledbf/qemubox/containerd)](https://goreportcard.com/report/github.com/aledbf/qemubox/containerd)
-[![Go Reference](https://pkg.go.dev/badge/github.com/aledbf/qemubox/containerd.svg)](https://pkg.go.dev/github.com/aledbf/qemubox/containerd)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 *Run each container in its own lightweight QEMU/KVM virtual machine*

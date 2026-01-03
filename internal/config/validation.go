@@ -214,8 +214,8 @@ func (c *Config) validateMemHotplug() error {
 
 // Helper functions
 
-// canonicalizePath resolves symlinks and cleans the path to prevent symlink attacks.
-// This ensures paths are resolved to their real location before validation.
+// canonicalizePath resolves symlinks and cleans the path for consistent validation.
+// This surfaces the real location but does not enforce a security boundary.
 // If the path doesn't exist yet (for directories we'll create), we clean it
 // and resolve as much of the path as possible.
 func canonicalizePath(path string) (string, error) {
@@ -266,7 +266,7 @@ func canonicalizePath(path string) (string, error) {
 }
 
 func validateDirectoryExists(path, fieldName string) error {
-	// Canonicalize the path to prevent symlink attacks
+	// Canonicalize the path to resolve symlinks for consistent checks.
 	canonical, err := canonicalizePath(path)
 	if err != nil {
 		return fmt.Errorf("%s path resolution failed: %w", fieldName, err)
@@ -289,9 +289,9 @@ func validateDirectoryExists(path, fieldName string) error {
 
 // ensureDirectoryWritable ensures a directory exists and is writable.
 // If the directory doesn't exist, it creates it with 0750 permissions.
-// Paths are canonicalized to prevent symlink attacks.
+// Paths are canonicalized to resolve symlinks for consistent checks.
 func ensureDirectoryWritable(path, fieldName string) error {
-	// Canonicalize the path first to prevent symlink attacks
+	// Canonicalize the path first to resolve symlinks for consistent checks.
 	// This resolves existing parent directories to their real paths
 	canonical, err := canonicalizePath(path)
 	if err != nil {
@@ -322,7 +322,7 @@ func ensureDirectoryWritable(path, fieldName string) error {
 }
 
 func validateExecutable(path, fieldName string) error {
-	// Canonicalize the path to prevent symlink attacks
+	// Canonicalize the path to resolve symlinks for consistent checks.
 	canonical, err := canonicalizePath(path)
 	if err != nil {
 		return fmt.Errorf("%s path resolution failed: %w", fieldName, err)

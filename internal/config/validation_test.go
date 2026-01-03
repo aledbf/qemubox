@@ -107,7 +107,7 @@ func TestCanonicalizePath_SymlinkEscapeAttempt(t *testing.T) {
 	// Callers should then validate the resolved path is within allowed boundaries
 }
 
-func TestValidateDirectoryExists_RejectsSymlinkEscape(t *testing.T) {
+func TestValidateDirectoryExists_AllowsSymlinkTarget(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create a target directory outside "allowed" area

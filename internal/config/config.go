@@ -95,7 +95,7 @@ func Get() (*Config, error) {
 }
 
 // Load loads configuration from QEMUBOX_CONFIG env var or /etc/qemubox/config.json.
-// The config file is required - missing file is a fatal error.
+// Missing files return an error for the caller to handle.
 func Load() (*Config, error) {
 	configPath := os.Getenv(ConfigEnvVar)
 	if configPath == "" {

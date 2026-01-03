@@ -121,9 +121,8 @@ func (q *Instance) validateConfiguration() error {
 		return fmt.Errorf("max CPUs (%d) cannot be less than boot CPUs (%d)", q.resourceCfg.MaxCPUs, q.resourceCfg.BootCPUs)
 	}
 
-	// Require at least one network interface from CNI
-	// VMs without networking cannot communicate with the host via vsock properly
-	// and will fail during guest initialization
+	// Require at least one network interface from CNI.
+	// qemubox currently assumes a configured NIC during guest initialization.
 	if len(q.nets) == 0 {
 		return fmt.Errorf("no network interface configured: call AddNetwork() before Start()")
 	}

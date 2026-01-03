@@ -177,8 +177,18 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 	}
 	st, err := p.Status(ctx)
 	if err != nil {
+		log.G(ctx).WithError(err).WithFields(log.Fields{
+			"id":   r.ID,
+			"exec": r.ExecID,
+		}).Error("State: failed to get process status")
 		return nil, err
 	}
+	log.G(ctx).WithFields(log.Fields{
+		"id":          r.ID,
+		"exec":        r.ExecID,
+		"status_str":  st,
+		"process_pid": p.Pid(),
+	}).Debug("State: process status retrieved")
 	status := task.Status_UNKNOWN
 	switch st {
 	case "created":
@@ -191,6 +201,12 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 		status = task.Status_PAUSED
 	case "pausing":
 		status = task.Status_PAUSING
+	default:
+		log.G(ctx).WithFields(log.Fields{
+			"id":     r.ID,
+			"exec":   r.ExecID,
+			"status": st,
+		}).Warn("State: unknown status string from process")
 	}
 	sio := p.Stdio()
 	return &taskAPI.StateResponse{
