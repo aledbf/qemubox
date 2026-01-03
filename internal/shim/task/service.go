@@ -338,49 +338,22 @@ func (s *service) shutdown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// dialTaskClientTimeout is the maximum time to wait for vsock connection.
-// This handles transient vsock errors (e.g., ENODEV, connection refused) that
-// can occur briefly when the guest is busy or during VM state transitions.
-// 5 seconds is long enough to recover from most transient issues while being
-// short enough to fail fast for genuine problems.
-const dialTaskClientTimeout = 5 * time.Second
-
-// dialTaskClient dials a TTRPC client and returns it with a cleanup function.
-// The cleanup function handles closing the client and logging any errors.
-// Uses retry logic to handle transient vsock errors (e.g., ENODEV, connection refused).
-// Callers should use taskAPI.NewTTRPCTaskClient() to create a task client from the returned connection.
+// getTaskClient returns the cached TTRPC client for RPC calls.
+// This reuses the existing vsock connection instead of dialing new connections.
 //
-// IMPORTANT: This function creates its own context with dialTaskClientTimeout instead of
-// using the incoming context's deadline. This is intentional because containerd may pass
-// a context with a short deadline (e.g., 2 seconds), but vsock connections may need more
-// time during VM state transitions or when the guest is busy.
-func (s *service) dialTaskClient(ctx context.Context) (*ttrpc.Client, func(), error) {
-	// Create a new context with our own timeout, ignoring containerd's deadline.
-	// We preserve cancellation (if parent is canceled, we cancel too) but not the deadline.
-	dialCtx, dialCancel := context.WithTimeout(context.Background(), dialTaskClientTimeout)
-	defer dialCancel()
-
-	// Also respect parent cancellation
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			dialCancel()
-		case <-done:
-		}
-	}()
-
-	//nolint:contextcheck // Intentionally using non-inherited context - see comment above
-	vmc, err := s.vmLifecycle.DialClientWithRetry(dialCtx, dialTaskClientTimeout)
+// The cached client is established during VM start and is used for the event stream.
+// TTRPC supports multiplexing multiple RPCs on a single connection, so we can
+// reuse it for State, Start, Delete, and other RPC calls.
+//
+// The cleanup function is a no-op since we don't want to close the shared connection.
+func (s *service) getTaskClient(ctx context.Context) (*ttrpc.Client, func(), error) {
+	vmc, err := s.vmLifecycle.Client()
 	if err != nil {
+		log.G(ctx).WithError(err).Error("failed to get cached client")
 		return nil, nil, errgrpc.ToGRPC(err)
 	}
-	cleanup := func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close ttrpc client")
-		}
-	}
+	// No-op cleanup - we don't close the shared client
+	cleanup := func() {}
 	return vmc, cleanup, nil
 }
 
@@ -732,7 +705,7 @@ func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Cli
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("start: request received")
 
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("start: failed to get client")
 		return nil, err
@@ -915,7 +888,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		}
 	}
 
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -942,7 +915,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("exec request")
 
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1034,7 +1007,7 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 // ResizePty of a process.
 func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("resize pty request")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1046,7 +1019,7 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("state: request received")
 
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("state: failed to get client")
 		return nil, err
@@ -1097,7 +1070,7 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 // Pause the container.
 func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pause request")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1108,7 +1081,7 @@ func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.E
 // Resume the container.
 func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("resume request")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1119,7 +1092,7 @@ func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes
 // Kill a process with the provided signal.
 func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("kill request")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1130,7 +1103,7 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 // Pids returns all pids inside the container.
 func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.PidsResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pids request")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1164,7 +1137,7 @@ func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptyp
 		s.containerMu.Unlock()
 	}
 
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1181,7 +1154,7 @@ func (s *service) Checkpoint(ctx context.Context, r *taskAPI.CheckpointTaskReque
 // Update a running container.
 func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("update request")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1192,7 +1165,7 @@ func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*pt
 // Wait for a process to exit.
 func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.WaitResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("wait request")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1221,7 +1194,7 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 		}, nil
 	}
 
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1257,7 +1230,7 @@ func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*pt
 
 func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.StatsResponse, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("stats request")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
