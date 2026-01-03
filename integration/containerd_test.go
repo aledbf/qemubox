@@ -86,14 +86,22 @@ type testConfig struct {
 	Namespace   string
 }
 
+const (
+	defaultSocket      = "/var/run/qemubox/containerd.sock"
+	defaultImage       = "ghcr.io/aledbf/qemubox/sandbox:latest"
+	defaultRuntime     = "io.containerd.qemubox.v1"
+	defaultSnapshotter = "erofs"
+	defaultNamespace   = namespaces.Default
+)
+
 // loadTestConfig loads test configuration from environment variables.
 func loadTestConfig() testConfig {
 	return testConfig{
-		Socket:      getenvDefault("QEMUBOX_CONTAINERD_SOCKET", "/var/run/qemubox/containerd.sock"),
-		Image:       getenvDefault("QEMUBOX_IMAGE", "ghcr.io/aledbf/qemubox/sandbox:latest"),
-		Runtime:     getenvDefault("QEMUBOX_RUNTIME", "io.containerd.qemubox.v1"),
-		Snapshotter: getenvDefault("QEMUBOX_SNAPSHOTTER", "erofs"),
-		Namespace:   getenvDefault("QEMUBOX_NAMESPACE", namespaces.Default),
+		Socket:      defaultSocket,
+		Image:       defaultImage,
+		Runtime:     defaultRuntime,
+		Snapshotter: defaultSnapshotter,
+		Namespace:   defaultNamespace,
 	}
 }
 
@@ -824,11 +832,4 @@ func TestContainerdWorkingDirectory(t *testing.T) {
 	}
 
 	t.Log("working directory set correctly")
-}
-
-func getenvDefault(key, def string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return def
 }

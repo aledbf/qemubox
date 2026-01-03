@@ -746,6 +746,12 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 					log.G(ctx).WithError(shutdownErr).Warn("failed to shutdown VM after delete error")
 				}
 			}
+
+			// Release network resources even on delete failure to prevent CNI leaks
+			env := &network.Environment{ID: r.ID}
+			if netErr := s.networkManager.ReleaseNetworkResources(ctx, env); netErr != nil {
+				log.G(ctx).WithError(netErr).WithField("id", r.ID).Warn("failed to release network resources after delete failure")
+			}
 		}
 		return resp, err
 	}
@@ -810,7 +816,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		memController.Stop()
 	}
 
-	// Shutdown VM (BEFORE network cleanup)
+	// Shutdown VM first
 	if needVMShutdown {
 		log.G(ctx).Info("container deleted, shutting down VM")
 		s.intentionalShutdown.Store(true)
@@ -819,17 +825,22 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
 			}
 		}
-		log.G(ctx).Info("VM state cleared, scheduling shim exit")
-
-		go s.requestShutdownAndExit(ctx, "container deleted")
 	}
 
-	// Release network resources AFTER VM shutdown
+	// Release network resources AFTER VM shutdown but BEFORE scheduling shim exit
+	// This prevents the race where requestShutdownAndExit() calls exit(0) before
+	// CNI cleanup completes, leaving orphaned firewall rules
 	if needNetworkClean {
 		env := &network.Environment{ID: r.ID}
 		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
 			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
 		}
+	}
+
+	// Schedule shim exit after all cleanup is complete
+	if needVMShutdown {
+		log.G(ctx).Info("VM and network cleanup complete, scheduling shim exit")
+		go s.requestShutdownAndExit(ctx, "container deleted")
 	}
 
 	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("task deleted successfully")
