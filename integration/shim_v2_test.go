@@ -14,6 +14,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/errdefs"
+	"github.com/containerd/containerd/v2/pkg/namespaces"
 )
 
 // Task state constants for event tracking.
@@ -190,25 +194,28 @@ func (t *ctrEventTracker) wait(ctx context.Context) error {
 	}
 }
 
-// ctrCmd runs a ctr command and returns its output.
-func ctrCmd(t *testing.T, socket, namespace string, args ...string) (string, error) {
-	t.Helper()
-	fullArgs := append([]string{"--address", socket, "-n", namespace}, args...)
-	cmd := exec.Command("ctr", fullArgs...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err != nil {
-		return stdout.String(), fmt.Errorf("ctr %s: %v\nstderr: %s", strings.Join(args, " "), err, stderr.String())
-	}
-	return stdout.String(), nil
+type ctrRunner struct {
+	t         *testing.T
+	socket    string
+	namespace string
 }
 
-// ctrCmdContext runs a ctr command with context and returns its output.
-func ctrCmdContext(ctx context.Context, t *testing.T, socket, namespace string, args ...string) (string, error) {
-	t.Helper()
-	fullArgs := append([]string{"--address", socket, "-n", namespace}, args...)
+func newCtrRunner(t *testing.T, cfg testConfig) *ctrRunner {
+	return &ctrRunner{
+		t:         t,
+		socket:    cfg.Socket,
+		namespace: cfg.Namespace,
+	}
+}
+
+func (c *ctrRunner) run(args ...string) (string, error) {
+	c.t.Helper()
+	return c.runContext(context.Background(), args...)
+}
+
+func (c *ctrRunner) runContext(ctx context.Context, args ...string) (string, error) {
+	c.t.Helper()
+	fullArgs := append([]string{"--address", c.socket, "--namespace", c.namespace}, args...)
 	cmd := exec.CommandContext(ctx, "ctr", fullArgs...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -220,19 +227,19 @@ func ctrCmdContext(ctx context.Context, t *testing.T, socket, namespace string, 
 	return stdout.String(), nil
 }
 
-// startCtrEvents starts `ctr events` and returns a channel of events.
-func startCtrEvents(ctx context.Context, t *testing.T, socket, namespace string) (<-chan ctrEvent, func()) {
-	t.Helper()
+// events starts `ctr events` and returns a channel of events.
+func (c *ctrRunner) events(ctx context.Context) (<-chan ctrEvent, func()) {
+	c.t.Helper()
 
 	eventsCh := make(chan ctrEvent, 100)
-	cmd := exec.CommandContext(ctx, "ctr", "--address", socket, "-n", namespace, "events")
+	cmd := exec.CommandContext(ctx, "ctr", "--address", c.socket, "--namespace", c.namespace, "events")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		t.Fatalf("create stdout pipe: %v", err)
+		c.t.Fatalf("create stdout pipe: %v", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("start ctr events: %v", err)
+		c.t.Fatalf("start ctr events: %v", err)
 	}
 
 	go func() {
@@ -255,7 +262,7 @@ func startCtrEvents(ctx context.Context, t *testing.T, socket, namespace string)
 			prefix := strings.TrimSpace(line[:jsonStart])
 			parts := strings.Fields(prefix)
 			if len(parts) < 6 {
-				t.Logf("failed to parse event prefix: %s", line)
+				c.t.Logf("failed to parse event prefix: %s", line)
 				continue
 			}
 
@@ -265,7 +272,7 @@ func startCtrEvents(ctx context.Context, t *testing.T, socket, namespace string)
 			// Parse the JSON event
 			jsonStr := line[jsonStart:]
 			if err := json.Unmarshal([]byte(jsonStr), &evt.Event); err != nil {
-				t.Logf("failed to parse event JSON: %v (json: %s)", err, jsonStr)
+				c.t.Logf("failed to parse event JSON: %v (json: %s)", err, jsonStr)
 				continue
 			}
 
@@ -288,6 +295,7 @@ func startCtrEvents(ctx context.Context, t *testing.T, socket, namespace string)
 
 func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	cfg := loadTestConfig()
+	ctr := newCtrRunner(t, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -313,10 +321,13 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	expectedExecExit := uint32(0)
 	tracker := newCtrEventTracker(containerID, execID, true, &expectedInitExit, &expectedExecExit)
 
+	client := setupContainerdClient(t, cfg)
+	defer client.Close()
+
 	// Start event listener
 	eventsCtx, eventsCancel := context.WithCancel(ctx)
 	defer eventsCancel()
-	eventsCh, cleanupEvents := startCtrEvents(eventsCtx, t, cfg.Socket, cfg.Namespace)
+	eventsCh, cleanupEvents := ctr.events(eventsCtx)
 	defer cleanupEvents()
 
 	go func() {
@@ -326,12 +337,17 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	}()
 
 	// Ensure image is pulled and unpacked for the configured snapshotter.
-	t.Log("pulling image...")
-	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "image", "pull",
-		"--snapshotter", cfg.Snapshotter,
-		cfg.Image,
-	); err != nil {
-		t.Fatalf("pull image: %v", err)
+	t.Log("ensuring image is unpacked...")
+	ctxNS := namespaces.WithNamespace(ctx, cfg.Namespace)
+	img, err := client.GetImage(ctxNS, cfg.Image)
+	if err != nil {
+		img, err = client.Pull(ctxNS, cfg.Image, containerd.WithPullSnapshotter(cfg.Snapshotter))
+		if err != nil {
+			t.Fatalf("pull image: %v", err)
+		}
+	}
+	if err := img.Unpack(ctxNS, cfg.Snapshotter); err != nil && !errdefs.IsAlreadyExists(err) {
+		t.Fatalf("unpack image: %v", err)
 	}
 
 	// Cleanup function for container
@@ -340,18 +356,18 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 		defer cleanupCancel()
 
 		// Kill and delete task (ignore errors)
-		ctrCmdContext(cleanupCtx, t, cfg.Socket, cfg.Namespace, "task", "kill", "-s", "SIGKILL", containerID)
+		ctr.runContext(cleanupCtx, "task", "kill", "-s", "SIGKILL", containerID)
 		time.Sleep(500 * time.Millisecond)
-		ctrCmdContext(cleanupCtx, t, cfg.Socket, cfg.Namespace, "task", "delete", "-f", containerID)
+		ctr.runContext(cleanupCtx, "task", "delete", "-f", containerID)
 
 		// Delete container (with snapshot cleanup)
-		ctrCmdContext(cleanupCtx, t, cfg.Socket, cfg.Namespace, "container", "delete", containerID)
+		ctr.runContext(cleanupCtx, "container", "delete", containerID)
 	}
 	defer cleanup()
 
 	// Create container - containerd will automatically create a snapshot from the image
 	t.Log("creating container...")
-	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "container", "create",
+	if _, err := ctr.run("container", "create",
 		"--snapshotter", cfg.Snapshotter,
 		"--runtime", cfg.Runtime,
 		cfg.Image, containerID,
@@ -362,7 +378,7 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 
 	// Create and start task
 	t.Log("creating task...")
-	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "task", "start", "--null-io", "-d", containerID); err != nil {
+	if _, err := ctr.run("task", "start", "--null-io", "-d", containerID); err != nil {
 		t.Fatalf("start task: %v", err)
 	}
 	t.Log("task started successfully")
@@ -372,7 +388,7 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 
 	// Check task status
 	t.Log("checking task status...")
-	status, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "task", "ls")
+	status, err := ctr.run("task", "ls")
 	if err != nil {
 		t.Fatalf("task ls: %v", err)
 	}
@@ -383,7 +399,7 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 
 	// Run exec
 	t.Log("running exec...")
-	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "task", "exec",
+	if _, err := ctr.run("task", "exec",
 		"--exec-id", execID,
 		containerID,
 		"/bin/sh", "-c", "echo shim-validate",
@@ -404,7 +420,7 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 		default:
 		}
 
-		status, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "task", "ls")
+		status, err := ctr.run("task", "ls")
 		if err != nil {
 			// Task may have been deleted
 			break
@@ -418,7 +434,7 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 
 	// Delete task
 	t.Log("deleting task...")
-	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "task", "delete", containerID); err != nil {
+	if _, err := ctr.run("task", "delete", containerID); err != nil {
 		// Ignore errors if task already deleted
 		if !strings.Contains(err.Error(), "not found") {
 			t.Logf("task delete warning: %v", err)
