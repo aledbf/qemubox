@@ -4,12 +4,15 @@
 package mountutil
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
+	"text/template"
 	"time"
 
 	types "github.com/containerd/containerd/api/types"
@@ -39,7 +42,13 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (clean
 
 	ctx = ensureNamespace(ctx)
 
-	mnts := mount.FromProto(mounts)
+	// Preprocess mounts: handle format/ and mkdir/ prefixes
+	processed, err := preprocessMounts(ctx, rootfs, mdir, mounts)
+	if err != nil {
+		return nil, err
+	}
+
+	mnts := mount.FromProto(processed)
 	mgr, db, err := newManager(mdir)
 	if err != nil {
 		return nil, err
@@ -85,6 +94,179 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (clean
 	}
 
 	return cleanup, nil
+}
+
+// preprocessMounts handles format/ and mkdir/ mount type prefixes,
+// performing template substitution and directory creation as needed.
+func preprocessMounts(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) ([]*types.Mount, error) {
+	log.G(ctx).WithField("mounts", mounts).Debugf("preprocessing mounts")
+
+	active := []mount.ActiveMount{}
+	result := make([]*types.Mount, len(mounts))
+
+	for i, m := range mounts {
+		// Clone the mount to avoid modifying the original
+		processed := &types.Mount{
+			Type:    m.Type,
+			Source:  m.Source,
+			Target:  m.Target,
+			Options: append([]string{}, m.Options...),
+		}
+
+		// Determine the mount point for this mount
+		var mountPoint string
+		if i < len(mounts)-1 {
+			mountPoint = filepath.Join(mdir, fmt.Sprintf("%d", i))
+			if err := os.MkdirAll(mountPoint, 0711); err != nil {
+				return nil, err
+			}
+		} else {
+			mountPoint = rootfs
+		}
+
+		// Handle format/ prefix - template substitution
+		if t, ok := strings.CutPrefix(processed.Type, "format/"); ok {
+			processed.Type = t
+			for j, o := range processed.Options {
+				format := formatString(o)
+				if format != nil {
+					s, err := format(active)
+					if err != nil {
+						return nil, fmt.Errorf("formatting mount option %q: %w", o, err)
+					}
+					processed.Options[j] = s
+				}
+			}
+			if format := formatString(processed.Source); format != nil {
+				s, err := format(active)
+				if err != nil {
+					return nil, fmt.Errorf("formatting mount source %q: %w", processed.Source, err)
+				}
+				processed.Source = s
+			}
+			if format := formatString(processed.Target); format != nil {
+				s, err := format(active)
+				if err != nil {
+					return nil, fmt.Errorf("formatting mount target %q: %w", processed.Target, err)
+				}
+				processed.Target = s
+			}
+		}
+
+		// Handle mkdir/ prefix - create directories
+		if t, ok := strings.CutPrefix(processed.Type, "mkdir/"); ok {
+			processed.Type = t
+			var options []string
+			for _, o := range processed.Options {
+				if strings.HasPrefix(o, "X-containerd.mkdir.") {
+					prefix := "X-containerd.mkdir.path="
+					if !strings.HasPrefix(o, prefix) {
+						return nil, fmt.Errorf("unknown mkdir mount option %q", o)
+					}
+					part := strings.SplitN(o[len(prefix):], ":", 4)
+					switch len(part) {
+					case 4:
+						// TODO: Support setting uid/gid
+						fallthrough
+					case 3:
+						fallthrough
+					case 2:
+						fallthrough
+					case 1:
+						dir := part[0]
+						if !strings.HasPrefix(dir, mdir) {
+							return nil, fmt.Errorf("mkdir mount source %q must be under %q", dir, mdir)
+						}
+						if err := os.MkdirAll(dir, 0755); err != nil {
+							return nil, err
+						}
+					default:
+						return nil, fmt.Errorf("invalid mkdir mount option %q", o)
+					}
+				} else {
+					options = append(options, o)
+				}
+			}
+			processed.Options = options
+		}
+
+		// Track as active mount for subsequent template references
+		t := time.Now()
+		active = append(active, mount.ActiveMount{
+			Mount: mount.Mount{
+				Type:    processed.Type,
+				Source:  processed.Source,
+				Target:  processed.Target,
+				Options: processed.Options,
+			},
+			MountedAt:  &t,
+			MountPoint: mountPoint,
+		})
+
+		result[i] = processed
+	}
+
+	return result, nil
+}
+
+const formatCheck = "{{"
+
+func formatString(s string) func([]mount.ActiveMount) (string, error) {
+	if !strings.Contains(s, formatCheck) {
+		return nil
+	}
+
+	return func(a []mount.ActiveMount) (string, error) {
+		fm := template.FuncMap{
+			"source": func(i int) (string, error) {
+				if i < 0 || i >= len(a) {
+					return "", fmt.Errorf("index out of bounds: %d, has %d active mounts", i, len(a))
+				}
+				return a[i].Source, nil
+			},
+			"target": func(i int) (string, error) {
+				if i < 0 || i >= len(a) {
+					return "", fmt.Errorf("index out of bounds: %d, has %d active mounts", i, len(a))
+				}
+				return a[i].Target, nil
+			},
+			"mount": func(i int) (string, error) {
+				if i < 0 || i >= len(a) {
+					return "", fmt.Errorf("index out of bounds: %d, has %d active mounts", i, len(a))
+				}
+				return a[i].MountPoint, nil
+			},
+			"overlay": func(start, end int) (string, error) {
+				var dirs []string
+				if start > end {
+					if start >= len(a) || end < 0 {
+						return "", fmt.Errorf("invalid range: %d-%d, has %d active mounts", start, end, len(a))
+					}
+					for i := start; i >= end; i-- {
+						dirs = append(dirs, a[i].MountPoint)
+					}
+				} else {
+					if start < 0 || end >= len(a) {
+						return "", fmt.Errorf("invalid range: %d-%d, has %d active mounts", start, end, len(a))
+					}
+					for i := start; i <= end; i++ {
+						dirs = append(dirs, a[i].MountPoint)
+					}
+				}
+				return strings.Join(dirs, ":"), nil
+			},
+		}
+		t, err := template.New("").Funcs(fm).Parse(s)
+		if err != nil {
+			return "", err
+		}
+
+		buf := bytes.NewBuffer(nil)
+		if err := t.Execute(buf, nil); err != nil {
+			return "", err
+		}
+		return buf.String(), nil
+	}
 }
 
 func newManager(mdir string) (mount.Manager, *bolt.DB, error) {
