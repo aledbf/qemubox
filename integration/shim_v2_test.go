@@ -288,6 +288,15 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wait task: %v", err)
 	}
+
+	// Verify task is in created state before starting.
+	// This confirms the shim is responding to RPC calls.
+	status, err := task.Status(ctx)
+	if err != nil {
+		t.Fatalf("get task status: %v", err)
+	}
+	t.Logf("task status before start: %s", status.Status)
+
 	if err := task.Start(ctx); err != nil {
 		t.Fatalf("start task: %v", err)
 	}
