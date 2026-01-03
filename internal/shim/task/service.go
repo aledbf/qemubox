@@ -323,11 +323,19 @@ func (s *service) shutdown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// dialTaskClientTimeout is the maximum time to wait for vsock connection.
+// This handles transient vsock errors (e.g., ENODEV, connection refused) that
+// can occur briefly when the guest is busy or during VM state transitions.
+// 5 seconds is long enough to recover from most transient issues while being
+// short enough to fail fast for genuine problems.
+const dialTaskClientTimeout = 5 * time.Second
+
 // dialTaskClient dials a TTRPC client and returns it with a cleanup function.
 // The cleanup function handles closing the client and logging any errors.
+// Uses retry logic to handle transient vsock errors (e.g., ENODEV, connection refused).
 // Callers should use taskAPI.NewTTRPCTaskClient() to create a task client from the returned connection.
 func (s *service) dialTaskClient(ctx context.Context) (*ttrpc.Client, func(), error) {
-	vmc, err := s.vmLifecycle.DialClient(ctx)
+	vmc, err := s.vmLifecycle.DialClientWithRetry(ctx, dialTaskClientTimeout)
 	if err != nil {
 		return nil, nil, errgrpc.ToGRPC(err)
 	}
