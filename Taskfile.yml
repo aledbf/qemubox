@@ -109,6 +109,7 @@ tasks:
           NAME: vminitd
           OUT: vminitd
           PKG: ./cmd/vminitd
+          GO_STATIC_TAGS: '-tags "osusergo netgo static_build"'
 
   build:initrd:
     desc: Build initrd image
