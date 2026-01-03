@@ -334,8 +334,30 @@ const dialTaskClientTimeout = 5 * time.Second
 // The cleanup function handles closing the client and logging any errors.
 // Uses retry logic to handle transient vsock errors (e.g., ENODEV, connection refused).
 // Callers should use taskAPI.NewTTRPCTaskClient() to create a task client from the returned connection.
+//
+// IMPORTANT: This function creates its own context with dialTaskClientTimeout instead of
+// using the incoming context's deadline. This is intentional because containerd may pass
+// a context with a short deadline (e.g., 2 seconds), but vsock connections may need more
+// time during VM state transitions or when the guest is busy.
 func (s *service) dialTaskClient(ctx context.Context) (*ttrpc.Client, func(), error) {
-	vmc, err := s.vmLifecycle.DialClientWithRetry(ctx, dialTaskClientTimeout)
+	// Create a new context with our own timeout, ignoring containerd's deadline.
+	// We preserve cancellation (if parent is canceled, we cancel too) but not the deadline.
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), dialTaskClientTimeout)
+	defer dialCancel()
+
+	// Also respect parent cancellation
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			dialCancel()
+		case <-done:
+		}
+	}()
+
+	//nolint:contextcheck // Intentionally using non-inherited context - see comment above
+	vmc, err := s.vmLifecycle.DialClientWithRetry(dialCtx, dialTaskClientTimeout)
 	if err != nil {
 		return nil, nil, errgrpc.ToGRPC(err)
 	}
