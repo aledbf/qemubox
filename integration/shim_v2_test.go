@@ -325,10 +325,14 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 		}
 	}()
 
-	// Ensure image exists
-	t.Log("checking image...")
-	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "image", "ls", "-q"); err != nil {
-		t.Fatalf("list images: %v", err)
+	// Ensure image is pulled and unpacked for the configured snapshotter.
+	t.Log("pulling image...")
+	if _, err := ctrCmd(t, cfg.Socket, cfg.Namespace, "image", "pull",
+		"--snapshotter", cfg.Snapshotter,
+		"--unpack",
+		cfg.Image,
+	); err != nil {
+		t.Fatalf("pull image: %v", err)
 	}
 
 	// Cleanup function for container
