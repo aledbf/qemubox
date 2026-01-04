@@ -36,15 +36,3 @@ type ExecConfig struct {
 	Stderr   string
 	Spec     *google_protobuf.Any
 }
-
-// CheckpointConfig holds task checkpoint configuration
-type CheckpointConfig struct {
-	WorkDir                  string
-	Path                     string
-	Exit                     bool
-	AllowOpenTCP             bool
-	AllowExternalUnixSockets bool
-	AllowTerminal            bool
-	FileLocks                bool
-	EmptyNamespaces          []string
-}

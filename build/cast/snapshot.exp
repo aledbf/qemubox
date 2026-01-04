@@ -168,15 +168,20 @@ catch {wait}
 set spawn_id $bash_spawn
 
 # ============================================
-# PHASE 3: Create new image while VM runs
+# PHASE 3: Create new image from VM
 # ============================================
 
-comment "=== HOST: Create image from running VM ==="
+comment "=== HOST: Create image from VM ==="
 
 set NERDCTL "nerdctl --address /var/run/qemubox/containerd.sock"
 
-comment "VM is still running in background"
-type_cmd "$CTR task ls | grep snapshot-demo"
+comment "Stop VM before creating snapshot"
+type_cmd "$CTR task kill snapshot-demo"
+expect -re {\$|#}
+after 2000
+
+comment "Wait for VM to stop"
+type_cmd "$CTR task ls | grep snapshot-demo || echo 'VM stopped'"
 expect -re {\$|#}
 after 1000
 
@@ -200,10 +205,7 @@ type_cmd "$CTR images inspect docker.io/aledbf/sandbox:with-changes | head -13"
 expect -re {\$|#}
 after 2000
 
-comment "Stop original VM"
-type_cmd "$CTR task kill snapshot-demo"
-expect -re {\$|#}
-after 2000
+comment "Clean up original container"
 type_cmd "$CTR task delete snapshot-demo 2>/dev/null || true"
 expect -re {\$|#}
 after 1000
