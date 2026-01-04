@@ -1135,23 +1135,18 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 // Pause the container.
 func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pause request")
-	vmc, cleanup, err := s.getTaskClient(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer cleanup()
-	return taskAPI.NewTTRPCTaskClient(vmc).Pause(ctx, r)
+	// Pause is not supported in VM-based runtime.
+	// True pause would require checkpointing CPU and memory state (e.g., QEMU snapshot or CRIU),
+	// which is not implemented. The cgroups freezer only suspends processes without preserving state.
+	return nil, errgrpc.ToGRPCf(errdefs.ErrNotImplemented, "pause is not supported: VM-based runtime cannot checkpoint CPU/memory state")
 }
 
 // Resume the container.
 func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes.Empty, error) {
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("resume request")
-	vmc, cleanup, err := s.getTaskClient(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer cleanup()
-	return taskAPI.NewTTRPCTaskClient(vmc).Resume(ctx, r)
+	// Resume is not supported in VM-based runtime.
+	// Without checkpoint support, there is no paused state to resume from.
+	return nil, errgrpc.ToGRPCf(errdefs.ErrNotImplemented, "resume is not supported: VM-based runtime cannot restore CPU/memory state")
 }
 
 // Kill a process with the provided signal.

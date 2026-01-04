@@ -18,8 +18,6 @@ type initState interface {
 	state() State
 	Start(ctx context.Context) error
 	Delete(ctx context.Context) error
-	Pause(ctx context.Context) error
-	Resume(ctx context.Context) error
 	Update(ctx context.Context, r *google_protobuf.Any) error
 	Checkpoint(ctx context.Context, cfg *CheckpointConfig) error
 	Exec(ctx context.Context, id string, r *ExecConfig) (Process, error)
@@ -48,14 +46,6 @@ func (s *createdState) transition(name string) error {
 		return fmt.Errorf("invalid state transition %q to %q", stateName(s), name)
 	}
 	return nil
-}
-
-func (s *createdState) Pause(ctx context.Context) error {
-	return errors.New("cannot pause task in created state")
-}
-
-func (s *createdState) Resume(ctx context.Context) error {
-	return errors.New("cannot resume task in created state")
 }
 
 func (s *createdState) Update(ctx context.Context, r *google_protobuf.Any) error {
@@ -123,14 +113,6 @@ func (s *createdCheckpointState) transition(name string) error {
 		return fmt.Errorf("invalid state transition %q to %q", stateName(s), name)
 	}
 	return nil
-}
-
-func (s *createdCheckpointState) Pause(ctx context.Context) error {
-	return errors.New("cannot pause task in created state")
-}
-
-func (s *createdCheckpointState) Resume(ctx context.Context) error {
-	return errors.New("cannot resume task in created state")
 }
 
 func (s *createdCheckpointState) Update(ctx context.Context, r *google_protobuf.Any) error {
@@ -235,31 +217,10 @@ func (s *runningState) transition(name string) error {
 	switch name {
 	case stateStopped:
 		s.p.initState = &stoppedState{p: s.p}
-	case statePaused:
-		s.p.initState = &pausedState{p: s.p}
 	default:
 		return fmt.Errorf("invalid state transition %q to %q", stateName(s), name)
 	}
 	return nil
-}
-
-func (s *runningState) Pause(ctx context.Context) error {
-	s.p.pausing.Store(true)
-	// NOTE "pausing" will be returned in the short window
-	// after `transition("paused")`, before `pausing` is reset
-	// to false. That doesn't break the state machine, just
-	// delays the "paused" state a little bit.
-	defer s.p.pausing.Store(false)
-
-	if err := s.p.runtime.Pause(ctx, s.p.id); err != nil {
-		return s.p.runtimeError(err, "OCI runtime pause failed")
-	}
-
-	return s.transition(statePaused)
-}
-
-func (s *runningState) Resume(ctx context.Context) error {
-	return errors.New("cannot resume a running process")
 }
 
 func (s *runningState) Update(ctx context.Context, r *google_protobuf.Any) error {
@@ -300,82 +261,6 @@ func (s *runningState) Status(ctx context.Context) (string, error) {
 	return stateRunning, nil
 }
 
-type pausedState struct {
-	p *Init
-}
-
-func (s *pausedState) state() State {
-	return StatePaused
-}
-
-func (s *pausedState) transition(name string) error {
-	switch name {
-	case stateRunning:
-		s.p.initState = &runningState{p: s.p}
-	case stateStopped:
-		s.p.initState = &stoppedState{p: s.p}
-	default:
-		return fmt.Errorf("invalid state transition %q to %q", stateName(s), name)
-	}
-	return nil
-}
-
-func (s *pausedState) Pause(ctx context.Context) error {
-	return errors.New("cannot pause a paused container")
-}
-
-func (s *pausedState) Resume(ctx context.Context) error {
-	if err := s.p.runtime.Resume(ctx, s.p.id); err != nil {
-		return s.p.runtimeError(err, "OCI runtime resume failed")
-	}
-
-	return s.transition(stateRunning)
-}
-
-func (s *pausedState) Update(ctx context.Context, r *google_protobuf.Any) error {
-	return s.p.update(ctx, r)
-}
-
-func (s *pausedState) Checkpoint(ctx context.Context, r *CheckpointConfig) error {
-	return s.p.checkpoint(ctx, r)
-}
-
-func (s *pausedState) Start(ctx context.Context) error {
-	return errors.New("cannot start a paused process")
-}
-
-func (s *pausedState) Delete(ctx context.Context) error {
-	return errors.New("cannot delete a paused process")
-}
-
-func (s *pausedState) Kill(ctx context.Context, sig uint32, all bool) error {
-	return s.p.kill(ctx, sig, all)
-}
-
-func (s *pausedState) SetExited(status int) {
-	s.p.setExited(status)
-
-	if s.p.runtime != nil {
-		if err := s.p.runtime.Resume(context.Background(), s.p.id); err != nil {
-			log.L.WithError(err).Error("resuming exited container from paused state")
-		}
-	}
-
-	if err := s.transition(stateStopped); err != nil {
-		// Log but don't panic - the process has already exited, we must reflect that
-		log.L.WithError(err).Error("invalid state transition during exit, forcing to stopped state")
-		s.p.initState = &stoppedState{p: s.p}
-	}
-}
-
-func (s *pausedState) Exec(ctx context.Context, path string, r *ExecConfig) (Process, error) {
-	return nil, errors.New("cannot exec in a paused state")
-}
-
-func (s *pausedState) Status(ctx context.Context) (string, error) {
-	return statePaused, nil
-}
-
 type stoppedState struct {
 	p *Init
 }
@@ -392,14 +277,6 @@ func (s *stoppedState) transition(name string) error {
 		return fmt.Errorf("invalid state transition %q to %q", stateName(s), name)
 	}
 	return nil
-}
-
-func (s *stoppedState) Pause(ctx context.Context) error {
-	return errors.New("cannot pause a stopped container")
-}
-
-func (s *stoppedState) Resume(ctx context.Context) error {
-	return errors.New("cannot resume a stopped container")
 }
 
 func (s *stoppedState) Update(ctx context.Context, r *google_protobuf.Any) error {

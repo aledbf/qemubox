@@ -8,79 +8,27 @@ import (
 	"testing"
 )
 
-// TestInitStateTransitions tests all valid state transitions for Init process
-func TestInitStateTransitions(t *testing.T) {
+// TestInitStateSetExited tests SetExited transitions for Init process
+func TestInitStateSetExited(t *testing.T) {
 	tests := []struct {
 		name          string
-		initialState  initState
-		operation     func(initState) error
-		expectedState string
-		shouldSucceed bool
+		setupState    func(*Init) initState
+		expectedFinal string
 	}{
-		// SetExited transitions (these work without runtime since they don't call external commands)
-		{
-			name:         "created → stopped (SetExited)",
-			initialState: &createdState{p: &Init{}},
-			operation: func(s initState) error {
-				s.SetExited(0)
-				return nil
-			},
-			expectedState: stateStopped,
-			shouldSucceed: true,
-		},
-		{
-			name:         "running → stopped (SetExited)",
-			initialState: &runningState{p: &Init{}},
-			operation: func(s initState) error {
-				s.SetExited(0)
-				return nil
-			},
-			expectedState: stateStopped,
-			shouldSucceed: true,
-		},
-		{
-			name:         "paused → stopped (SetExited)",
-			initialState: &pausedState{p: &Init{}},
-			operation: func(s initState) error {
-				s.SetExited(0)
-				return nil
-			},
-			expectedState: stateStopped,
-			shouldSucceed: true,
-		},
+		{"created → stopped", func(p *Init) initState { return &createdState{p: p} }, stateStopped},
+		{"running → stopped", func(p *Init) initState { return &runningState{p: p} }, stateStopped},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Extract the process to check final state
-			var proc *Init
-			switch s := tt.initialState.(type) {
-			case *createdState:
-				proc = s.p
-				proc.initState = s
-			case *runningState:
-				proc = s.p
-				proc.initState = s
-			case *pausedState:
-				proc = s.p
-				proc.initState = s
-			case *stoppedState:
-				proc = s.p
-				proc.initState = s
-			}
+			proc := &Init{}
+			state := tt.setupState(proc)
+			proc.initState = state
 
-			err := tt.operation(tt.initialState)
+			state.SetExited(0)
 
-			if tt.shouldSucceed && err != nil {
-				t.Errorf("Expected success but got error: %v", err)
-			}
-
-			// Only verify state transition if operation succeeded
-			if tt.shouldSucceed && tt.expectedState != "" && proc != nil {
-				finalStateName := stateName(proc.initState)
-				if finalStateName != tt.expectedState {
-					t.Errorf("Expected final state %s, got %s", tt.expectedState, finalStateName)
-				}
+			if got := stateName(proc.initState); got != tt.expectedFinal {
+				t.Errorf("Expected state %s, got %s", tt.expectedFinal, got)
 			}
 		})
 	}
@@ -95,18 +43,6 @@ func TestInitInvalidStateTransitions(t *testing.T) {
 		expectedError string
 	}{
 		{
-			name:          "created: cannot pause",
-			state:         &createdState{p: &Init{}},
-			operation:     func(s initState) error { return s.Pause(context.Background()) },
-			expectedError: "cannot pause task in created state",
-		},
-		{
-			name:          "created: cannot resume",
-			state:         &createdState{p: &Init{}},
-			operation:     func(s initState) error { return s.Resume(context.Background()) },
-			expectedError: "cannot resume task in created state",
-		},
-		{
 			name:          "created: cannot checkpoint",
 			state:         &createdState{p: &Init{}},
 			operation:     func(s initState) error { return s.Checkpoint(context.Background(), nil) },
@@ -119,34 +55,10 @@ func TestInitInvalidStateTransitions(t *testing.T) {
 			expectedError: "cannot start a stopped process",
 		},
 		{
-			name:          "stopped: cannot pause",
-			state:         &stoppedState{p: &Init{}},
-			operation:     func(s initState) error { return s.Pause(context.Background()) },
-			expectedError: "cannot pause a stopped container",
-		},
-		{
-			name:          "stopped: cannot resume",
-			state:         &stoppedState{p: &Init{}},
-			operation:     func(s initState) error { return s.Resume(context.Background()) },
-			expectedError: "cannot resume a stopped container",
-		},
-		{
 			name:          "deleted: cannot start",
 			state:         &deletedState{},
 			operation:     func(s initState) error { return s.Start(context.Background()) },
 			expectedError: "cannot start a deleted process",
-		},
-		{
-			name:          "deleted: cannot pause",
-			state:         &deletedState{},
-			operation:     func(s initState) error { return s.Pause(context.Background()) },
-			expectedError: "cannot pause a deleted process",
-		},
-		{
-			name:          "deleted: cannot resume",
-			state:         &deletedState{},
-			operation:     func(s initState) error { return s.Resume(context.Background()) },
-			expectedError: "cannot resume a deleted process",
 		},
 		{
 			name:          "deleted: cannot delete",
@@ -171,66 +83,27 @@ func TestInitInvalidStateTransitions(t *testing.T) {
 	}
 }
 
-// TestExecStateTransitions tests exec process state transitions
-func TestExecStateTransitions(t *testing.T) {
+// TestExecStateSetExited tests SetExited transitions for exec process
+func TestExecStateSetExited(t *testing.T) {
 	tests := []struct {
 		name          string
-		initialState  execState
-		operation     func(execState) error
-		expectedState string
-		shouldSucceed bool
+		setupState    func(*execProcess) execState
+		expectedFinal string
 	}{
-		// SetExited transitions (these work without runtime since they don't call external commands)
-		{
-			name:         "execCreated → execStopped (SetExited)",
-			initialState: &execCreatedState{p: &execProcess{}},
-			operation: func(s execState) error {
-				s.SetExited(0)
-				return nil
-			},
-			expectedState: stateStopped,
-			shouldSucceed: true,
-		},
-		{
-			name:         "execRunning → execStopped (SetExited)",
-			initialState: &execRunningState{p: &execProcess{}},
-			operation: func(s execState) error {
-				s.SetExited(0)
-				return nil
-			},
-			expectedState: stateStopped,
-			shouldSucceed: true,
-		},
+		{"execCreated → stopped", func(p *execProcess) execState { return &execCreatedState{p: p} }, stateStopped},
+		{"execRunning → stopped", func(p *execProcess) execState { return &execRunningState{p: p} }, stateStopped},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Extract the process to check final state
-			var proc *execProcess
-			switch s := tt.initialState.(type) {
-			case *execCreatedState:
-				proc = s.p
-				proc.execState = s
-			case *execRunningState:
-				proc = s.p
-				proc.execState = s
-			case *execStoppedState:
-				proc = s.p
-				proc.execState = s
-			}
+			proc := &execProcess{}
+			state := tt.setupState(proc)
+			proc.execState = state
 
-			err := tt.operation(tt.initialState)
+			state.SetExited(0)
 
-			if tt.shouldSucceed && err != nil {
-				t.Errorf("Expected success but got error: %v", err)
-			}
-
-			// Only verify state transition if operation succeeded
-			if tt.shouldSucceed && tt.expectedState != "" && proc != nil {
-				finalStateName := stateName(proc.execState)
-				if finalStateName != tt.expectedState {
-					t.Errorf("Expected final state %s, got %s", tt.expectedState, finalStateName)
-				}
+			if got := stateName(proc.execState); got != tt.expectedFinal {
+				t.Errorf("Expected state %s, got %s", tt.expectedFinal, got)
 			}
 		})
 	}
@@ -288,7 +161,6 @@ func TestStateNameFunction(t *testing.T) {
 	}{
 		{"createdState", &createdState{}, stateCreated},
 		{"runningState", &runningState{}, stateRunning},
-		{"pausedState", &pausedState{}, statePaused},
 		{"stoppedState", &stoppedState{}, stateStopped},
 		{"deletedState", &deletedState{}, stateDeleted},
 		{"execCreatedState", &execCreatedState{}, stateCreated},
@@ -333,7 +205,6 @@ func TestStatusMethod(t *testing.T) {
 	}{
 		{"created", &createdState{p: &Init{}}, stateCreated},
 		{"running", &runningState{p: &Init{}}, stateRunning},
-		{"paused", &pausedState{p: &Init{}}, statePaused},
 		{"stopped", &stoppedState{p: &Init{}}, stateStopped},
 		{"deleted", &deletedState{}, stateDeleted},
 	}
@@ -359,7 +230,6 @@ func TestKillAllowedInAllStates(t *testing.T) {
 	}{
 		{"created", &createdState{p: &Init{}}},
 		{"running", &runningState{p: &Init{}}},
-		{"paused", &pausedState{p: &Init{}}},
 		{"stopped", &stoppedState{p: &Init{}}},
 		// Note: deleted state returns specific error
 	}
@@ -388,8 +258,6 @@ func TestDeletedStateAllOperationsFail(t *testing.T) {
 	}{
 		{"Start", func() error { return state.Start(context.Background()) }},
 		{"Delete", func() error { return state.Delete(context.Background()) }},
-		{"Pause", func() error { return state.Pause(context.Background()) }},
-		{"Resume", func() error { return state.Resume(context.Background()) }},
 		{"Kill", func() error { return state.Kill(context.Background(), 9, false) }},
 		{"Checkpoint", func() error { return state.Checkpoint(context.Background(), nil) }},
 		{"Update", func() error { return state.Update(context.Background(), nil) }},
@@ -446,18 +314,6 @@ func TestCreatedCheckpointState(t *testing.T) {
 	if status != stateCreated {
 		t.Errorf("Expected status %s, got %s", stateCreated, status)
 	}
-
-	// Should not be able to pause
-	err = state.Pause(context.Background())
-	if err == nil {
-		t.Error("Expected error when pausing checkpoint state")
-	}
-
-	// Should not be able to resume
-	err = state.Resume(context.Background())
-	if err == nil {
-		t.Error("Expected error when resuming checkpoint state")
-	}
 }
 
 // TestTransitionValidation tests the transition() method validation
@@ -472,29 +328,18 @@ func TestTransitionValidation(t *testing.T) {
 		{"created→running", &createdState{p: &Init{}}, stateRunning, true},
 		{"created→stopped", &createdState{p: &Init{}}, stateStopped, true},
 		{"created→deleted", &createdState{p: &Init{}}, stateDeleted, true},
-		// Invalid transitions from created
-		{"created→paused", &createdState{p: &Init{}}, statePaused, false},
 
 		// Valid transitions from running
-		{"running→paused", &runningState{p: &Init{}}, statePaused, true},
 		{"running→stopped", &runningState{p: &Init{}}, stateStopped, true},
 		// Invalid transitions from running
 		{"running→created", &runningState{p: &Init{}}, stateCreated, false},
 		{"running→deleted", &runningState{p: &Init{}}, stateDeleted, false},
-
-		// Valid transitions from paused
-		{"paused→running", &pausedState{p: &Init{}}, stateRunning, true},
-		{"paused→stopped", &pausedState{p: &Init{}}, stateStopped, true},
-		// Invalid transitions from paused
-		{"paused→created", &pausedState{p: &Init{}}, stateCreated, false},
-		{"paused→deleted", &pausedState{p: &Init{}}, stateDeleted, false},
 
 		// Valid transitions from stopped
 		{"stopped→deleted", &stoppedState{p: &Init{}}, stateDeleted, true},
 		// Invalid transitions from stopped
 		{"stopped→created", &stoppedState{p: &Init{}}, stateCreated, false},
 		{"stopped→running", &stoppedState{p: &Init{}}, stateRunning, false},
-		{"stopped→paused", &stoppedState{p: &Init{}}, statePaused, false},
 	}
 
 	for _, tt := range tests {
@@ -505,8 +350,6 @@ func TestTransitionValidation(t *testing.T) {
 			case *createdState:
 				err = s.transition(tt.toState)
 			case *runningState:
-				err = s.transition(tt.toState)
-			case *pausedState:
 				err = s.transition(tt.toState)
 			case *stoppedState:
 				err = s.transition(tt.toState)

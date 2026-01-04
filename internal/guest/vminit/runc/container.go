@@ -399,24 +399,6 @@ func (c *Container) Exec(ctx context.Context, r *task.ExecProcessRequest) (proce
 	return proc, nil
 }
 
-// Pause the container
-func (c *Container) Pause(ctx context.Context) error {
-	initProc, ok := c.process.(*process.Init)
-	if !ok {
-		return fmt.Errorf("expected init process, got %T", c.process)
-	}
-	return initProc.Pause(ctx)
-}
-
-// Resume the container
-func (c *Container) Resume(ctx context.Context) error {
-	initProc, ok := c.process.(*process.Init)
-	if !ok {
-		return fmt.Errorf("expected init process, got %T", c.process)
-	}
-	return initProc.Resume(ctx)
-}
-
 // ResizePty of a process
 func (c *Container) ResizePty(ctx context.Context, r *task.ResizePtyRequest) error {
 	p, err := c.Process(r.ExecID)

@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/containerd/console"
@@ -43,14 +42,12 @@ type Init struct {
 
 	WorkDir string
 
-	id       string
-	Bundle   string
-	console  console.Console
-	Platform stdio.Platform
-	io       *processIO
-	runtime  *runc.Runc
-	// pausing preserves the pausing state.
-	pausing      atomic.Bool
+	id           string
+	Bundle       string
+	console      console.Console
+	Platform     stdio.Platform
+	io           *processIO
+	runtime      *runc.Runc
 	status       int
 	exited       time.Time
 	pid          int
@@ -245,10 +242,6 @@ func (p *Init) ExitedAt() time.Time {
 
 // Status of the process
 func (p *Init) Status(ctx context.Context) (string, error) {
-	if p.pausing.Load() {
-		return "pausing", nil
-	}
-
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -362,22 +355,6 @@ func (p *Init) Resize(ws console.WinSize) error {
 		return nil
 	}
 	return p.console.Resize(ws)
-}
-
-// Pause the init process and all its child processes
-func (p *Init) Pause(ctx context.Context) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	return p.initState.Pause(ctx)
-}
-
-// Resume the init process and all its child processes
-func (p *Init) Resume(ctx context.Context) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	return p.initState.Resume(ctx)
 }
 
 // Kill the init process

@@ -19,14 +19,6 @@ func (s *deletedState) state() State {
 	return StateDeleted
 }
 
-func (s *deletedState) Pause(ctx context.Context) error {
-	return errors.New("cannot pause a deleted process")
-}
-
-func (s *deletedState) Resume(ctx context.Context) error {
-	return errors.New("cannot resume a deleted process")
-}
-
 func (s *deletedState) Update(context context.Context, r *google_protobuf.Any) error {
 	return errors.New("cannot update a deleted process")
 }

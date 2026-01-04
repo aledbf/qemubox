@@ -167,8 +167,6 @@ const (
 	StateCreated State = iota
 	// StateRunning indicates the process is currently running
 	StateRunning
-	// StatePaused indicates the process is paused (init processes only)
-	StatePaused
 	// StateStopped indicates the process has exited
 	StateStopped
 	// StateDeleted indicates the process has been deleted
@@ -182,8 +180,6 @@ func (s State) String() string {
 		return "created"
 	case StateRunning:
 		return "running"
-	case StatePaused:
-		return "paused"
 	case StateStopped:
 		return "stopped"
 	case StateDeleted:
@@ -197,7 +193,6 @@ func (s State) String() string {
 const (
 	stateRunning = "running"
 	stateCreated = "created"
-	statePaused  = "paused"
 	stateDeleted = "deleted"
 	stateStopped = "stopped"
 )
