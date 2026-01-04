@@ -629,17 +629,18 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 		for {
 			ev, err := sc.Recv()
 			if err != nil {
+				// Check intentional shutdown first to avoid spurious warnings during normal shutdown
+				if s.intentionalShutdown.Load() {
+					log.G(ctx).Debug("vm event stream closed (intentional shutdown)")
+					return
+				}
+
 				log.G(ctx).WithError(err).WithFields(log.Fields{
 					"error_type":      fmt.Sprintf("%T", err),
 					"is_eof":          errors.Is(err, io.EOF),
 					"is_shutdown":     errors.Is(err, shutdown.ErrShutdown),
 					"is_ttrpc_closed": errors.Is(err, ttrpc.ErrClosed),
 				}).Warn("event stream recv error")
-
-				if s.intentionalShutdown.Load() {
-					log.G(ctx).Info("vm event stream closed (intentional shutdown)")
-					return
-				}
 
 				if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
 					log.G(ctx).WithError(err).Info("vm event stream closed unexpectedly, attempting reconnect")
@@ -665,11 +666,6 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 				return
 			}
 
-			log.G(ctx).WithFields(log.Fields{
-				"topic":     ev.Topic,
-				"namespace": ev.Namespace,
-			}).Debug("received event from vm")
-
 			// For TaskExit events, wait for I/O forwarder to complete before forwarding.
 			// This ensures all stdout/stderr data is written to FIFOs before containerd
 			// receives the exit event, preventing a race where the exit arrives before output.
@@ -678,7 +674,6 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 			}
 
 			s.send(ev)
-			log.G(ctx).WithField("topic", ev.Topic).Debug("event sent to publisher")
 		}
 	}()
 
@@ -931,6 +926,19 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		return resp, err
 	}
 
+	// Publish TaskDelete event directly from the shim.
+	// We cannot rely on the guest's event stream because the shim may shut down
+	// before the event propagates through the stream. This ensures containerd
+	// receives the delete event before the shim exits.
+	if r.ExecID == "" {
+		s.send(&eventstypes.TaskDelete{
+			ContainerID: r.ID,
+			Pid:         resp.Pid,
+			ExitStatus:  resp.ExitStatus,
+			ExitedAt:    resp.ExitedAt,
+		})
+	}
+
 	delCleanup := s.collectDeleteCleanup(r)
 	s.runDeleteCleanup(ctx, r, delCleanup)
 
@@ -1044,7 +1052,6 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 
 // State returns runtime state information for a process.
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("state: request received")
 
 	if r.ExecID == "" && !s.initStarted.Load() {
 		s.containerMu.Lock()
@@ -1073,19 +1080,11 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 	}
 	defer cleanup()
 
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("state: calling guest")
 	st, err := taskAPI.NewTTRPCTaskClient(vmc).State(ctx, r)
 	if err != nil {
 		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Error("state: guest state failed")
 		return nil, errgrpc.ToGRPC(err)
 	}
-	log.G(ctx).WithFields(log.Fields{
-		"id":     r.ID,
-		"exec":   r.ExecID,
-		"status": st.Status,
-		"pid":    st.Pid,
-	}).Info("state: guest response received")
-
 	// Replace guest's I/O paths (rpcio:// URIs) with host FIFO paths for attach support.
 	// The guest uses rpcio:// URIs internally, but containerd's attach expects host FIFOs.
 	s.containerMu.Lock()
@@ -1455,15 +1454,11 @@ func (s *service) forward(ctx context.Context, publisher shim.Publisher, ready c
 	for e := range s.events {
 		switch e := e.(type) {
 		case *types.Envelope:
-			log.G(ctx).WithField("topic", e.Topic).Debug("publishing envelope event to containerd")
 			if err := publisher.Publish(ctx, e.Topic, e.Event); err != nil {
 				log.G(ctx).WithError(err).Error("forward event")
 			}
 		default:
-			topic := runtime.GetTopic(e)
-			log.G(ctx).WithField("topic", topic).Debug("publishing event to containerd")
-			err := publisher.Publish(ctx, topic, e)
-			if err != nil {
+			if err := publisher.Publish(ctx, runtime.GetTopic(e), e); err != nil {
 				log.G(ctx).WithError(err).Error("post event")
 			}
 		}
