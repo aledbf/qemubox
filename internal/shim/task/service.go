@@ -665,6 +665,11 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 				return
 			}
 
+			log.G(ctx).WithFields(log.Fields{
+				"topic":     ev.Topic,
+				"namespace": ev.Namespace,
+			}).Debug("received event from vm")
+
 			// For TaskExit events, wait for I/O forwarder to complete before forwarding.
 			// This ensures all stdout/stderr data is written to FIFOs before containerd
 			// receives the exit event, preventing a race where the exit arrives before output.
@@ -673,6 +678,7 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 			}
 
 			s.send(ev)
+			log.G(ctx).WithField("topic", ev.Topic).Debug("event sent to publisher")
 		}
 	}()
 
@@ -1449,11 +1455,14 @@ func (s *service) forward(ctx context.Context, publisher shim.Publisher, ready c
 	for e := range s.events {
 		switch e := e.(type) {
 		case *types.Envelope:
+			log.G(ctx).WithField("topic", e.Topic).Debug("publishing envelope event to containerd")
 			if err := publisher.Publish(ctx, e.Topic, e.Event); err != nil {
 				log.G(ctx).WithError(err).Error("forward event")
 			}
 		default:
-			err := publisher.Publish(ctx, runtime.GetTopic(e), e)
+			topic := runtime.GetTopic(e)
+			log.G(ctx).WithField("topic", topic).Debug("publishing event to containerd")
+			err := publisher.Publish(ctx, topic, e)
 			if err != nil {
 				log.G(ctx).WithError(err).Error("post event")
 			}

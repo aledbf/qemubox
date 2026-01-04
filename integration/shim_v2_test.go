@@ -191,7 +191,10 @@ func (t *ctrEventTracker) wait(ctx context.Context) error {
 		defer t.mu.Unlock()
 		return t.err
 	case <-ctx.Done():
-		return ctx.Err()
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		return fmt.Errorf("%w (initState=%d, execState=%d, events received=%d)",
+			ctx.Err(), t.initState, t.execState, len(t.events))
 	}
 }
 
@@ -251,11 +254,14 @@ func (c *ctrRunner) events(ctx context.Context) (<-chan ctrEvent, func()) {
 			// 2026-01-03 19:15:51.035266231 +0000 UTC default /tasks/create {"container_id":"test"}
 			// Fields: date time tz_offset tz_name namespace topic json_event
 
+			c.t.Logf("ctr events raw line: %s", line)
+
 			var evt ctrEvent
 
 			// Find the JSON object (starts with '{')
 			jsonStart := strings.Index(line, "{")
 			if jsonStart == -1 {
+				c.t.Logf("no JSON found in event line")
 				continue
 			}
 
@@ -263,7 +269,7 @@ func (c *ctrRunner) events(ctx context.Context) (<-chan ctrEvent, func()) {
 			prefix := strings.TrimSpace(line[:jsonStart])
 			parts := strings.Fields(prefix)
 			if len(parts) < 6 {
-				c.t.Logf("failed to parse event prefix: %s", line)
+				c.t.Logf("failed to parse event prefix (only %d parts): %s", len(parts), line)
 				continue
 			}
 
@@ -277,11 +283,17 @@ func (c *ctrRunner) events(ctx context.Context) (<-chan ctrEvent, func()) {
 				continue
 			}
 
+			c.t.Logf("parsed event: topic=%s container_id=%s id=%s exec_id=%s",
+				evt.Topic, evt.Event.ContainerID, evt.Event.ID, evt.Event.ExecID)
+
 			select {
 			case eventsCh <- evt:
 			case <-ctx.Done():
 				return
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			c.t.Logf("scanner error: %v", err)
 		}
 	}()
 
@@ -333,9 +345,13 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 
 	go func() {
 		for evt := range eventsCh {
+			t.Logf("tracker received event: topic=%s container=%s", evt.Topic, evt.Event.ContainerID)
 			tracker.handleEvent(evt)
 		}
 	}()
+
+	// Give ctr events a moment to connect and start receiving
+	time.Sleep(100 * time.Millisecond)
 
 	// Ensure image is pulled and unpacked for the configured snapshotter.
 	t.Log("ensuring image is unpacked...")
