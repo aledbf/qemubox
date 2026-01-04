@@ -89,7 +89,7 @@ func openTAPInNetNSInternal(ctx context.Context, tapName, netnsPath string) (*os
 		if err := netlink.LinkSetUp(link); err != nil {
 			return nil, fmt.Errorf("bring tap %s up: %w", tapName, err)
 		}
-		log.G(ctx).WithField("tap", tapName).Debug("brought tap device up")
+		log.G(ctx).WithField("tap", tapName).Debug("set TAP device up")
 	}
 
 	// Open /dev/net/tun and attach to the existing TAP device using TUNSETIFF ioctl

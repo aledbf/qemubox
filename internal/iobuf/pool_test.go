@@ -108,10 +108,8 @@ func TestGet_Concurrent(t *testing.T) {
 	wg.Wait()
 }
 
-func TestGet_FallbackPath(t *testing.T) {
-	// This tests the fallback path in Get() when Pool.Get() returns
-	// something that's not a *[]byte. We can't easily trigger this
-	// in normal usage, but we can verify Get() handles it gracefully.
+func TestGet_Repeated(t *testing.T) {
+	// Repeated calls should always return a valid buffer.
 
 	// First, verify normal path works
 	buf := Get()
@@ -120,8 +118,7 @@ func TestGet_FallbackPath(t *testing.T) {
 	}
 	Put(buf)
 
-	// The fallback creates a new 4096 buffer, same as Pool.New
-	// We verify Get always returns a valid buffer regardless of pool state
+	// We verify Get always returns a valid buffer across repeated calls.
 	for i := range 100 {
 		buf := Get()
 		if buf == nil {

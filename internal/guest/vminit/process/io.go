@@ -107,7 +107,7 @@ func createIO(ctx context.Context, id string, ioUID, ioGID int, stdio stdio.Stdi
 		if err != nil {
 			return nil, err
 		}
-		log.G(ctx).WithField("id", id).WithField("streams", streams).Debug("using stream IO")
+		log.G(ctx).WithField("id", id).WithField("streams", streams).Debug("using stream-based I/O")
 		pio.streams = streams
 		pio.copy = true
 		pio.io, err = runc.NewPipeIO(ioUID, ioGID, withConditionalIO(stdio))

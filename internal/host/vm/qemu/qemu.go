@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	vsockalloc "github.com/aledbf/qemubox/containerd/internal/vsock"
 	"github.com/containerd/ttrpc"
 )
 
@@ -54,8 +55,6 @@ const (
 	// Unix socket and buffer size limits
 	maxUnixSocketPath = 107             // UNIX_PATH_MAX on Linux
 	consoleBufferSize = 8 * 1024        // Console FIFO read buffer
-	qmpBufferInitial  = 64 * 1024       // QMP scanner initial buffer
-	qmpBufferMax      = 1024 * 1024     // QMP scanner max buffer
 	qmpDefaultTimeout = 5 * time.Second // Default QMP command timeout
 )
 
@@ -75,8 +74,8 @@ type Instance struct {
 	kernelPath  string
 	initrdPath  string
 	resourceCfg *vm.VMResourceConfig
-	guestCID    uint32   // Unique vsock CID for this VM (3+)
-	cidLockFile *os.File // Lock file holding CID reservation (released on close)
+	guestCID    uint32            // Unique vsock CID for this VM (3+)
+	cidLease    *vsockalloc.Lease // CID reservation (released on close)
 
 	// Runtime paths
 	qmpSocketPath   string   // QMP control socket

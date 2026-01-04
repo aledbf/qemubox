@@ -41,9 +41,9 @@ func DumpInfo(ctx context.Context) {
 	if err != nil {
 		log.G(ctx).WithError(err).Error("failed to read kernel command line")
 	} else {
-		log.G(ctx).WithField("cmdline", string(b)).Debug("kernel command line")
+		log.G(ctx).WithField("cmdline", string(b)).Debug("read kernel command line")
 	}
-	log.G(ctx).WithField("ncpu", runtime.NumCPU()).Debug("Runtime info")
+	log.G(ctx).WithField("ncpu", runtime.NumCPU()).Debug("runtime CPU count")
 
 	if b, err := exec.CommandContext(ctx, "/sbin/crun", "--version").Output(); err != nil {
 		log.G(ctx).WithError(err).Error("failed to get crun version")

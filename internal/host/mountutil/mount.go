@@ -19,8 +19,18 @@ import (
 	"github.com/containerd/log"
 )
 
+// All mounts all the provided mounts to the provided rootfs, handling
+// "format/" and "mkdir/" mount type prefixes for template substitution
+// and directory creation.
+// It returns an optional cleanup function that should be called on container
+// delete to unmount any mounted filesystems.
+//
 //nolint:gocognit // The mount pipeline is kept inline to match containerd semantics.
-func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retErr error) {
+func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (cleanup func(context.Context) error, retErr error) {
+	if len(mounts) == 0 {
+		return nil, nil
+	}
+
 	log.G(ctx).WithField("mounts", mounts).Info("mounting rootfs components")
 	active := []mount.ActiveMount{}
 
@@ -30,7 +40,7 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 		if i < len(mounts)-1 {
 			target = filepath.Join(mdir, fmt.Sprintf("%d", i))
 			if err := os.MkdirAll(target, 0750); err != nil {
-				return err
+				return nil, err
 			}
 		} else {
 			target = rootfs
@@ -42,7 +52,7 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 				if format != nil {
 					s, err := format(active)
 					if err != nil {
-						return fmt.Errorf("formatting mount option %q: %w", o, err)
+						return nil, fmt.Errorf("formatting mount option %q: %w", o, err)
 					}
 					m.Options[i] = s
 				}
@@ -50,14 +60,14 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 			if format := formatString(m.Source); format != nil {
 				s, err := format(active)
 				if err != nil {
-					return fmt.Errorf("formatting mount source %q: %w", m.Source, err)
+					return nil, fmt.Errorf("formatting mount source %q: %w", m.Source, err)
 				}
 				m.Source = s
 			}
 			if format := formatString(m.Target); format != nil {
 				s, err := format(active)
 				if err != nil {
-					return fmt.Errorf("formatting mount target %q: %w", m.Target, err)
+					return nil, fmt.Errorf("formatting mount target %q: %w", m.Target, err)
 				}
 				m.Target = s
 			}
@@ -69,7 +79,7 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 				if strings.HasPrefix(o, "X-containerd.mkdir.") {
 					prefix := "X-containerd.mkdir.path="
 					if !strings.HasPrefix(o, prefix) {
-						return fmt.Errorf("unknown mkdir mount option %q", o)
+						return nil, fmt.Errorf("unknown mkdir mount option %q", o)
 					}
 					part := strings.SplitN(o[len(prefix):], ":", 4)
 					var dir string
@@ -82,7 +92,7 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 						var err error
 						gid, err = strconv.Atoi(part[3])
 						if err != nil {
-							return fmt.Errorf("invalid gid %q in mkdir option: %w", part[3], err)
+							return nil, fmt.Errorf("invalid gid %q in mkdir option: %w", part[3], err)
 						}
 						fallthrough
 					case 3:
@@ -90,14 +100,14 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 						var err error
 						uid, err = strconv.Atoi(part[2])
 						if err != nil {
-							return fmt.Errorf("invalid uid %q in mkdir option: %w", part[2], err)
+							return nil, fmt.Errorf("invalid uid %q in mkdir option: %w", part[2], err)
 						}
 						fallthrough
 					case 2:
 						// Format: path:mode
 						m, err := strconv.ParseUint(part[1], 8, 32)
 						if err != nil {
-							return fmt.Errorf("invalid mode %q in mkdir option: %w", part[1], err)
+							return nil, fmt.Errorf("invalid mode %q in mkdir option: %w", part[1], err)
 						}
 						mode = os.FileMode(m)
 						fallthrough
@@ -105,19 +115,19 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 						// Format: path
 						dir = part[0]
 						if !strings.HasPrefix(dir, mdir) {
-							return fmt.Errorf("mkdir mount source %q must be under %q", dir, mdir)
+							return nil, fmt.Errorf("mkdir mount source %q must be under %q", dir, mdir)
 						}
 						if err := os.MkdirAll(dir, mode); err != nil {
-							return err
+							return nil, err
 						}
 						// Set ownership if uid/gid were specified
 						if uid != -1 || gid != -1 {
 							if err := os.Chown(dir, uid, gid); err != nil {
-								return fmt.Errorf("failed to chown %q to %d:%d: %w", dir, uid, gid, err)
+								return nil, fmt.Errorf("failed to chown %q to %d:%d: %w", dir, uid, gid, err)
 							}
 						}
 					default:
-						return fmt.Errorf("invalid mkdir mount option %q", o)
+						return nil, fmt.Errorf("invalid mkdir mount option %q", o)
 					}
 				} else {
 					options = append(options, o)
@@ -138,38 +148,48 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (retEr
 			MountPoint: target,
 		}
 		if err := am.Mount.Mount(target); err != nil {
+			// Cleanup already mounted filesystems on error
+			for j := len(active) - 1; j >= 0; j-- {
+				if active[j].Type == "mkdir" {
+					continue
+				}
+				if unmountErr := mount.UnmountAll(active[j].MountPoint, 0); unmountErr != nil {
+					log.G(ctx).WithError(unmountErr).WithField("mountpoint", active[j].MountPoint).Warn("failed to cleanup mount")
+				}
+			}
 			log.G(ctx).WithFields(log.Fields{
 				"type":    am.Type,
 				"source":  am.Source,
 				"target":  target,
 				"options": am.Options,
 			}).WithError(err).Error("mount failed")
-			return err
+			return nil, err
 		}
 		log.G(ctx).WithFields(log.Fields{
 			"type":    am.Type,
 			"source":  am.Source,
 			"target":  target,
 			"options": am.Options,
-		}).Info("mounted")
+		}).Info("mounted rootfs component")
 		active = append(active, am)
-
 	}
-	defer func() {
-		if retErr != nil {
-			for i := len(active) - 1; i >= 0; i-- {
-				// Note: delegate custom types to handlers.
-				if active[i].Type == "mkdir" {
-					continue
-				}
-				if err := mount.UnmountAll(active[i].MountPoint, 0); err != nil {
-					log.G(ctx).WithError(err).WithField("mountpoint", active[i].MountPoint).Warn("failed to cleanup mount")
-				}
+
+	// Return cleanup function that unmounts in reverse order
+	cleanup = func(cleanCtx context.Context) error {
+		var lastErr error
+		for i := len(active) - 1; i >= 0; i-- {
+			if active[i].Type == "mkdir" {
+				continue
+			}
+			if err := mount.UnmountAll(active[i].MountPoint, 0); err != nil {
+				log.G(cleanCtx).WithError(err).WithField("mountpoint", active[i].MountPoint).Warn("failed to cleanup mount")
+				lastErr = err
 			}
 		}
-	}()
+		return lastErr
+	}
 
-	return nil
+	return cleanup, nil
 }
 
 // formatCheck is the marker for format strings that need substitution.

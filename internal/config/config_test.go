@@ -219,8 +219,7 @@ func TestGet_Singleton(t *testing.T) {
 	// Get() should return the same instance on multiple calls (singleton pattern)
 	// This test verifies the sync.Once behavior
 
-	// Note: We can't reliably test Get() in isolation because it uses a global
-	// sync.Once that can't be reset between tests. However, we can verify that
+	// Note: This test does not reset global state; it only verifies that
 	// multiple calls within the same test return the same instance.
 
 	cfg1, err1 := Get()

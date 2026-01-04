@@ -76,6 +76,7 @@ import (
 	eventstypes "github.com/containerd/containerd/api/events"
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
 	"github.com/containerd/containerd/api/types"
+	tasktypes "github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/v2/core/runtime"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	ptypes "github.com/containerd/containerd/v2/pkg/protobuf/types"
@@ -137,6 +138,11 @@ const (
 	// 2 seconds allows for brief VM pauses (e.g., during snapshot operations)
 	// without triggering shim shutdown, while still detecting genuine VM failures quickly.
 	eventStreamReconnectTimeout = 2 * time.Second
+	// taskClientRetryTimeout is how long we retry vsock dial for unary task RPCs.
+	// This smooths over transient vsock routing issues (e.g., CID reuse).
+	taskClientRetryTimeout = 1 * time.Second
+
+	defaultNamespace = "default"
 )
 
 var (
@@ -152,16 +158,18 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 		return nil, fmt.Errorf("initialize network manager: %w", err)
 	}
 
+	vmLM := lifecycle.NewManager()
 	s := &service{
 		events:                   make(chan any, eventChannelBuffer),
 		cpuHotplugControllers:    make(map[string]cpuhotplug.CPUHotplugController),
 		memoryHotplugControllers: make(map[string]memhotplug.MemoryHotplugController),
 		networkManager:           nm,
-		vmLifecycle:              lifecycle.NewManager(),
+		vmLifecycle:              vmLM,
 		platformMounts:           platformMounts.New(),
 		platformNetwork:          netMgr,
 		initiateShutdown:         sd.Shutdown,
 		shutdownSvc:              sd,
+		connManager:              NewConnectionManager(vmLM.DialClient, vmLM.DialClientWithRetry),
 	}
 	sd.RegisterCallback(s.shutdown)
 
@@ -194,6 +202,8 @@ type container struct {
 
 	// I/O state for init and exec processes.
 	io *taskIO
+	// mountCleanup releases host-side mount manager state.
+	mountCleanup func(context.Context) error
 }
 
 type execIO struct {
@@ -254,6 +264,9 @@ type service struct {
 	shutdownSvc         shutdown.Service
 	inflight            atomic.Int64   // Count of in-flight RPC calls for graceful shutdown
 	exitFunc            func(code int) // Exit function (default: os.Exit), injectable for testing
+
+	initStarted atomic.Bool // True once the init process has been started
+	connManager *ConnectionManager
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
@@ -267,6 +280,7 @@ func (s *service) shutdown(ctx context.Context) error {
 	defer s.containerMu.Unlock()
 
 	var errs []error
+	var mountCleanup func(context.Context) error
 
 	// Stop hotplug controllers before VM shutdown
 	s.controllerMu.Lock()
@@ -292,18 +306,34 @@ func (s *service) shutdown(ctx context.Context) error {
 			}
 		}
 	}
+	if s.container != nil {
+		mountCleanup = s.container.mountCleanup
+		s.container.mountCleanup = nil
+	}
+
+	// Close the connection manager before shutting down the VM.
+	if err := s.connManager.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("connection manager close: %w", err))
+	}
 
 	// Shutdown VM (idempotent)
 	// IMPORTANT: This must happen BEFORE network cleanup so QEMU can exit cleanly
 	if err := s.vmLifecycle.Shutdown(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("vm shutdown: %w", err))
 	}
+	s.initStarted.Store(false)
 
 	// Release network resources AFTER VM shutdown
 	if s.containerID != "" {
 		env := &network.Environment{ID: s.containerID}
 		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
 			log.G(ctx).WithError(err).WithField("id", s.containerID).Warn("failed to release network resources")
+		}
+	}
+
+	if mountCleanup != nil {
+		if err := mountCleanup(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("mount cleanup: %w", err))
 		}
 	}
 
@@ -323,20 +353,24 @@ func (s *service) shutdown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// dialTaskClient dials a TTRPC client and returns it with a cleanup function.
-// The cleanup function handles closing the client and logging any errors.
-// Callers should use taskAPI.NewTTRPCTaskClient() to create a task client from the returned connection.
-func (s *service) dialTaskClient(ctx context.Context) (*ttrpc.Client, func(), error) {
-	vmc, err := s.vmLifecycle.DialClient(ctx)
+// getTaskClient returns the cached TTRPC client for task RPC calls.
+//
+// The ConnectionManager maintains a single cached connection for all unary task RPCs
+// (State, Start, Delete, etc.), avoiding repeated vsock dials that can fail with ENODEV.
+//
+// The cached client from vmLifecycle.Client() is dedicated to the event stream.
+// Sharing a TTRPC connection between streaming RPCs (event stream) and unary RPCs
+// causes vsock write errors ("no such device") because the vsock layer doesn't
+// handle mixed traffic well on a single connection.
+//
+// The returned cleanup function is a no-op - the ConnectionManager owns the client lifecycle.
+func (s *service) getTaskClient(ctx context.Context) (*ttrpc.Client, func(), error) {
+	vmc, err := s.connManager.GetClient(ctx)
 	if err != nil {
+		log.G(ctx).WithError(err).Error("getTaskClient: failed to get client from connection manager")
 		return nil, nil, errgrpc.ToGRPC(err)
 	}
-	cleanup := func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close ttrpc client")
-		}
-	}
-	return vmc, cleanup, nil
+	return vmc, func() {}, nil
 }
 
 // Create a new initial process and container with the underlying OCI runtime.
@@ -407,10 +441,12 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	}
 
 	// Setup mounts
-	m, err := s.platformMounts.Setup(ctx, vmi, r.ID, r.Rootfs, b.Rootfs, r.Bundle+"/mounts")
+	setupResult, err := s.platformMounts.Setup(ctx, vmi, r.ID, r.Rootfs, b.Rootfs, r.Bundle+"/mounts")
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
+	mountCleanup := setupResult.Cleanup
+	m := setupResult.Mounts
 
 	// Setup networking
 	netnsPath := "/var/run/netns/" + r.ID
@@ -419,12 +455,17 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	// Cleanup network resources on any error
+	// Cleanup network resources and mounts on any error
 	defer func() {
 		if retErr != nil {
 			env := &network.Environment{ID: r.ID}
 			if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
 				log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup network resources after failure")
+			}
+			if mountCleanup != nil {
+				if err := mountCleanup(context.WithoutCancel(ctx)); err != nil {
+					log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup mounts after failure")
+				}
 			}
 		}
 	}()
@@ -439,7 +480,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, errgrpc.ToGRPC(err)
 	}
 	bootTime := time.Since(prestart)
-	log.G(ctx).WithField("bootTime", bootTime).Debug("VM started")
+	log.G(ctx).WithField("bootTime", bootTime).Debug("VM boot completed")
 	s.intentionalShutdown.Store(false)
 
 	// Get VM client
@@ -455,16 +496,16 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, errgrpc.ToGRPC(err)
 	}
 
-	// Dial TTRPC client
+	// Dial TTRPC client for Create RPCs.
+	// NOTE: We intentionally do NOT cache this connection because vsock connections
+	// can become stale between Create completing and Start being called.
+	// We also do NOT close it because that can cause the VM to exit unexpectedly.
+	// Subsequent operations (Start, State, etc.) will dial fresh via the connection manager.
 	rpcClient, err := s.vmLifecycle.DialClient(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
-	defer func() {
-		if err := rpcClient.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close ttrpc client")
-		}
-	}()
+	// rpcClient will be garbage collected - we don't close it to avoid killing the VM
 
 	// Create bundle in VM
 	bundleFiles, err := b.Files()
@@ -524,6 +565,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 			},
 			exec: make(map[string]processIOState),
 		},
+		mountCleanup: mountCleanup,
 	}
 	tc := taskAPI.NewTTRPCTaskClient(rpcClient)
 	resp, err := tc.Create(ctx, vr)
@@ -558,8 +600,9 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	s.containerID = r.ID
 	s.containerMu.Unlock()
 
-	// Start hotplug controllers
-	callbacks := resources.CreateVMClientCallbacks(s.vmLifecycle.DialClient)
+	// Start hotplug controllers using the connection manager for client reuse.
+	// This avoids repeated vsock dials that can fail with ENODEV.
+	callbacks := resources.CreateVMClientCallbacks(s.connManager.GetClient)
 	if cpuCtrl := resources.StartCPUHotplug(ctx, r.ID, vmi, resourceCfg, callbacks); cpuCtrl != nil {
 		s.controllerMu.Lock()
 		s.cpuHotplugControllers[r.ID] = cpuCtrl
@@ -586,10 +629,18 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 		for {
 			ev, err := sc.Recv()
 			if err != nil {
+				// Check intentional shutdown first to avoid spurious warnings during normal shutdown
 				if s.intentionalShutdown.Load() {
-					log.G(ctx).Info("vm event stream closed (intentional shutdown)")
+					log.G(ctx).Debug("vm event stream closed (intentional shutdown)")
 					return
 				}
+
+				log.G(ctx).WithError(err).WithFields(log.Fields{
+					"error_type":      fmt.Sprintf("%T", err),
+					"is_eof":          errors.Is(err, io.EOF),
+					"is_shutdown":     errors.Is(err, shutdown.ErrShutdown),
+					"is_ttrpc_closed": errors.Is(err, ttrpc.ErrClosed),
+				}).Warn("event stream recv error")
 
 				if errors.Is(err, io.EOF) || errors.Is(err, shutdown.ErrShutdown) || errors.Is(err, ttrpc.ErrClosed) {
 					log.G(ctx).WithError(err).Info("vm event stream closed unexpectedly, attempting reconnect")
@@ -631,6 +682,8 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 
 // reconnectEventStream attempts to reconnect the event stream within a deadline.
 // Returns the new client, stream, and whether reconnection succeeded.
+// Note: The caller is responsible for closing the old client if needed. We don't close
+// it here because it might be the cached client from the VM instance, which is shared.
 func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Client) (*ttrpc.Client, vmevents.TTRPCEvents_StreamClient, bool) {
 	reconnectDeadline := time.Now().Add(eventStreamReconnectTimeout)
 
@@ -655,35 +708,40 @@ func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Cli
 			continue
 		}
 
-		// Success! Close old client and return new connection
-		if oldClient != nil {
-			_ = oldClient.Close()
-		}
+		// Success! Don't close the old client here - it might be the cached client
+		// from the VM instance which is shared. The event forwarder will track
+		// which clients it owns and can close them when appropriate.
+		log.G(ctx).Info("event stream reconnect: success")
 		return newClient, newStream, true
 	}
 
+	log.G(ctx).WithField("timeout", eventStreamReconnectTimeout).Warn("event stream reconnect: timeout expired")
 	return nil, nil, false
 }
 
 // Start a process.
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
-	vmc, err := s.vmLifecycle.DialClientWithRetry(ctx, 30*time.Second)
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("start: request received")
+
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("start: failed to get client")
-		return nil, errgrpc.ToGRPC(err)
+		return nil, err
 	}
-	defer func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close ttrpc client")
-		}
-	}()
+	defer cleanup()
+
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("start: calling guest")
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Start(ctx, r)
 	if err != nil {
-		log.G(ctx).WithError(err).Error("start: guest start failed")
+		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Error("start: guest start failed")
 		return nil, errgrpc.ToGRPC(err)
 	}
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "pid": resp.Pid}).Debug("task started")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "pid": resp.Pid}).Info("task start completed")
+	if r.ExecID == "" {
+		log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("start: init marked started")
+		s.initStarted.Store(true)
+	}
 	return resp, nil
 }
 
@@ -697,11 +755,147 @@ func isProcessAlreadyFinished(err error) bool {
 	return strings.Contains(err.Error(), "process already finished")
 }
 
+type deleteCleanup struct {
+	ioForwarders     []IOForwarder
+	cpuController    cpuhotplug.CPUHotplugController
+	memController    memhotplug.MemoryHotplugController
+	mountCleanup     func(context.Context) error
+	needNetworkClean bool
+	needVMShutdown   bool
+}
+
+func (s *service) cleanupOnDeleteFailure(ctx context.Context, id string) {
+	var (
+		ioForwarder  IOForwarder
+		mountCleanup func(context.Context) error
+	)
+
+	s.containerMu.Lock()
+	if s.container != nil && s.container.io != nil {
+		ioForwarder = s.container.io.init.forwarder
+	}
+	if s.container != nil {
+		mountCleanup = s.container.mountCleanup
+		s.container.mountCleanup = nil
+	}
+	s.containerMu.Unlock()
+
+	if ioForwarder != nil {
+		if ioErr := ioForwarder.Shutdown(ctx); ioErr != nil {
+			log.G(ctx).WithError(ioErr).Warn("failed to shutdown io after delete failure")
+		}
+	}
+
+	s.intentionalShutdown.Store(true)
+	if shutdownErr := s.vmLifecycle.Shutdown(ctx); shutdownErr != nil {
+		if !isProcessAlreadyFinished(shutdownErr) {
+			log.G(ctx).WithError(shutdownErr).Warn("failed to shutdown VM after delete error")
+		}
+	}
+
+	env := &network.Environment{ID: id}
+	if netErr := s.networkManager.ReleaseNetworkResources(ctx, env); netErr != nil {
+		log.G(ctx).WithError(netErr).WithField("id", id).Warn("failed to release network resources after delete failure")
+	}
+	if mountCleanup != nil {
+		if err := mountCleanup(ctx); err != nil {
+			log.G(ctx).WithError(err).WithField("id", id).Warn("failed to cleanup mounts after delete failure")
+		}
+	}
+}
+
+func (s *service) collectDeleteCleanup(r *taskAPI.DeleteRequest) deleteCleanup {
+	var cleanup deleteCleanup
+
+	s.containerMu.Lock()
+	if s.container != nil && s.containerID == r.ID {
+		if r.ExecID != "" {
+			if s.container.io != nil {
+				if pio, ok := s.container.io.exec[r.ExecID]; ok {
+					cleanup.ioForwarders = append(cleanup.ioForwarders, pio.forwarder)
+					delete(s.container.io.exec, r.ExecID)
+				}
+			}
+		} else {
+			if s.container.io != nil {
+				cleanup.ioForwarders = append(cleanup.ioForwarders, s.container.io.init.forwarder)
+				for _, pio := range s.container.io.exec {
+					cleanup.ioForwarders = append(cleanup.ioForwarders, pio.forwarder)
+				}
+			}
+			cleanup.mountCleanup = s.container.mountCleanup
+			cleanup.needNetworkClean = true
+			cleanup.needVMShutdown = true
+			s.container = nil
+			s.containerID = ""
+		}
+	}
+	s.containerMu.Unlock()
+
+	if r.ExecID == "" {
+		s.controllerMu.Lock()
+		cleanup.cpuController = s.cpuHotplugControllers[r.ID]
+		delete(s.cpuHotplugControllers, r.ID)
+		cleanup.memController = s.memoryHotplugControllers[r.ID]
+		delete(s.memoryHotplugControllers, r.ID)
+		s.controllerMu.Unlock()
+	}
+
+	return cleanup
+}
+
+func (s *service) runDeleteCleanup(ctx context.Context, r *taskAPI.DeleteRequest, cleanup deleteCleanup) {
+	for i, forwarder := range cleanup.ioForwarders {
+		if err := forwarder.Shutdown(ctx); err != nil {
+			if i == 0 && r.ExecID == "" {
+				log.G(ctx).WithError(err).Error("failed to shutdown io after delete")
+			} else {
+				log.G(ctx).WithError(err).WithField("exec", r.ExecID).Error("failed to shutdown exec io after delete")
+			}
+		}
+	}
+
+	if cleanup.cpuController != nil {
+		cleanup.cpuController.Stop()
+	}
+	if cleanup.memController != nil {
+		cleanup.memController.Stop()
+	}
+
+	if cleanup.needVMShutdown {
+		log.G(ctx).Info("container deleted, shutting down VM")
+		s.intentionalShutdown.Store(true)
+		if err := s.vmLifecycle.Shutdown(ctx); err != nil {
+			if !isProcessAlreadyFinished(err) {
+				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
+			}
+		}
+	}
+
+	if cleanup.needNetworkClean {
+		env := &network.Environment{ID: r.ID}
+		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
+			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
+		}
+	}
+
+	if cleanup.mountCleanup != nil {
+		if err := cleanup.mountCleanup(ctx); err != nil {
+			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup mounts during delete")
+		}
+	}
+
+	if cleanup.needVMShutdown {
+		log.G(ctx).Info("VM and network cleanup complete, scheduling shim exit")
+		go s.requestShutdownAndExit(ctx, "container deleted")
+	}
+}
+
 // Delete the initial process and container.
 func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAPI.DeleteResponse, error) {
 	s.inflight.Add(1)
 	defer s.inflight.Add(-1)
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("deleting task")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("delete task request")
 
 	// Mark deletion in progress (only for container, not exec)
 	if r.ExecID == "" {
@@ -716,139 +910,51 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		}
 	}
 
-	vmc, err := s.vmLifecycle.DialClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
-		return nil, errgrpc.ToGRPC(err)
+		return nil, err
 	}
-	defer func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close ttrpc client")
-		}
-	}()
+	defer cleanup()
 
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Delete(ctx, r)
 	if err != nil {
 		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Warn("delete task failed")
 		if r.ExecID == "" {
-			s.containerMu.Lock()
-			// Forwarder is always non-nil when io is set (noopForwarder for passthrough mode)
-			if s.container != nil && s.container.io != nil {
-				if ioErr := s.container.io.init.forwarder.Shutdown(ctx); ioErr != nil {
-					log.G(ctx).WithError(ioErr).Warn("failed to shutdown io after delete failure")
-				}
-			}
-			s.containerMu.Unlock()
-
-			s.intentionalShutdown.Store(true)
-			if shutdownErr := s.vmLifecycle.Shutdown(ctx); shutdownErr != nil {
-				if !isProcessAlreadyFinished(shutdownErr) {
-					log.G(ctx).WithError(shutdownErr).Warn("failed to shutdown VM after delete error")
-				}
-			}
+			s.cleanupOnDeleteFailure(ctx, r.ID)
 		}
 		return resp, err
 	}
 
-	// Extract cleanup targets
-	var ioForwarders []IOForwarder
-	var cpuController cpuhotplug.CPUHotplugController
-	var memController memhotplug.MemoryHotplugController
-	var needNetworkClean, needVMShutdown bool
-
-	s.containerMu.Lock()
-	if s.container != nil && s.containerID == r.ID {
-		if r.ExecID != "" {
-			if s.container.io != nil {
-				if pio, ok := s.container.io.exec[r.ExecID]; ok {
-					ioForwarders = append(ioForwarders, pio.forwarder)
-					delete(s.container.io.exec, r.ExecID)
-				}
-			}
-		} else {
-			// Forwarder is always non-nil when io is set (noopForwarder for passthrough mode)
-			if s.container.io != nil {
-				ioForwarders = append(ioForwarders, s.container.io.init.forwarder)
-				for _, pio := range s.container.io.exec {
-					ioForwarders = append(ioForwarders, pio.forwarder)
-				}
-			}
-			needNetworkClean = true
-			needVMShutdown = true
-			s.container = nil
-			s.containerID = ""
-		}
-	}
-	s.containerMu.Unlock()
-
-	// Get controllers (only for container, not exec)
+	// Publish TaskDelete event directly from the shim.
+	// We cannot rely on the guest's event stream because the shim may shut down
+	// before the event propagates through the stream. This ensures containerd
+	// receives the delete event before the shim exits.
 	if r.ExecID == "" {
-		s.controllerMu.Lock()
-		cpuController = s.cpuHotplugControllers[r.ID]
-		delete(s.cpuHotplugControllers, r.ID)
-		memController = s.memoryHotplugControllers[r.ID]
-		delete(s.memoryHotplugControllers, r.ID)
-		s.controllerMu.Unlock()
+		s.send(&eventstypes.TaskDelete{
+			ContainerID: r.ID,
+			Pid:         resp.Pid,
+			ExitStatus:  resp.ExitStatus,
+			ExitedAt:    resp.ExitedAt,
+		})
 	}
 
-	// Execute cleanup operations
-	// Forwarders are always non-nil (noopForwarder for passthrough mode)
-	for i, forwarder := range ioForwarders {
-		if err := forwarder.Shutdown(ctx); err != nil {
-			if i == 0 && r.ExecID == "" {
-				log.G(ctx).WithError(err).Error("failed to shutdown io after delete")
-			} else {
-				log.G(ctx).WithError(err).WithField("exec", r.ExecID).Error("failed to shutdown exec io after delete")
-			}
-		}
-	}
+	delCleanup := s.collectDeleteCleanup(r)
+	s.runDeleteCleanup(ctx, r, delCleanup)
 
-	if cpuController != nil {
-		cpuController.Stop()
-	}
-	if memController != nil {
-		memController.Stop()
-	}
-
-	// Shutdown VM (BEFORE network cleanup)
-	if needVMShutdown {
-		log.G(ctx).Info("container deleted, shutting down VM")
-		s.intentionalShutdown.Store(true)
-		if err := s.vmLifecycle.Shutdown(ctx); err != nil {
-			if !isProcessAlreadyFinished(err) {
-				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
-			}
-		}
-		log.G(ctx).Info("VM state cleared, scheduling shim exit")
-
-		go s.requestShutdownAndExit(ctx, "container deleted")
-	}
-
-	// Release network resources AFTER VM shutdown
-	if needNetworkClean {
-		env := &network.Environment{ID: r.ID}
-		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
-			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
-		}
-	}
-
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("task deleted successfully")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("delete task completed")
 	return resp, nil
 }
 
 // Exec an additional process inside the container.
 func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("exec container")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("exec request")
 
-	vmc, err := s.vmLifecycle.DialClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
-		return nil, errgrpc.ToGRPC(err)
+		return nil, err
 	}
-	defer func() {
-		if err := vmc.Close(); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to close ttrpc client")
-		}
-	}()
+	defer cleanup()
 
 	vmi, err := s.vmLifecycle.Instance()
 	if err != nil {
@@ -935,8 +1041,8 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 
 // ResizePty of a process.
 func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("resize pty")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("resize pty request")
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -946,18 +1052,39 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 
 // State returns runtime state information for a process.
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+
+	if r.ExecID == "" && !s.initStarted.Load() {
+		s.containerMu.Lock()
+		c := s.container
+		s.containerMu.Unlock()
+		if c != nil {
+			log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("state: short-circuit created state (init not started)")
+			st := &taskAPI.StateResponse{
+				Status: tasktypes.Status_CREATED,
+				Pid:    c.pid,
+			}
+			if c.io != nil {
+				st.Stdin = c.io.init.host.stdin
+				st.Stdout = c.io.init.host.stdout
+				st.Stderr = c.io.init.host.stderr
+				st.Terminal = c.io.init.terminal
+			}
+			return st, nil
+		}
+	}
+
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("state: failed to get client")
 		return nil, err
 	}
 	defer cleanup()
+
 	st, err := taskAPI.NewTTRPCTaskClient(vmc).State(ctx, r)
 	if err != nil {
 		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Error("state: guest state failed")
 		return nil, errgrpc.ToGRPC(err)
 	}
-
 	// Replace guest's I/O paths (rpcio:// URIs) with host FIFO paths for attach support.
 	// The guest uses rpcio:// URIs internally, but containerd's attach expects host FIFOs.
 	s.containerMu.Lock()
@@ -988,8 +1115,8 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 
 // Pause the container.
 func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pause")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pause request")
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -999,8 +1126,8 @@ func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.E
 
 // Resume the container.
 func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("resume")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("resume request")
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1010,8 +1137,8 @@ func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes
 
 // Kill a process with the provided signal.
 func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("kill")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("kill request")
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1021,8 +1148,8 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 
 // Pids returns all pids inside the container.
 func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.PidsResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pids")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("pids request")
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1032,7 +1159,7 @@ func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 
 // CloseIO of a process.
 func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "stdin": r.Stdin}).Debug("close io")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "stdin": r.Stdin}).Debug("close io request")
 
 	// If stdin is being closed and we have an RPC forwarder, signal it to close stdin.
 	// This allows the forwarder to stop waiting for FIFO writers and propagate the
@@ -1056,7 +1183,7 @@ func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptyp
 		s.containerMu.Unlock()
 	}
 
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1066,14 +1193,14 @@ func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptyp
 
 // Checkpoint the container.
 func (s *service) Checkpoint(ctx context.Context, r *taskAPI.CheckpointTaskRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("checkpoint")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("checkpoint request")
 	return &ptypes.Empty{}, nil
 }
 
 // Update a running container.
 func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*ptypes.Empty, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("update")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("update request")
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1083,8 +1210,8 @@ func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*pt
 
 // Wait for a process to exit.
 func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.WaitResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("wait")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Debug("wait request")
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1094,7 +1221,6 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.Wa
 
 // Connect returns shim information such as the shim's pid.
 func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*taskAPI.ConnectResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("connect")
 	s.containerMu.Lock()
 	hasContainer := s.container != nil && s.containerID == r.ID
 	pid := uint32(0)
@@ -1102,6 +1228,11 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 		pid = s.container.pid
 	}
 	s.containerMu.Unlock()
+	log.G(ctx).WithFields(log.Fields{
+		"id":            r.ID,
+		"has_container": hasContainer,
+		"task_pid":      pid,
+	}).Debug("connect request")
 	if hasContainer && pid != 0 {
 		return &taskAPI.ConnectResponse{
 			ShimPid: uint32(os.Getpid()),
@@ -1109,7 +1240,7 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 		}, nil
 	}
 
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1129,7 +1260,7 @@ func (s *service) Connect(ctx context.Context, r *taskAPI.ConnectRequest) (*task
 func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*ptypes.Empty, error) {
 	s.inflight.Add(1)
 	defer s.inflight.Add(-1)
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("shutdown")
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("shutdown request")
 
 	s.intentionalShutdown.Store(true)
 
@@ -1144,8 +1275,8 @@ func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*pt
 }
 
 func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.StatsResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("stats")
-	vmc, cleanup, err := s.dialTaskClient(ctx)
+	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("stats request")
+	vmc, cleanup, err := s.getTaskClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1312,7 +1443,10 @@ func (s *service) requestShutdownAndExit(ctx context.Context, reason string) {
 }
 
 func (s *service) forward(ctx context.Context, publisher shim.Publisher, ready chan<- struct{}) {
-	ns, _ := namespaces.Namespace(ctx)
+	ns, ok := namespaces.Namespace(ctx)
+	if !ok || ns == "" {
+		ns = defaultNamespace
+	}
 	ctx = namespaces.WithNamespace(context.WithoutCancel(ctx), ns)
 
 	close(ready)
@@ -1324,8 +1458,7 @@ func (s *service) forward(ctx context.Context, publisher shim.Publisher, ready c
 				log.G(ctx).WithError(err).Error("forward event")
 			}
 		default:
-			err := publisher.Publish(ctx, runtime.GetTopic(e), e)
-			if err != nil {
+			if err := publisher.Publish(ctx, runtime.GetTopic(e), e); err != nil {
 				log.G(ctx).WithError(err).Error("post event")
 			}
 		}

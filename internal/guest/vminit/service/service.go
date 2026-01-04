@@ -116,7 +116,7 @@ func New(ctx context.Context, cfg *config.ServiceConfig) (Runnable, error) {
 		instance, err := p.Instance()
 		if err != nil {
 			if plugin.IsSkipPlugin(err) {
-				log.G(ctx).WithFields(log.Fields{"error": err, "plugin_id": id}).Info("skip loading plugin")
+				log.G(ctx).WithFields(log.Fields{"error": err, "plugin_id": id}).Info("skipping plugin load")
 				continue
 			}
 

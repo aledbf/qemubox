@@ -36,7 +36,7 @@ func truncateID(prefix, id string) string {
 	return tag
 }
 
-func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, rootfsMounts []*types.Mount, bundleRootfs string, mountDir string) ([]*types.Mount, error) {
+func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, rootfsMounts []*types.Mount, bundleRootfs string, mountDir string) (SetupResult, error) {
 	// Try virtiofs first (not currently implemented for QEMU), fall back to block devices
 
 	if len(rootfsMounts) == 1 && (rootfsMounts[0].Type == "overlay" || rootfsMounts[0].Type == "bind") {
@@ -47,43 +47,53 @@ func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, ro
 			Options: rootfsMounts[0].Options,
 		}
 		if err := mnt.Mount(bundleRootfs); err != nil {
-			return nil, err
+			return SetupResult{}, err
 		}
 		if err := vmi.AddFS(ctx, tag, bundleRootfs); err != nil {
-			return nil, err
+			return SetupResult{}, err
 		}
-		return []*types.Mount{{
+		return SetupResult{Mounts: []*types.Mount{{
 			Type:    "virtiofs",
 			Source:  tag,
 			Options: translateMountOptions(ctx, rootfsMounts[0].Options),
-		}}, nil
+		}}}, nil
 	} else if len(rootfsMounts) == 0 {
 		tag := truncateID("rootfs", id)
 		if err := vmi.AddFS(ctx, tag, bundleRootfs); err != nil {
-			return nil, err
+			return SetupResult{}, err
 		}
-		return []*types.Mount{{
+		return SetupResult{Mounts: []*types.Mount{{
 			Type:   "virtiofs",
 			Source: tag,
-		}}, nil
+		}}}, nil
 	}
 	mounts, err := m.transformMounts(ctx, vmi, id, rootfsMounts)
 	if err != nil && errdefs.IsNotImplemented(err) {
-		if err := mountutil.All(ctx, bundleRootfs, mountDir, rootfsMounts); err != nil {
-			return nil, err
+		cleanup, err := mountutil.All(ctx, bundleRootfs, mountDir, rootfsMounts)
+		if err != nil {
+			return SetupResult{}, err
 		}
 
 		// Fallback to original rootfs mount
 		tag := truncateID("rootfs", id)
 		if err := vmi.AddFS(ctx, tag, bundleRootfs); err != nil {
-			return nil, err
+			if cleanup != nil {
+				_ = cleanup(context.WithoutCancel(ctx))
+			}
+			return SetupResult{}, err
 		}
-		return []*types.Mount{{
-			Type:   "virtiofs",
-			Source: tag,
-		}}, nil
+		return SetupResult{
+			Mounts: []*types.Mount{{
+				Type:   "virtiofs",
+				Source: tag,
+			}},
+			Cleanup: cleanup,
+		}, nil
 	}
-	return mounts, err
+	if err != nil {
+		return SetupResult{}, err
+	}
+	return SetupResult{Mounts: mounts}, nil
 }
 
 type diskOptions struct {
@@ -134,6 +144,12 @@ func (m *linuxManager) transformMount(ctx context.Context, id string, disks *byt
 		}
 		return []*types.Mount{mnt}, nil, nil
 	default:
+		// Mount types with mkfs/ or format/ prefixes require processing by the
+		// mount manager to create backing files. Return ErrNotImplemented to
+		// trigger the fallback path that uses mountutil.All().
+		if strings.HasPrefix(mnt.Type, "mkfs/") || strings.HasPrefix(mnt.Type, "format/") {
+			return nil, nil, fmt.Errorf("mount type %q requires mount manager: %w", mnt.Type, errdefs.ErrNotImplemented)
+		}
 		return []*types.Mount{mnt}, nil, nil
 	}
 }

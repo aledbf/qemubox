@@ -140,7 +140,10 @@ func (s *service) handleProcessExit(e runcC.Exit, c *runc.Container, p process.P
 }
 
 func (s *service) forward(ctx context.Context, publisher events.Publisher) {
-	ns, _ := namespaces.Namespace(ctx)
+	ns, ok := namespaces.Namespace(ctx)
+	if !ok || ns == "" {
+		ns = "default"
+	}
 	ctx = namespaces.WithNamespace(context.WithoutCancel(ctx), ns)
 	for e := range s.events {
 		err := publisher.Publish(ctx, runtime.GetTopic(e), e)

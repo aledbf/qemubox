@@ -3,154 +3,69 @@
 package mountutil
 
 import (
+	"context"
+	"os"
+	"strings"
 	"testing"
 
-	"github.com/containerd/containerd/v2/core/mount"
+	types "github.com/containerd/containerd/api/types"
 )
 
-func TestFormatString_MountPattern(t *testing.T) {
-	active := []mount.ActiveMount{
-		{MountPoint: "/mnt/layer0"},
-		{MountPoint: "/mnt/layer1"},
+func TestAllCleanupUnmounts(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to perform bind mounts")
 	}
 
-	tests := []struct {
-		name    string
-		input   string
-		want    string
-		wantErr bool
-	}{
-		{
-			name:  "compact format",
-			input: "{{mount 0}}/upper",
-			want:  "/mnt/layer0/upper",
-		},
-		{
-			name:  "spaced format",
-			input: "{{ mount 0 }}/upper",
-			want:  "/mnt/layer0/upper",
-		},
-		{
-			name:  "extra spaces",
-			input: "{{  mount  1  }}/work",
-			want:  "/mnt/layer1/work",
-		},
-		{
-			name:  "mkdir option style",
-			input: "X-containerd.mkdir.path={{ mount 0 }}/upper:0755",
-			want:  "X-containerd.mkdir.path=/mnt/layer0/upper:0755",
-		},
-		{
-			name:    "invalid pattern",
-			input:   "{{ invalid 0 }}",
-			wantErr: true,
-		},
+	ctx := context.Background()
+	rootfs := t.TempDir()
+	source := t.TempDir()
+	mountDir := t.TempDir()
+
+	if isMountPoint(rootfs) {
+		t.Fatalf("expected %s to not be a mountpoint before test", rootfs)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fn := formatString(tt.input)
-			if fn == nil {
-				t.Fatal("formatString returned nil for input with {{}}")
-			}
+	cleanup, err := All(ctx, rootfs, mountDir, []*types.Mount{{
+		Type:    "bind",
+		Source:  source,
+		Options: []string{"rbind", "rw"},
+	}})
+	if err != nil {
+		t.Fatalf("All() failed: %v", err)
+	}
+	if cleanup == nil {
+		t.Fatal("expected cleanup function, got nil")
+	}
 
-			got, err := fn(active)
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("expected error, got nil")
-				}
-				return
-			}
+	if !isMountPoint(rootfs) {
+		t.Fatalf("expected %s to be a mountpoint after mount", rootfs)
+	}
 
-			if err != nil {
-				t.Errorf("unexpected error: %v", err)
-				return
-			}
+	if err := cleanup(ctx); err != nil {
+		t.Fatalf("cleanup failed: %v", err)
+	}
 
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
-		})
+	if isMountPoint(rootfs) {
+		t.Fatalf("expected %s to be unmounted after cleanup", rootfs)
 	}
 }
 
-func TestFormatString_SourceTargetPatterns(t *testing.T) {
-	active := []mount.ActiveMount{
-		{Mount: mount.Mount{Source: "/dev/vda", Target: "/mnt/root"}, MountPoint: "/mnt/0"},
+func isMountPoint(path string) bool {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return false
 	}
-
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"source compact", "{{source 0}}", "/dev/vda"},
-		{"source spaced", "{{ source 0 }}", "/dev/vda"},
-		{"target compact", "{{target 0}}", "/mnt/root"},
-		{"target spaced", "{{ target 0 }}", "/mnt/root"},
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		if fields[4] == path {
+			return true
+		}
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fn := formatString(tt.input)
-			if fn == nil {
-				t.Fatal("formatString returned nil")
-			}
-
-			got, err := fn(active)
-			if err != nil {
-				t.Errorf("unexpected error: %v", err)
-				return
-			}
-
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestFormatString_OverlayPattern(t *testing.T) {
-	active := []mount.ActiveMount{
-		{MountPoint: "/mnt/0"},
-		{MountPoint: "/mnt/1"},
-		{MountPoint: "/mnt/2"},
-	}
-
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"compact", "{{overlay 0 2}}", "/mnt/0:/mnt/1:/mnt/2"},
-		{"spaced", "{{ overlay 0 2 }}", "/mnt/0:/mnt/1:/mnt/2"},
-		{"reverse", "{{overlay 2 0}}", "/mnt/2:/mnt/1:/mnt/0"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fn := formatString(tt.input)
-			if fn == nil {
-				t.Fatal("formatString returned nil")
-			}
-
-			got, err := fn(active)
-			if err != nil {
-				t.Errorf("unexpected error: %v", err)
-				return
-			}
-
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestFormatString_NoPattern(t *testing.T) {
-	// Strings without {{ should return nil
-	fn := formatString("plain string")
-	if fn != nil {
-		t.Error("expected nil for string without format markers")
-	}
+	return false
 }

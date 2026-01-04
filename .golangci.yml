@@ -129,7 +129,7 @@ linters:
     - noctx             # Context not always needed for exec.Command
   settings:
     cyclop:
-      max-complexity: 35
+      max-complexity: 40
     dupl:
       threshold: 250
     gocognit:

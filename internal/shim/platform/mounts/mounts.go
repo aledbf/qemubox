@@ -14,7 +14,13 @@ import (
 type Manager interface {
 	// Setup prepares mounts for use inside the VM.
 	// It transforms host mounts into VM-compatible formats (e.g., virtio-blk, virtiofs).
-	Setup(ctx context.Context, vmi vm.Instance, id string, rootfsMounts []*types.Mount, bundleRootfs string, mountDir string) ([]*types.Mount, error)
+	Setup(ctx context.Context, vmi vm.Instance, id string, rootfsMounts []*types.Mount, bundleRootfs string, mountDir string) (SetupResult, error)
+}
+
+// SetupResult carries the transformed mounts plus any cleanup required on delete.
+type SetupResult struct {
+	Mounts  []*types.Mount
+	Cleanup func(context.Context) error
 }
 
 // New creates a platform-specific mount manager.

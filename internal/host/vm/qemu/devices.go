@@ -81,7 +81,7 @@ func (q *Instance) AddDisk(ctx context.Context, blockID, mountPath string, opts 
 		"blockID":  blockID,
 		"path":     mountPath,
 		"readonly": mc.Readonly,
-	}).Debug("qemu: scheduled disk")
+	}).Debug("qemu: scheduled disk device")
 
 	return nil
 }
@@ -110,7 +110,7 @@ func (q *Instance) AddTAPNIC(ctx context.Context, tapName string, mac net.Hardwa
 	log.G(ctx).WithFields(log.Fields{
 		"tap": tapName,
 		"mac": macStr,
-	}).Debug("qemu: scheduled TAP NIC")
+	}).Debug("qemu: scheduled TAP NIC device")
 
 	return nil
 }

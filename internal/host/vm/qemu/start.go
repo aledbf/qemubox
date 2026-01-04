@@ -121,9 +121,8 @@ func (q *Instance) validateConfiguration() error {
 		return fmt.Errorf("max CPUs (%d) cannot be less than boot CPUs (%d)", q.resourceCfg.MaxCPUs, q.resourceCfg.BootCPUs)
 	}
 
-	// Require at least one network interface from CNI
-	// VMs without networking cannot communicate with the host via vsock properly
-	// and will fail during guest initialization
+	// Require at least one network interface from CNI.
+	// qemubox currently assumes a configured NIC during guest initialization.
 	if len(q.nets) == 0 {
 		return fmt.Errorf("no network interface configured: call AddNetwork() before Start()")
 	}
@@ -315,10 +314,10 @@ func (q *Instance) rollbackStart(success *bool) {
 	// Close any opened TAP FDs on failure
 	q.closeTAPFiles()
 
-	// Release CID lock on failure (allows CID reuse)
-	if q.cidLockFile != nil {
-		_ = q.cidLockFile.Close()
-		q.cidLockFile = nil
+	// Release CID lease on failure (allows CID reuse)
+	if q.cidLease != nil {
+		_ = q.cidLease.Release()
+		q.cidLease = nil
 	}
 }
 
@@ -387,7 +386,7 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	log.G(ctx).WithFields(log.Fields{
 		"binary":  q.binaryPath,
 		"cmdline": strings.Join(qemuArgs, " "),
-	}).Debug("qemu: starting vm")
+	}).Debug("qemu: starting VM process")
 
 	if err := q.startQemuProcess(ctx, qemuArgs); err != nil {
 		return err

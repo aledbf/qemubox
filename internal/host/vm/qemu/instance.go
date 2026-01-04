@@ -7,13 +7,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
+	"time"
 
 	"github.com/containerd/log"
 
 	"github.com/aledbf/qemubox/containerd/internal/config"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 	"github.com/aledbf/qemubox/containerd/internal/paths"
+	vsockalloc "github.com/aledbf/qemubox/containerd/internal/vsock"
 )
 
 const (
@@ -24,7 +25,8 @@ const (
 
 	// minGuestCID is the minimum valid vsock guest CID.
 	// CIDs 0-2 are reserved (hypervisor, reserved, host).
-	minGuestCID uint32 = 3
+	// CID 3 is avoided due to observed transient routing issues in some environments.
+	minGuestCID uint32 = 4
 
 	// maxGuestCID is the maximum CID we'll scan to before wrapping.
 	// Using a reasonable limit to avoid scanning billions of files.
@@ -32,50 +34,13 @@ const (
 
 	// cidLockDir is the subdirectory for CID lock files.
 	cidLockDir = "cid"
+
+	// cidCooldownPeriod is the minimum time to wait before reusing a CID.
+	// This allows the kernel's vsock routing table to clean up stale entries
+	// after a VM exits. Without this cooldown, a new VM using the same CID
+	// might experience vsock connection issues due to stale kernel state.
+	cidCooldownPeriod = 2 * time.Second
 )
-
-// allocateGuestCID allocates a unique vsock CID using lock files.
-// Each CID has a corresponding lock file; the caller holds an exclusive flock
-// for the lifetime of the VM. When the shim process exits (normally or crashes),
-// the kernel automatically releases the lock, making the CID available for reuse.
-//
-// Returns the allocated CID and the lock file handle. The caller must keep the
-// file open for the duration of the VM and close it on shutdown.
-func allocateGuestCID() (uint32, *os.File, error) {
-	cfg, err := config.Get()
-	if err != nil {
-		return 0, nil, fmt.Errorf("failed to get config: %w", err)
-	}
-
-	lockDir := filepath.Join(cfg.Paths.StateDir, cidLockDir)
-	if err := os.MkdirAll(lockDir, 0750); err != nil {
-		return 0, nil, fmt.Errorf("failed to create CID lock directory: %w", err)
-	}
-
-	// Scan for first available CID
-	for cid := minGuestCID; cid <= maxGuestCID; cid++ {
-		lockPath := filepath.Join(lockDir, fmt.Sprintf("%d.lock", cid))
-
-		// Try to open/create and lock the file
-		f, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0600)
-		if err != nil {
-			continue // Try next CID
-		}
-
-		// Try non-blocking exclusive lock
-		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err != nil {
-			// Lock held by another process, try next CID
-			_ = f.Close()
-			continue
-		}
-
-		// Successfully acquired lock - this CID is ours
-		return cid, f, nil
-	}
-
-	return 0, nil, fmt.Errorf("no available vsock CID in range [%d, %d]", minGuestCID, maxGuestCID)
-}
 
 func findQemu() (string, error) {
 	cfg, err := config.Get()
@@ -195,10 +160,13 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 	}
 
 	// Allocate unique vsock CID for this VM
-	guestCID, cidLockFile, err := allocateGuestCID()
+	lockDir := filepath.Join(cfg.Paths.StateDir, cidLockDir)
+	allocator := vsockalloc.NewAllocator(lockDir, minGuestCID, maxGuestCID, cidCooldownPeriod)
+	lease, err := allocator.Allocate()
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate vsock CID: %w", err)
 	}
+	guestCID := lease.CID
 
 	inst := &Instance{
 		binaryPath:      binaryPath,
@@ -215,7 +183,7 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 		nets:            []*NetConfig{},
 		resourceCfg:     resourceCfg,
 		guestCID:        guestCID,
-		cidLockFile:     cidLockFile,
+		cidLease:        lease,
 	}
 
 	log.G(ctx).WithFields(log.Fields{

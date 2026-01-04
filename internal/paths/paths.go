@@ -1,6 +1,6 @@
 // Package paths provides standard filesystem paths used by qemubox.
-// All path functions are pure functions that take configuration as a parameter,
-// making them easy to test and avoiding tight coupling to the config package.
+// These helpers take configuration as input to avoid global config coupling.
+// QemuPath and QemuSharePath may probe the filesystem when auto-discovering paths.
 package paths
 
 import (
@@ -81,7 +81,7 @@ func discoverQemuSharePath(shareDir string) string {
 }
 
 // fileExists checks if a file exists, resolving symlinks to the real path.
-// This prevents symlink attacks by ensuring we check the actual file.
+// This surfaces the real target but does not prevent TOCTOU issues.
 func fileExists(path string) bool {
 	// Resolve symlinks to get the real path
 	resolved, err := filepath.EvalSymlinks(path)
@@ -93,7 +93,7 @@ func fileExists(path string) bool {
 }
 
 // dirExists checks if a directory exists, resolving symlinks to the real path.
-// This prevents symlink attacks by ensuring we check the actual directory.
+// This surfaces the real target but does not prevent TOCTOU issues.
 func dirExists(path string) bool {
 	// Resolve symlinks to get the real path
 	resolved, err := filepath.EvalSymlinks(path)

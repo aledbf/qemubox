@@ -27,7 +27,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 
 	ctx = log.WithLogger(ctx, log.G(ctx).WithField("id", r.ID))
 
-	log.G(ctx).WithField("bundle", r.Bundle).Infof("Create task")
+	log.G(ctx).WithField("bundle", r.Bundle).Info("create task request")
 
 	handleStarted, cleanup := s.preStart(nil)
 	defer cleanup()
@@ -38,7 +38,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
-	log.G(ctx).Infof("new container %s", container.ID)
+	log.G(ctx).WithField("container_id", container.ID).Info("created container")
 
 	s.containers[r.ID] = container
 
@@ -71,8 +71,14 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 
 // Start a process
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
+	log.G(ctx).WithFields(log.Fields{
+		"id":   r.ID,
+		"exec": r.ExecID,
+	}).Info("Start: request received")
+
 	container, err := s.getContainer(r.ID)
 	if err != nil {
+		log.G(ctx).WithError(err).WithField("id", r.ID).Error("Start: container not found")
 		return nil, err
 	}
 
@@ -145,17 +151,13 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
-	// if we deleted an init task, send the task delete event
+	// Clean up container state for init task deletion.
+	// Note: TaskDelete event is published by the shim directly to ensure it reaches
+	// containerd before the shim shuts down (the event stream closes during shutdown).
 	if r.ExecID == "" {
 		s.mu.Lock()
 		delete(s.containers, r.ID)
 		s.mu.Unlock()
-		s.send(&eventstypes.TaskDelete{
-			ContainerID: container.ID,
-			Pid:         uint32(p.Pid()),
-			ExitStatus:  uint32(p.ExitStatus()),
-			ExitedAt:    protobuf.ToTimestamp(p.ExitedAt()),
-		})
 		s.exitTracker.Cleanup(container)
 	}
 	return &taskAPI.DeleteResponse{
@@ -169,14 +171,23 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
 	container, err := s.getContainer(r.ID)
 	if err != nil {
+		log.G(ctx).WithError(err).WithField("id", r.ID).Error("State: container not found")
 		return nil, err
 	}
 	p, err := container.Process(r.ExecID)
 	if err != nil {
+		log.G(ctx).WithError(err).WithFields(log.Fields{
+			"id":   r.ID,
+			"exec": r.ExecID,
+		}).Error("State: process not found")
 		return nil, errgrpc.ToGRPC(err)
 	}
 	st, err := p.Status(ctx)
 	if err != nil {
+		log.G(ctx).WithError(err).WithFields(log.Fields{
+			"id":   r.ID,
+			"exec": r.ExecID,
+		}).Error("State: failed to get process status")
 		return nil, err
 	}
 	status := task.Status_UNKNOWN
@@ -191,6 +202,12 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 		status = task.Status_PAUSED
 	case "pausing":
 		status = task.Status_PAUSING
+	default:
+		log.G(ctx).WithFields(log.Fields{
+			"id":     r.ID,
+			"exec":   r.ExecID,
+			"status": st,
+		}).Warn("State: unknown status string from process")
 	}
 	sio := p.Stdio()
 	return &taskAPI.StateResponse{
