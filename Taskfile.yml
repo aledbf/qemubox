@@ -232,7 +232,7 @@ tasks:
       VERSION: '{{.VERSION | default "ci"}}'
       INTEGRATION_IMAGE: '{{.INTEGRATION_IMAGE | default "ghcr.io/aledbf/qemubox/sandbox:latest"}}'
       INTEGRATION_RUNTIME: '{{.INTEGRATION_RUNTIME | default "io.containerd.qemubox.v1"}}'
-      INTEGRATION_SNAPSHOTTER: '{{.INTEGRATION_SNAPSHOTTER | default "erofs"}}'
+      INTEGRATION_SNAPSHOTTER: '{{.INTEGRATION_SNAPSHOTTER | default "nexuserofs"}}'
     cmds:
       - task: release
         vars:
