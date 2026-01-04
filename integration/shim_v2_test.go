@@ -112,22 +112,23 @@ func (t *ctrEventTracker) handleEvent(evt ctrEvent) {
 
 	t.events = append(t.events, evt)
 
+	// Match topics by their suffix (containerd topics are like "/tasks/create")
 	switch {
-	case strings.Contains(evt.Topic, "task-create"):
+	case strings.HasSuffix(evt.Topic, "/create"):
 		if t.initState != initPending {
 			t.setErrLocked(fmt.Errorf("TaskCreate out of order: state=%d", t.initState))
 			return
 		}
 		t.initState = initCreated
 
-	case strings.Contains(evt.Topic, "task-start"):
+	case strings.HasSuffix(evt.Topic, "/start"):
 		if t.initState != initCreated {
 			t.setErrLocked(fmt.Errorf("TaskStart out of order: state=%d", t.initState))
 			return
 		}
 		t.initState = initStarted
 
-	case strings.Contains(evt.Topic, "task-exit"):
+	case strings.HasSuffix(evt.Topic, "/exit"):
 		// Check if this is an exec exit
 		if t.checkExec && evt.Event.ID == t.execID {
 			if t.execState != execStarted {
@@ -153,7 +154,7 @@ func (t *ctrEventTracker) handleEvent(evt ctrEvent) {
 		}
 		t.initState = initExited
 
-	case strings.Contains(evt.Topic, "task-delete"):
+	case strings.HasSuffix(evt.Topic, "/delete"):
 		if t.initState != initExited {
 			t.setErrLocked(fmt.Errorf("TaskDelete out of order: state=%d", t.initState))
 			return
@@ -161,7 +162,7 @@ func (t *ctrEventTracker) handleEvent(evt ctrEvent) {
 		t.initState = initDeleted
 		t.maybeDoneLocked()
 
-	case strings.Contains(evt.Topic, "exec-added"):
+	case strings.HasSuffix(evt.Topic, "/exec-added"):
 		if !t.checkExec || evt.Event.ExecID != t.execID {
 			return
 		}
@@ -171,7 +172,7 @@ func (t *ctrEventTracker) handleEvent(evt ctrEvent) {
 		}
 		t.execState = execAdded
 
-	case strings.Contains(evt.Topic, "exec-started"):
+	case strings.HasSuffix(evt.Topic, "/exec-started"):
 		if !t.checkExec || evt.Event.ExecID != t.execID {
 			return
 		}
