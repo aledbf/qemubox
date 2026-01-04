@@ -92,26 +92,7 @@ chmod +x "${RELEASE_DIR}/install.sh"
 chmod +x "${RELEASE_DIR}/uninstall.sh"
 echo "  ok: install/uninstall scripts"
 
-echo "Copying containerd binaries (built from fork with EROFS snapshot support)..."
-if [ -f "${OUTPUT_DIR}/containerd" ]; then
-  cp "${OUTPUT_DIR}/containerd" "${RELEASE_DIR}/usr/share/qemubox/bin/"
-  chmod +x "${RELEASE_DIR}/usr/share/qemubox/bin/containerd"
-  echo "  ok: containerd (from fork)"
-else
-  echo "  error: containerd not found - run 'task build:containerd' first"
-  exit 1
-fi
-
-if [ -f "${OUTPUT_DIR}/containerd-shim-runc-v2" ]; then
-  cp "${OUTPUT_DIR}/containerd-shim-runc-v2" "${RELEASE_DIR}/usr/share/qemubox/bin/"
-  chmod +x "${RELEASE_DIR}/usr/share/qemubox/bin/containerd-shim-runc-v2"
-  echo "  ok: containerd-shim-runc-v2 (from fork)"
-else
-  echo "  error: containerd-shim-runc-v2 not found - run 'task build:containerd' first"
-  exit 1
-fi
-
-echo "Downloading nerdctl..."
+echo "Downloading nerdctl-full (includes containerd, runc, nerdctl, ctr)..."
 NERDCTL_VERSION="${NERDCTL_VERSION:-2.2.1}"
 NERDCTL_URL="https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
 NERDCTL_TARBALL="${OUTPUT_DIR}/nerdctl-full-${NERDCTL_VERSION}-linux-amd64.tar.gz"
@@ -120,12 +101,14 @@ if [ ! -f "${NERDCTL_TARBALL}" ]; then
   curl -L -o "${NERDCTL_TARBALL}" "${NERDCTL_URL}"
 fi
 
-echo "Extracting nerdctl-full components (nerdctl, ctr, runc)..."
+echo "Extracting nerdctl-full components (containerd, containerd-shim-runc-v2, nerdctl, ctr, runc)..."
 tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/" \
+  bin/containerd \
+  bin/containerd-shim-runc-v2 \
   bin/nerdctl \
   bin/ctr \
   bin/runc
-echo "  ok: runc, ctr, nerdctl"
+echo "  ok: containerd, containerd-shim-runc-v2, runc, ctr, nerdctl"
 
 mkdir -p "${RELEASE_DIR}/usr/share/qemubox/libexec/cni"
 tar -xzf "${NERDCTL_TARBALL}" -C "${RELEASE_DIR}/usr/share/qemubox/libexec/cni" --strip-components=2 \
@@ -157,6 +140,19 @@ cp "${TC_REDIRECT_TAP_DIR}/tc-redirect-tap" \
   "${RELEASE_DIR}/usr/share/qemubox/libexec/cni/"
 chmod +x "${RELEASE_DIR}/usr/share/qemubox/libexec/cni/tc-redirect-tap"
 echo "  ok: tc-redirect-tap CNI plugin"
+
+echo "Downloading nexuserofs-snapshotter (external EROFS snapshotter)..."
+NEXUSEROFS_VERSION="${NEXUSEROFS_VERSION:-v20250103.01}"
+NEXUSEROFS_URL="https://github.com/aledbf/nexuserofs/releases/download/${NEXUSEROFS_VERSION}/nexuserofs-snapshotter-linux-amd64"
+NEXUSEROFS_BIN="${OUTPUT_DIR}/nexuserofs-snapshotter-linux-amd64"
+
+if [ ! -f "${NEXUSEROFS_BIN}" ]; then
+  curl -L -o "${NEXUSEROFS_BIN}" "${NEXUSEROFS_URL}"
+fi
+
+cp "${NEXUSEROFS_BIN}" "${RELEASE_DIR}/usr/share/qemubox/bin/nexuserofs-snapshotter"
+chmod +x "${RELEASE_DIR}/usr/share/qemubox/bin/nexuserofs-snapshotter"
+echo "  ok: nexuserofs-snapshotter"
 
 echo "Creating tarball..."
 cd "${OUTPUT_DIR}/release"

@@ -65,13 +65,12 @@ tasks:
         echo "✓ {{.NAME}} built: {{.OUTPUT_DIR}}/{{.OUT}} (static)"
 
   build:
-    desc: Build all components (shim, kernel, initrd, QEMU, containerd)
+    desc: Build all components (shim, kernel, initrd, QEMU)
     deps:
       - build:shim
       - build:kernel
       - build:initrd
       - build:qemu
-      - build:containerd
     cmds:
       - cmd: 'echo "✓ Build complete"'
 
@@ -148,21 +147,6 @@ tasks:
           --output type=local,dest={{.OUTPUT_DIR}} \
           .
         echo "✓ Kernel built: _output/qemubox-kernel-x86_64"
-
-  build:containerd:
-    desc: Build containerd from fork with EROFS snapshot support (temporary)
-    cmds:
-      - |
-        set -eou pipefail
-        echo "🐳 Building containerd from fork..."
-        {{.BUILDX}} build \
-          --file Dockerfile \
-          --target containerd \
-          --platform linux/amd64 \
-          --no-cache \
-          --output type=local,dest={{.OUTPUT_DIR}} \
-          .
-        echo "✓ Containerd built: _output/containerd, _output/containerd-shim-runc-v2"
 
   build:qemu:
     desc: Build QEMU binaries and firmware (qemu-system-x86_64, BIOS files)
