@@ -452,6 +452,6 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	}
 
 	t.Logf("shim validation ok (runtime=%s, container=%s)", cfg.Runtime, containerID)
-	t.Logf("validated event topics: task-create, task-start, task-exit, task-delete")
-	t.Logf("validated exec topics: exec-added, exec-started, task-exit")
+	t.Logf("validated event topics: /tasks/create, /tasks/start, /tasks/exit, /tasks/delete")
+	t.Logf("validated exec topics: /tasks/exec-added, /tasks/exec-started, /tasks/exit")
 }
