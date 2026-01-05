@@ -30,6 +30,13 @@ address = ""
 grpc_histogram = false
 
 # External nexuserofs snapshotter (EROFS-based)
+#
+# Provides two services via a single external process:
+#   - nexuserofs: Snapshot service that stores image layers as EROFS filesystems
+#   - nexuserofs-diff: Diff service that efficiently applies/compares layers
+#
+# The snapshotter returns template-based mount specifications that require
+# the mount-manager plugin (configured below) to resolve before mounting.
 [proxy_plugins]
   [proxy_plugins.nexuserofs]
     type = "snapshot"
@@ -42,6 +49,27 @@ grpc_histogram = false
 [plugins]
 "io.containerd.internal.v1.tracing" = { }
 "io.containerd.tracing.processor.v1.otlp" = { }
+
+# Mount Manager Plugin (REQUIRED for nexuserofs snapshotter)
+#
+# The nexuserofs snapshotter returns template-based mounts like:
+#   lowerdir={{ overlay 0 4 }}
+#   workdir={{ mount 0 }}/work
+#   upperdir={{ mount 0 }}/upper
+#
+# These templates reference other mounts by index and must be resolved
+# before the actual mount syscall. The mount-manager plugin:
+#   1. Parses template syntax in mount options
+#   2. Resolves references to actual mount paths
+#   3. Executes mounts in the correct dependency order
+#
+# Without this plugin, containerd passes templates literally to the kernel,
+# causing "no such device" errors because "{{ overlay 0 4 }}" is not a valid path.
+#
+# This is required for both:
+#   - Standard container operations (ctr run, nerdctl run)
+#   - VM-based runtimes like qemubox (the shim also has its own mount manager)
+"io.containerd.mount-manager.v1.bolt" = { }
 
   [plugins."io.containerd.cri.v1.images"]
   concurrent_layer_fetch_buffer = 0
