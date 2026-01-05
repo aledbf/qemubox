@@ -1,3 +1,4 @@
+  GNU nano 8.4                                                                                                                                            /etc/systemd/system/qemubox-nexuserofs-snapshotter.service
 [Unit]
 Description=nexuserofs external snapshotter for containerd
 Documentation=https://github.com/aledbf/nexuserofs
@@ -19,9 +20,8 @@ ExecStart=/usr/share/qemubox/bin/nexuserofs-snapshotter \
   --address /run/qemubox/nexuserofs-snapshotter/snapshotter.sock \
   --containerd-address /var/run/qemubox/containerd.sock \
   --containerd-namespace default \
-  --log-level info \
+  --log-level debug \
   --set-immutable \
-  --mkfs-options="-zlz4hc,12" \
   --mkfs-options="-C65536"
 
 Type=simple
