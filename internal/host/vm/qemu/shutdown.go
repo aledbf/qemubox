@@ -206,6 +206,13 @@ func (q *Instance) cleanupResources(logger *log.Entry) {
 		}
 		q.cidLease = nil
 	}
+
+	// Remove VM state directory (contains QMP socket, vsock socket, console FIFO)
+	if q.stateDir != "" {
+		if err := os.RemoveAll(q.stateDir); err != nil {
+			logger.WithError(err).Debug("qemu: failed to remove state directory")
+		}
+	}
 }
 
 // Shutdown gracefully shuts down the VM following a multi-phase process:
