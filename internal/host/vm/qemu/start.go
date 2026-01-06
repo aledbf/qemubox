@@ -219,38 +219,15 @@ func (q *Instance) monitorProcess(ctx context.Context) {
 	go func() {
 		exitErr := q.cmd.Wait()
 
-		logger := log.G(ctx).WithFields(log.Fields{
-			"guest_cid": q.guestCID,
-			"pid":       q.cmd.Process.Pid,
-		})
-
 		if exitErr != nil {
-			// Try to extract more details about the exit
-			var exitCode int = -1
-			var signalName string
-			if exitError, ok := exitErr.(*exec.ExitError); ok {
-				exitCode = exitError.ExitCode()
-				if status, ok := exitError.Sys().(syscall.WaitStatus); ok {
-					if status.Signaled() {
-						signalName = status.Signal().String()
-					}
-				}
-			}
-			logger.WithError(exitErr).WithFields(log.Fields{
-				"exit_code": exitCode,
-				"signal":    signalName,
-			}).Warn("qemu: process exited unexpectedly")
-		} else {
-			logger.Info("qemu: process exited cleanly")
+			log.G(ctx).WithError(exitErr).Debug("qemu: process exited")
 		}
 
 		// Signal Shutdown() that process exited
 		select {
 		case q.waitCh <- exitErr:
-			logger.Debug("qemu: signaled waitCh")
 		default:
 			// Channel may be closed if Shutdown() already completed
-			logger.Debug("qemu: waitCh not ready (Shutdown already completed?)")
 		}
 
 		// Cancel background monitors if still running
@@ -464,7 +441,6 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 		fmt.Sprintf("-vsock-rpc-port=%d", vsock.DefaultRPCPort),
 		fmt.Sprintf("-vsock-stream-port=%d", vsock.DefaultStreamPort),
 		fmt.Sprintf("-vsock-cid=%d", q.guestCID),
-		"-debug",
 	}
 	initArgs = append(initArgs, startOpts.InitArgs...)
 

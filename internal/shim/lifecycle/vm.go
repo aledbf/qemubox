@@ -122,54 +122,18 @@ func (m *Manager) DialClient(ctx context.Context) (*ttrpc.Client, error) {
 // Uses exponential backoff starting at vsockRetryInitialBackoff and capped at
 // vsockRetryMaxBackoff. Retries for up to maxWait duration before giving up.
 func (m *Manager) DialClientWithRetry(ctx context.Context, maxWait time.Duration) (*ttrpc.Client, error) {
-	startTime := time.Now()
-	deadline := startTime.Add(maxWait)
+	deadline := time.Now().Add(maxWait)
 	backoff := vsockRetryInitialBackoff
-	attempt := 0
-
-	log.G(ctx).WithFields(log.Fields{
-		"max_wait":        maxWait,
-		"initial_backoff": vsockRetryInitialBackoff,
-	}).Debug("lifecycle: DialClientWithRetry starting")
 
 	for {
-		attempt++
-		attemptStart := time.Now()
 		vmc, err := m.DialClient(ctx)
-		attemptDuration := time.Since(attemptStart)
-
 		if err == nil {
-			log.G(ctx).WithFields(log.Fields{
-				"attempts":       attempt,
-				"total_duration": time.Since(startTime),
-			}).Debug("lifecycle: DialClientWithRetry succeeded")
 			return vmc, nil
 		}
-
-		isTransient := isTransientVsockError(err)
-		timeRemaining := time.Until(deadline)
-
-		log.G(ctx).WithError(err).WithFields(log.Fields{
-			"attempt":          attempt,
-			"attempt_duration": attemptDuration,
-			"is_transient":     isTransient,
-			"time_remaining":   timeRemaining,
-			"next_backoff":     backoff,
-		}).Debug("lifecycle: DialClientWithRetry attempt failed")
-
-		if !isTransient {
-			log.G(ctx).WithError(err).WithFields(log.Fields{
-				"attempts":       attempt,
-				"total_duration": time.Since(startTime),
-			}).Warn("lifecycle: DialClientWithRetry failed with non-transient error")
+		if !isTransientVsockError(err) {
 			return nil, err
 		}
 		if time.Now().After(deadline) {
-			log.G(ctx).WithError(err).WithFields(log.Fields{
-				"attempts":       attempt,
-				"total_duration": time.Since(startTime),
-				"max_wait":       maxWait,
-			}).Warn("lifecycle: DialClientWithRetry deadline exceeded")
 			return nil, err
 		}
 		time.Sleep(backoff)

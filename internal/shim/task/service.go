@@ -745,9 +745,9 @@ func sleepWithJitter(base time.Duration, jitterFraction float64) {
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
 	startTime := time.Now()
 	log.G(ctx).WithFields(log.Fields{
-		"id":                  r.ID,
-		"exec":                r.ExecID,
-		"has_cached_client":   s.connManager.HasClient(),
+		"id":                   r.ID,
+		"exec":                 r.ExecID,
+		"has_cached_client":    s.connManager.HasClient(),
 		"intentional_shutdown": s.intentionalShutdown.Load(),
 	}).Info("start: request received")
 

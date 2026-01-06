@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 	"github.com/mdlayher/vsock"
 
@@ -33,27 +32,15 @@ const dialTimeout = 2 * time.Second
 // DialClient creates a short-lived TTRPC client for one-off RPCs.
 // The caller must close the returned client.
 func (q *Instance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
-	state := q.getState()
-	if state != vmStateRunning {
-		log.G(ctx).WithFields(log.Fields{
-			"vm_state":  state,
-			"guest_cid": q.guestCID,
-		}).Debug("qemu: DialClient called but VM not running")
-		return nil, fmt.Errorf("vm not running (state=%d): %w", state, errdefs.ErrFailedPrecondition)
+	if q.getState() != vmStateRunning {
+		return nil, fmt.Errorf("vm not running: %w", errdefs.ErrFailedPrecondition)
 	}
 
 	select {
 	case <-ctx.Done():
-		log.G(ctx).WithError(ctx.Err()).Debug("qemu: DialClient context already done")
 		return nil, ctx.Err()
 	default:
 	}
-
-	dialStart := time.Now()
-	log.G(ctx).WithFields(log.Fields{
-		"guest_cid": q.guestCID,
-		"port":      vsockports.DefaultRPCPort,
-	}).Debug("qemu: DialClient starting vsock dial")
 
 	// vsock.Dial doesn't respect context, so we wrap it with a timeout.
 	// This prevents indefinite blocking if the kernel vsock layer is stuck.
@@ -72,45 +59,29 @@ func (q *Instance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
 	case <-ctx.Done():
 		// Context canceled - the dial goroutine will complete eventually
 		// and the connection (if any) will be garbage collected
-		log.G(ctx).WithError(ctx.Err()).WithField("dial_duration", time.Since(dialStart)).Debug("qemu: DialClient context canceled during dial")
 		return nil, ctx.Err()
 	case <-time.After(dialTimeout):
-		log.G(ctx).WithFields(log.Fields{
-			"dial_duration": time.Since(dialStart),
-			"timeout":       dialTimeout,
-			"guest_cid":     q.guestCID,
-		}).Error("qemu: DialClient vsock dial timeout")
 		return nil, fmt.Errorf("vsock dial timeout after %v", dialTimeout)
 	case result := <-resultCh:
 		if result.err != nil {
-			log.G(ctx).WithError(result.err).WithFields(log.Fields{
-				"dial_duration": time.Since(dialStart),
-				"guest_cid":     q.guestCID,
-			}).Debug("qemu: DialClient vsock dial failed")
 			return nil, result.err
 		}
 		conn = result.conn
 	}
 
-	log.G(ctx).WithField("dial_duration", time.Since(dialStart)).Debug("qemu: vsock dialed for TTRPC")
-
 	if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
-		log.G(ctx).WithError(err).Debug("qemu: failed to set read deadline for ping")
 		_ = conn.Close()
 		return nil, err
 	}
 	if err := pingTTRPC(conn); err != nil {
-		log.G(ctx).WithError(err).Debug("qemu: TTRPC ping failed")
 		_ = conn.Close()
 		return nil, err
 	}
 	if err := conn.SetReadDeadline(time.Time{}); err != nil {
-		log.G(ctx).WithError(err).Debug("qemu: failed to clear read deadline after ping")
 		_ = conn.Close()
 		return nil, err
 	}
 
-	log.G(ctx).WithField("total_duration", time.Since(dialStart)).Debug("qemu: TTRPC ping ok, client ready")
 	return ttrpc.NewClient(conn), nil
 }
 
