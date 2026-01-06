@@ -171,8 +171,13 @@ func (q *Instance) startQemuProcess(ctx context.Context, qemuArgs []string) erro
 	}
 
 	// Start QEMU
+	// CRITICAL: Use context.WithoutCancel to prevent the RPC request context from
+	// killing QEMU when it's canceled. The QEMU process must outlive the Create()
+	// RPC call - it runs until explicit Shutdown(). Without this, when Create()
+	// returns and the TTRPC layer cancels the context, Go's exec.CommandContext
+	// would SIGKILL the QEMU process.
 	//nolint:gosec // QEMU path and args are controlled by VM configuration.
-	q.cmd = exec.CommandContext(ctx, q.binaryPath, qemuArgs...)
+	q.cmd = exec.CommandContext(context.WithoutCancel(ctx), q.binaryPath, qemuArgs...)
 	q.cmd.Stdout = qemuLogFile
 	q.cmd.Stderr = qemuLogFile
 	q.cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -214,16 +219,38 @@ func (q *Instance) monitorProcess(ctx context.Context) {
 	go func() {
 		exitErr := q.cmd.Wait()
 
-		logger := log.G(ctx)
+		logger := log.G(ctx).WithFields(log.Fields{
+			"guest_cid": q.guestCID,
+			"pid":       q.cmd.Process.Pid,
+		})
+
 		if exitErr != nil {
-			logger.WithError(exitErr).Debug("qemu: process exited")
+			// Try to extract more details about the exit
+			var exitCode int = -1
+			var signalName string
+			if exitError, ok := exitErr.(*exec.ExitError); ok {
+				exitCode = exitError.ExitCode()
+				if status, ok := exitError.Sys().(syscall.WaitStatus); ok {
+					if status.Signaled() {
+						signalName = status.Signal().String()
+					}
+				}
+			}
+			logger.WithError(exitErr).WithFields(log.Fields{
+				"exit_code": exitCode,
+				"signal":    signalName,
+			}).Warn("qemu: process exited unexpectedly")
+		} else {
+			logger.Info("qemu: process exited cleanly")
 		}
 
 		// Signal Shutdown() that process exited
 		select {
 		case q.waitCh <- exitErr:
+			logger.Debug("qemu: signaled waitCh")
 		default:
 			// Channel may be closed if Shutdown() already completed
+			logger.Debug("qemu: waitCh not ready (Shutdown already completed?)")
 		}
 
 		// Cancel background monitors if still running
@@ -437,6 +464,7 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 		fmt.Sprintf("-vsock-rpc-port=%d", vsock.DefaultRPCPort),
 		fmt.Sprintf("-vsock-stream-port=%d", vsock.DefaultStreamPort),
 		fmt.Sprintf("-vsock-cid=%d", q.guestCID),
+		"-debug",
 	}
 	initArgs = append(initArgs, startOpts.InitArgs...)
 

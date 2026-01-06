@@ -405,8 +405,9 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 
 	// Run exec using Go client API
 	t.Log("running exec...")
+	// Use /bin/echo (external binary) via shell - builtin echo fails with NullIO
 	execProcess, err := task.Exec(ctxNS, execID, &specs.Process{
-		Args: []string{"/bin/sh", "-c", "echo shim-validate"},
+		Args: []string{"/bin/sh", "-c", "/bin/echo shim-validate"},
 		Cwd:  "/",
 	}, cio.NullIO)
 	if err != nil {
