@@ -29,9 +29,25 @@ uid = 0
 address = ""
 grpc_histogram = false
 
+# External nexuserofs snapshotter (EROFS-based)
+#
+# Provides two services via a single external process:
+#   - nexuserofs: Snapshot service that stores image layers as EROFS filesystems
+#   - nexuserofs-diff: Diff service that efficiently applies/compares layers
+#
+# The snapshotter mounts EROFS layers directly and returns standard overlay mounts
+# with real paths - no mount-manager plugin required.
+[proxy_plugins]
+  [proxy_plugins.nexuserofs]
+    type = "snapshot"
+    address = "/run/qemubox/nexuserofs-snapshotter/snapshotter.sock"
+
+  [proxy_plugins.nexuserofs-diff]
+    type = "diff"
+    address = "/run/qemubox/nexuserofs-snapshotter/snapshotter.sock"
+
 [plugins]
 "io.containerd.internal.v1.tracing" = { }
-"io.containerd.mount-handler.v1.erofs" = { }
 "io.containerd.tracing.processor.v1.otlp" = { }
 
   [plugins."io.containerd.cri.v1.images"]
@@ -41,7 +57,7 @@ grpc_histogram = false
   image_pull_progress_timeout = "5m0s"
   image_pull_with_sync_fs = false
   max_concurrent_downloads = 10
-  snapshotter = "erofs"
+  snapshotter = "nexuserofs"
   stats_collect_period = 10
   use_local_image_pull = false
 
@@ -81,10 +97,6 @@ sandboxer = "podsandbox"
   [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runc.options]
   SystemdCgroup = true
 
-  [plugins."io.containerd.differ.v1.erofs"]
-  enable_tar_index = false
-  mkfs_options = [ "-b4096" ]
-
   [plugins."io.containerd.gc.v1.scheduler"]
   deletion_threshold = 0
   mutation_threshold = 100
@@ -115,13 +127,8 @@ sandboxer = "podsandbox"
   platforms = [ "linux/amd64" ]
 
   [plugins."io.containerd.service.v1.diff-service"]
-  default = [ "erofs", "walking" ]
+  default = [ "nexuserofs-diff", "walking" ]
   sync_fs = false
-
-  [plugins."io.containerd.snapshotter.v1.erofs"]
-  default_size = "1G"
-  enable_fsverity = false
-  max_unmerged_layers = 1
 
   [plugins."io.containerd.transfer.v1.local"]
   check_platform_supported = false
@@ -133,8 +140,8 @@ sandboxer = "podsandbox"
 
     [[plugins."io.containerd.transfer.v1.local".unpack_config]]
     platform = "linux/amd64"
-    snapshotter = "erofs"
-    differ = "erofs"
+    snapshotter = "nexuserofs"
+    differ = "nexuserofs-diff"
 
 [timeouts]
 "io.containerd.timeout.bolt.open" = "0s"

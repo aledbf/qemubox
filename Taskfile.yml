@@ -65,13 +65,12 @@ tasks:
         echo "✓ {{.NAME}} built: {{.OUTPUT_DIR}}/{{.OUT}} (static)"
 
   build:
-    desc: Build all components (shim, kernel, initrd, QEMU, containerd)
+    desc: Build all components (shim, kernel, initrd, QEMU)
     deps:
       - build:shim
       - build:kernel
       - build:initrd
       - build:qemu
-      - build:containerd
     cmds:
       - cmd: 'echo "✓ Build complete"'
 
@@ -148,21 +147,6 @@ tasks:
           --output type=local,dest={{.OUTPUT_DIR}} \
           .
         echo "✓ Kernel built: _output/qemubox-kernel-x86_64"
-
-  build:containerd:
-    desc: Build containerd from fork with EROFS snapshot support (temporary)
-    cmds:
-      - |
-        set -eou pipefail
-        echo "🐳 Building containerd from fork..."
-        {{.BUILDX}} build \
-          --file Dockerfile \
-          --target containerd \
-          --platform linux/amd64 \
-          --no-cache \
-          --output type=local,dest={{.OUTPUT_DIR}} \
-          .
-        echo "✓ Containerd built: _output/containerd, _output/containerd-shim-runc-v2"
 
   build:qemu:
     desc: Build QEMU binaries and firmware (qemu-system-x86_64, BIOS files)
@@ -248,7 +232,7 @@ tasks:
       VERSION: '{{.VERSION | default "ci"}}'
       INTEGRATION_IMAGE: '{{.INTEGRATION_IMAGE | default "ghcr.io/aledbf/qemubox/sandbox:latest"}}'
       INTEGRATION_RUNTIME: '{{.INTEGRATION_RUNTIME | default "io.containerd.qemubox.v1"}}'
-      INTEGRATION_SNAPSHOTTER: '{{.INTEGRATION_SNAPSHOTTER | default "erofs"}}'
+      INTEGRATION_SNAPSHOTTER: '{{.INTEGRATION_SNAPSHOTTER | default "nexuserofs"}}'
     cmds:
       - task: release
         vars:
@@ -292,9 +276,12 @@ tasks:
         SUDO="${SUDO:-sudo}"
         ${SUDO} systemctl stop qemubox-containerd || true
         ${SUDO} systemctl stop qemubox-buildkit || true
+        ${SUDO} systemctl stop qemubox-nexuserofs-snapshotter.service || true
         ${SUDO} "${WORKDIR}/${RELEASE_NAME}/install.sh"
         ${SUDO} systemctl enable --now qemubox-containerd
         ${SUDO} systemctl reset-failed qemubox-containerd || true
+        ${SUDO} systemctl enable --now qemubox-nexuserofs-snapshotter.service
+        ${SUDO} systemctl reset-failed qemubox-nexuserofs-snapshotter.service || true
 
         if [ ! -e /dev/vsock ]; then
           echo "👹 Error: /dev/vsock not found"
@@ -422,6 +409,7 @@ tasks:
 
         if [ "${CLEANUP:-0}" = "1" ]; then
           ${SUDO} systemctl stop qemubox-containerd || true
+          ${SUDO} systemctl stop qemubox-nexuserofs-snapshotter.service || true
           ${SUDO} "${WORKDIR}/${RELEASE_NAME}/uninstall.sh" || true
         fi
 

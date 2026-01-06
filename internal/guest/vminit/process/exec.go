@@ -249,16 +249,6 @@ func (e *execProcess) start(ctx context.Context) error {
 }
 
 func (e *execProcess) Status(ctx context.Context) (string, error) {
-	s, err := e.parent.Status(ctx)
-	if err != nil {
-		return "", err
-	}
-	// if the container as a whole is in the pausing/paused state, so are all
-	// other processes inside the container, use container state here
-	switch s {
-	case statePaused, "pausing":
-		return s, nil
-	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.execState.Status(ctx)

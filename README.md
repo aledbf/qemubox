@@ -122,11 +122,11 @@ export PATH=/usr/share/qemubox/bin:$PATH
 
 # Pull an image
 ctr --address /var/run/qemubox/containerd.sock image pull \
-  --snapshotter erofs ghcr.io/aledbf/qemubox/sandbox:v0.0.11
+  --snapshotter nexuserofs ghcr.io/aledbf/qemubox/sandbox:v0.0.11
 
 # Run with qemubox runtime
 ctr --address /var/run/qemubox/containerd.sock run -t --rm \
-  --snapshotter erofs \
+  --snapshotter nexuserofs \
   --runtime io.containerd.qemubox.v1 \
   ghcr.io/aledbf/qemubox/sandbox:v0.0.11 test-qemu-shim
 ```

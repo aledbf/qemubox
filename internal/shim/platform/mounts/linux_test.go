@@ -4,6 +4,7 @@ package mounts
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/containerd/containerd/api/types"
@@ -127,66 +128,72 @@ func TestTranslateMountOptions(t *testing.T) {
 	}
 }
 
-func TestValidateOverlay(t *testing.T) {
+func TestHandleOverlay(t *testing.T) {
 	ctx := context.Background()
 	m := &linuxManager{}
 
 	tests := []struct {
-		name        string
-		mount       *types.Mount
-		expectError bool
-		errorMsg    string
+		name            string
+		mount           *types.Mount
+		expectMounts    int  // Expected number of mounts returned
+		expectTransform bool // Whether overlay was transformed (tmpfs added)
+		expectPassThru  bool // Whether mount is passed through unchanged
 	}{
 		{
-			name: "valid overlay with template variables",
+			name: "valid overlay with template variables in all - no transform",
 			mount: &types.Mount{
 				Type: "overlay",
 				Options: []string{
-					"lowerdir=/lower",
-					"upperdir={{ mount 0 }}/upper",
-					"workdir={{ mount 0 }}/work",
+					"lowerdir={{ overlay 0 4 }}",
+					"upperdir={{ mount 5 }}/upper",
+					"workdir={{ mount 5 }}/work",
 				},
 			},
-			expectError: false,
+			expectMounts:    1, // Just the overlay
+			expectTransform: false,
+			expectPassThru:  true,
 		},
 		{
-			name: "invalid overlay - upperdir without template",
+			name: "overlay with lowerdir template but host upperdir/workdir - transforms",
 			mount: &types.Mount{
-				Type: "overlay",
+				Type: "format/mkdir/overlay",
 				Options: []string{
-					"lowerdir=/lower",
+					"lowerdir={{ overlay 0 4 }}",
 					"upperdir=/tmp/upper",
-					"workdir={{ mount 0 }}/work",
-				},
-			},
-			expectError: true,
-			errorMsg:    "cannot use virtiofs for upper dir",
-		},
-		{
-			name: "invalid overlay - workdir without template",
-			mount: &types.Mount{
-				Type: "overlay",
-				Options: []string{
-					"lowerdir=/lower",
-					"upperdir={{ mount 0 }}/upper",
 					"workdir=/tmp/work",
 				},
 			},
-			expectError: true,
-			errorMsg:    "cannot use virtiofs for upper dir",
+			expectMounts:    2, // tmpfs + transformed overlay
+			expectTransform: true,
+			expectPassThru:  false,
 		},
 		{
-			name: "overlay without upperdir or workdir",
+			name: "overlay without lowerdir template - no transform",
+			mount: &types.Mount{
+				Type: "overlay",
+				Options: []string{
+					"lowerdir=/lower",
+					"upperdir=/tmp/upper",
+					"workdir=/tmp/work",
+				},
+			},
+			expectMounts:    1, // Just the original overlay
+			expectTransform: false,
+			expectPassThru:  true,
+		},
+		{
+			name: "overlay without upperdir or workdir - pass through",
 			mount: &types.Mount{
 				Type: "overlay",
 				Options: []string{
 					"lowerdir=/lower",
 				},
 			},
-			expectError: false, // Just logs a warning
+			expectMounts:   1, // Just the original overlay
+			expectPassThru: true,
 		},
 		{
-			name: "overlay with only upperdir",
+			name: "overlay with only upperdir - pass through",
 			mount: &types.Mount{
 				Type: "overlay",
 				Options: []string{
@@ -194,18 +201,48 @@ func TestValidateOverlay(t *testing.T) {
 					"upperdir=/tmp/upper",
 				},
 			},
-			expectError: false, // No workdir, so no validation
+			expectMounts:   1, // Just the original overlay
+			expectPassThru: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := m.validateOverlay(ctx, tt.mount)
-			if tt.expectError {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorMsg)
-			} else {
-				require.NoError(t, err)
+			mounts, disks, err := m.handleOverlay(ctx, "test-id", tt.mount)
+			require.NoError(t, err)
+			require.Len(t, mounts, tt.expectMounts)
+			require.Empty(t, disks) // handleOverlay doesn't add disks
+
+			if tt.expectTransform {
+				// First mount should be tmpfs
+				assert.Equal(t, "tmpfs", mounts[0].Type)
+				assert.Equal(t, "tmpfs", mounts[0].Source)
+
+				// Second mount should be the transformed overlay
+				assert.Equal(t, "format/mkdir/overlay", mounts[1].Type)
+				// Check that upperdir/workdir now use templates
+				hasUpperTemplate := false
+				hasWorkTemplate := false
+				hasMkdirPaths := false
+				for _, opt := range mounts[1].Options {
+					if strings.HasPrefix(opt, "upperdir=") && strings.Contains(opt, "{{ mount") {
+						hasUpperTemplate = true
+					}
+					if strings.HasPrefix(opt, "workdir=") && strings.Contains(opt, "{{ mount") {
+						hasWorkTemplate = true
+					}
+					if strings.HasPrefix(opt, "X-containerd.mkdir.path=") {
+						hasMkdirPaths = true
+					}
+				}
+				assert.True(t, hasUpperTemplate, "transformed overlay should have upperdir template")
+				assert.True(t, hasWorkTemplate, "transformed overlay should have workdir template")
+				assert.True(t, hasMkdirPaths, "transformed overlay should have mkdir paths")
+			}
+
+			if tt.expectPassThru {
+				// Mount should be unchanged
+				assert.Equal(t, tt.mount.Type, mounts[0].Type)
 			}
 		})
 	}

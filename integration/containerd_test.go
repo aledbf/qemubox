@@ -23,7 +23,7 @@
 // Default configuration expects:
 //   - Socket: /var/run/qemubox/containerd.sock
 //   - Runtime: io.containerd.qemubox.v1
-//   - Snapshotter: erofs
+//   - Snapshotter: nexuserofs
 //   - Namespace: default
 //
 // Override via environment variables (see loadTestConfig).
@@ -155,7 +155,7 @@ const (
 	defaultSocket      = "/var/run/qemubox/containerd.sock"
 	defaultImage       = "ghcr.io/aledbf/qemubox/sandbox:latest"
 	defaultRuntime     = "io.containerd.qemubox.v1"
-	defaultSnapshotter = "erofs"
+	defaultSnapshotter = "nexuserofs"
 	defaultNamespace   = namespaces.Default
 )
 

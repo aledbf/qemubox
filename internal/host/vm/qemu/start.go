@@ -319,6 +319,11 @@ func (q *Instance) rollbackStart(success *bool) {
 		_ = q.cidLease.Release()
 		q.cidLease = nil
 	}
+
+	// Remove state directory on failure
+	if q.stateDir != "" {
+		_ = os.RemoveAll(q.stateDir)
+	}
 }
 
 // Start starts the QEMU VM

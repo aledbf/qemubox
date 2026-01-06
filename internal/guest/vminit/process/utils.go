@@ -21,7 +21,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
-	"github.com/aledbf/qemubox/containerd/internal/iobuf"
 )
 
 const (
@@ -75,31 +74,6 @@ func getLastRuntimeError(r *runc.Runc) (string, error) {
 	}
 
 	return errMsg, nil
-}
-
-// criuError returns only the first line of the error message from criu
-// it tries to add an invalid dump log location when returning the message
-func criuError(err error) string {
-	parts := strings.Split(err.Error(), "\n")
-	return parts[0]
-}
-
-func copyFile(to, from string) error {
-	ff, err := os.Open(from)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = ff.Close() }()
-	tt, err := os.Create(to)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tt.Close() }()
-
-	p := iobuf.Get()
-	defer iobuf.Put(p)
-	_, err = io.CopyBuffer(tt, ff, *p)
-	return err
 }
 
 func checkKillError(err error) error {
@@ -167,8 +141,6 @@ const (
 	StateCreated State = iota
 	// StateRunning indicates the process is currently running
 	StateRunning
-	// StatePaused indicates the process is paused (init processes only)
-	StatePaused
 	// StateStopped indicates the process has exited
 	StateStopped
 	// StateDeleted indicates the process has been deleted
@@ -182,8 +154,6 @@ func (s State) String() string {
 		return "created"
 	case StateRunning:
 		return "running"
-	case StatePaused:
-		return "paused"
 	case StateStopped:
 		return "stopped"
 	case StateDeleted:
@@ -197,7 +167,6 @@ func (s State) String() string {
 const (
 	stateRunning = "running"
 	stateCreated = "created"
-	statePaused  = "paused"
 	stateDeleted = "deleted"
 	stateStopped = "stopped"
 )

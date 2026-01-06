@@ -224,34 +224,14 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 	}, nil
 }
 
-// Pause the container
+// Pause the container - not supported in VM-based runtime
 func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.Empty, error) {
-	container, err := s.getContainer(r.ID)
-	if err != nil {
-		return nil, err
-	}
-	if err := container.Pause(ctx); err != nil {
-		return nil, errgrpc.ToGRPC(err)
-	}
-	s.send(&eventstypes.TaskPaused{
-		ContainerID: container.ID,
-	})
-	return empty, nil
+	return nil, errgrpc.ToGRPCf(errdefs.ErrNotImplemented, "pause is not supported")
 }
 
-// Resume the container
+// Resume the container - not supported in VM-based runtime
 func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes.Empty, error) {
-	container, err := s.getContainer(r.ID)
-	if err != nil {
-		return nil, err
-	}
-	if err := container.Resume(ctx); err != nil {
-		return nil, errgrpc.ToGRPC(err)
-	}
-	s.send(&eventstypes.TaskResumed{
-		ContainerID: container.ID,
-	})
-	return empty, nil
+	return nil, errgrpc.ToGRPCf(errdefs.ErrNotImplemented, "resume is not supported")
 }
 
 // Kill a process with the provided signal
@@ -266,16 +246,9 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 	return empty, nil
 }
 
-// Checkpoint the container
+// Checkpoint the container - not supported in VM-based runtime
 func (s *service) Checkpoint(ctx context.Context, r *taskAPI.CheckpointTaskRequest) (*ptypes.Empty, error) {
-	container, err := s.getContainer(r.ID)
-	if err != nil {
-		return nil, err
-	}
-	if err := container.Checkpoint(ctx, r); err != nil {
-		return nil, errgrpc.ToGRPC(err)
-	}
-	return empty, nil
+	return nil, errgrpc.ToGRPCf(errdefs.ErrNotImplemented, "checkpoint is not supported")
 }
 
 // Update a running container

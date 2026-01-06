@@ -174,7 +174,10 @@ check_containerd_config() {
         echo ""
         echo -e "      ${BLUE}[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.qemubox]${NC}"
         echo -e "      ${BLUE}  runtime_type = \"io.containerd.qemubox.v1\"${NC}"
-        echo -e "      ${BLUE}  snapshotter = \"erofs\"${NC}"
+        echo -e "      ${BLUE}  snapshotter = \"nexuserofs\"${NC}"
+        echo ""
+        echo "      Note: You also need the nexuserofs proxy plugin configured."
+        echo "      See /usr/share/qemubox/config/containerd/config.toml for an example."
         echo ""
         return 1
     fi
@@ -485,6 +488,9 @@ if [ "$SHIM_ONLY" = false ]; then
     mkdir -p /var/lib/qemubox/containerd
     mkdir -p /run/qemubox/containerd
     mkdir -p /run/qemubox/containerd/fifo
+    # Nexuserofs snapshotter directories
+    mkdir -p /var/lib/qemubox/nexuserofs-snapshotter
+    mkdir -p /run/qemubox/nexuserofs-snapshotter
 fi
 echo -e "    ${GREEN}✓${NC} State directories created"
 
@@ -508,9 +514,10 @@ if [ "$SHIM_ONLY" = false ]; then
     echo -e "    ${GREEN}✓${NC} Systemd service files copied"
 
     echo "  → Creating symlinks in /etc/systemd/system..."
+    ln -sf /usr/share/qemubox/systemd/qemubox-nexuserofs-snapshotter.service /etc/systemd/system/qemubox-nexuserofs-snapshotter.service
     ln -sf /usr/share/qemubox/systemd/qemubox-containerd.service /etc/systemd/system/qemubox-containerd.service
     systemctl daemon-reload
-    echo -e "    ${GREEN}✓${NC} Systemd service installed and linked"
+    echo -e "    ${GREEN}✓${NC} Systemd services installed and linked"
 else
     echo -e "  ${YELLOW}→${NC} Skipping systemd services (shim-only mode uses existing containerd)"
 fi
@@ -549,6 +556,7 @@ else
     check_file "/usr/share/qemubox/bin/containerd"
     check_file "/usr/share/qemubox/bin/containerd-shim-runc-v2"
     check_file "/usr/share/qemubox/bin/containerd-shim-qemubox-v1"
+    check_file "/usr/share/qemubox/bin/nexuserofs-snapshotter"
     check_file "/usr/share/qemubox/bin/ctr"
     check_file "/usr/share/qemubox/bin/runc"
     check_file "/usr/share/qemubox/bin/nerdctl"
@@ -562,7 +570,9 @@ else
     check_file "/usr/share/qemubox/config/cni/net.d/10-qemubox.conflist"
     check_file "/usr/share/qemubox/config/qemubox/config.json"
     check_file "/etc/qemubox/config.json"
+    check_file "/usr/share/qemubox/systemd/qemubox-nexuserofs-snapshotter.service"
     check_file "/usr/share/qemubox/systemd/qemubox-containerd.service"
+    check_file "/etc/systemd/system/qemubox-nexuserofs-snapshotter.service"
     check_file "/etc/systemd/system/qemubox-containerd.service"
 
     # Check CNI plugins (full install only)
@@ -594,7 +604,10 @@ if [ $ERRORS -eq 0 ]; then
         echo ""
         echo -e "     ${BLUE}[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.qemubox]${NC}"
         echo -e "     ${BLUE}  runtime_type = \"io.containerd.qemubox.v1\"${NC}"
-        echo -e "     ${BLUE}  snapshotter = \"erofs\"${NC}"
+        echo -e "     ${BLUE}  snapshotter = \"nexuserofs\"${NC}"
+        echo ""
+        echo "     Note: You also need to configure the nexuserofs proxy plugin."
+        echo "     See /usr/share/qemubox/config/containerd/config.toml for an example."
         echo ""
         echo "  3. Ensure the shim is in containerd's PATH or use absolute path:"
         echo "     Shim location: /usr/share/qemubox/bin/containerd-shim-qemubox-v1"
@@ -611,11 +624,12 @@ if [ $ERRORS -eq 0 ]; then
         echo "     vi /etc/qemubox/config.json"
         echo "     (See /usr/share/qemubox/config/qemubox/config.json for defaults)"
         echo ""
-        echo "  2. Enable and start containerd:"
+        echo "  2. Enable and start services (snapshotter starts automatically with containerd):"
         echo "     systemctl enable qemubox-containerd"
         echo "     systemctl start qemubox-containerd"
         echo ""
         echo "  3. Check service status:"
+        echo "     systemctl status qemubox-nexuserofs-snapshotter"
         echo "     systemctl status qemubox-containerd"
         echo ""
         echo "  4. Add /usr/share/qemubox/bin to PATH:"

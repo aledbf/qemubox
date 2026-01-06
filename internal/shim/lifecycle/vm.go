@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -35,6 +36,7 @@ const (
 
 // Manager manages VM instances and their lifecycle.
 type Manager struct {
+	mu       sync.RWMutex
 	instance vm.Instance
 }
 
@@ -46,6 +48,9 @@ func NewManager() *Manager {
 // CreateVM creates a new VM instance.
 // Returns an error if a VM already exists (one VM per manager).
 func (m *Manager) CreateVM(ctx context.Context, containerID, bundlePath string, resourceCfg *vm.VMResourceConfig) (vm.Instance, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.instance != nil {
 		return nil, fmt.Errorf("vm already exists; shim requires one VM per container: %w", errdefs.ErrAlreadyExists)
 	}
@@ -78,6 +83,9 @@ func (m *Manager) CreateVM(ctx context.Context, containerID, bundlePath string, 
 // Instance returns the current VM instance.
 // Returns an error if no VM has been created.
 func (m *Manager) Instance() (vm.Instance, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	if m.instance == nil {
 		return nil, fmt.Errorf("vm not created: %w", errdefs.ErrFailedPrecondition)
 	}
@@ -87,19 +95,27 @@ func (m *Manager) Instance() (vm.Instance, error) {
 // Client returns a cached TTRPC client for the VM.
 // Returns an error if the VM is not running.
 func (m *Manager) Client() (*ttrpc.Client, error) {
-	if m.instance == nil {
+	m.mu.RLock()
+	instance := m.instance
+	m.mu.RUnlock()
+
+	if instance == nil {
 		return nil, fmt.Errorf("vm not created: %w", errdefs.ErrFailedPrecondition)
 	}
-	return m.instance.Client()
+	return instance.Client()
 }
 
 // DialClient creates a new TTRPC client connection to the VM.
 // Returns an error if the VM is not running.
 func (m *Manager) DialClient(ctx context.Context) (*ttrpc.Client, error) {
-	if m.instance == nil {
+	m.mu.RLock()
+	instance := m.instance
+	m.mu.RUnlock()
+
+	if instance == nil {
 		return nil, fmt.Errorf("vm not created: %w", errdefs.ErrFailedPrecondition)
 	}
-	return m.instance.DialClient(ctx)
+	return instance.DialClient(ctx)
 }
 
 // DialClientWithRetry attempts to dial the VM with retries for transient errors.
@@ -128,12 +144,15 @@ func (m *Manager) DialClientWithRetry(ctx context.Context, maxWait time.Duration
 // Shutdown gracefully shuts down the VM instance.
 // This is idempotent and safe to call multiple times.
 func (m *Manager) Shutdown(ctx context.Context) error {
-	if m.instance == nil {
+	m.mu.Lock()
+	instance := m.instance
+	m.instance = nil
+	m.mu.Unlock()
+
+	if instance == nil {
 		return nil
 	}
-	err := m.instance.Shutdown(ctx)
-	m.instance = nil
-	return err
+	return instance.Shutdown(ctx)
 }
 
 // CheckKVM verifies that KVM is available on the system.

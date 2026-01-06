@@ -6,7 +6,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/containerd/containerd/api/types"
@@ -14,10 +15,11 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/erofs"
 	"github.com/aledbf/qemubox/containerd/internal/host/mountutil"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 )
+
+const mountTypeOverlay = "overlay"
 
 type linuxManager struct{}
 
@@ -39,7 +41,7 @@ func truncateID(prefix, id string) string {
 func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, rootfsMounts []*types.Mount, bundleRootfs string, mountDir string) (SetupResult, error) {
 	// Try virtiofs first (not currently implemented for QEMU), fall back to block devices
 
-	if len(rootfsMounts) == 1 && (rootfsMounts[0].Type == "overlay" || rootfsMounts[0].Type == "bind") {
+	if len(rootfsMounts) == 1 && (rootfsMounts[0].Type == mountTypeOverlay || rootfsMounts[0].Type == "bind") {
 		tag := truncateID("rootfs", id)
 		mnt := mount.Mount{
 			Type:    rootfsMounts[0].Type,
@@ -129,6 +131,11 @@ func (m *linuxManager) transformMounts(ctx context.Context, vmi vm.Instance, id 
 		return nil, err
 	}
 
+	// Check if we need to generate an overlay mount.
+	// When nexuserofs provides multiple EROFS layers + ext4 (no overlay mount provided),
+	// we need to generate one to combine them into a usable rootfs.
+	am = m.maybeGenerateOverlay(ctx, am)
+
 	return am, nil
 }
 
@@ -138,11 +145,8 @@ func (m *linuxManager) transformMount(ctx context.Context, id string, disks *byt
 		return m.handleEROFS(ctx, id, disks, mnt)
 	case "ext4":
 		return m.handleExt4(id, disks, mnt)
-	case "overlay", "format/overlay", "format/mkdir/overlay":
-		if err := m.validateOverlay(ctx, mnt); err != nil {
-			return nil, nil, err
-		}
-		return []*types.Mount{mnt}, nil, nil
+	case mountTypeOverlay, "format/overlay", "format/mkdir/overlay":
+		return m.handleOverlay(ctx, id, mnt)
 	default:
 		// Mount types with mkfs/ or format/ prefixes require processing by the
 		// mount manager to create backing files. Return ErrNotImplemented to
@@ -154,48 +158,46 @@ func (m *linuxManager) transformMount(ctx context.Context, id string, disks *byt
 	}
 }
 
-func (m *linuxManager) handleEROFS(ctx context.Context, id string, disks *byte, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
+func (m *linuxManager) handleEROFS(_ context.Context, id string, disks *byte, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
 	disk := truncateID(fmt.Sprintf("disk-%d", *disks), id)
 
-	var options []string
-	devices := []string{mnt.Source}
+	source := mnt.Source
+	isVMDK := false
 
-	// Extract device= options which specify additional EROFS layers
-	for _, o := range mnt.Options {
-		if d, found := strings.CutPrefix(o, "device="); found {
-			devices = append(devices, d)
-			continue
+	// Check if this is an fsmeta.erofs with device= options (from nexuserofs).
+	// If so, look for merged.vmdk which allows using a single QEMU device.
+	if strings.HasSuffix(source, "fsmeta.erofs") {
+		// Check for merged.vmdk in same directory
+		vmdkPath := strings.TrimSuffix(source, "fsmeta.erofs") + "merged.vmdk"
+		if fi, err := os.Stat(vmdkPath); err == nil && fi.Size() > 0 {
+			source = vmdkPath
+			isVMDK = true
 		}
-		options = append(options, o)
+	} else if strings.HasSuffix(source, ".vmdk") {
+		isVMDK = true
 	}
 
 	addDisks := []diskOptions{{
 		name:     disk,
-		source:   mnt.Source,
+		source:   source,
 		readOnly: true,
-		vmdk:     false,
+		vmdk:     isVMDK,
 	}}
 
-	// If multiple layers, generate VMDK descriptor to merge them
-	if len(devices) > 1 {
-		mergedfsPath := filepath.Dir(mnt.Source) + "/merged_fs.vmdk"
-		if _, err := os.Stat(mergedfsPath); err != nil {
-			if !os.IsNotExist(err) {
-				return nil, nil, fmt.Errorf("failed to stat merged EROFS descriptor %s: %w", mergedfsPath, err)
-			}
-			if err := erofs.DumpVMDKDescriptorToFile(mergedfsPath, 0xfffffffe, devices); err != nil {
-				return nil, nil, fmt.Errorf("failed to generate merged EROFS descriptor %s: %w", mergedfsPath, err)
-			}
+	// When using VMDK, the guest doesn't need device= options - it's a single device.
+	// Filter out device= options from guest mount.
+	var guestOptions []string
+	for _, opt := range mnt.Options {
+		if !strings.HasPrefix(opt, "device=") {
+			guestOptions = append(guestOptions, opt)
 		}
-		addDisks[0].source = mergedfsPath
-		addDisks[0].vmdk = true
 	}
 
 	out := &types.Mount{
 		Type:    "erofs",
 		Source:  fmt.Sprintf("/dev/vd%c", *disks),
 		Target:  mnt.Target,
-		Options: filterOptions(options),
+		Options: filterOptions(guestOptions),
 	}
 	*disks++
 	return []*types.Mount{out}, addDisks, nil
@@ -229,35 +231,130 @@ func (m *linuxManager) handleExt4(id string, disks *byte, mnt *types.Mount) ([]*
 	return []*types.Mount{out}, addDisks, nil
 }
 
-func (m *linuxManager) validateOverlay(ctx context.Context, mnt *types.Mount) error {
+// handleOverlay transforms an overlay mount for VM use.
+//
+// For VMs without virtiofs support (e.g., QEMU), the overlay's upperdir/workdir
+// paths (which are host paths) need to be transformed to use VM-accessible storage.
+// This function transforms them to use tmpfs-based paths inside the guest.
+//
+// The lowerdir template (e.g., {{ overlay 0 4 }}) is preserved and will be
+// expanded by the guest's mountutil to reference the EROFS mount points.
+//
+// The transformation works by:
+// 1. Parsing the lowerdir template to find the mount indices (e.g., "0 4" from "{{ overlay 0 4 }}")
+// 2. Adding a tmpfs mount as the next mount after the EROFS layers
+// 3. Using templates to reference the tmpfs mount for upperdir/workdir
+func (m *linuxManager) handleOverlay(ctx context.Context, id string, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
 	var (
-		wdi = -1
-		udi = -1
+		wdi           = -1
+		udi           = -1
+		hasLowerTmpl  = false
+		needTransform = false
+		overlayEnd    = -1
 	)
+
+	// Regex to extract overlay range from lowerdir template
+	overlayRe := regexp.MustCompile(`\{\{\s*overlay\s+(\d+)\s+(\d+)\s*\}\}`)
+
+	// Find option indices and check for templates
 	for i, opt := range mnt.Options {
-		if strings.HasPrefix(opt, "upperdir=") {
+		switch {
+		case strings.HasPrefix(opt, "upperdir="):
 			udi = i
-		} else if strings.HasPrefix(opt, "workdir=") {
+			if !strings.Contains(opt, "{{") {
+				needTransform = true
+			}
+		case strings.HasPrefix(opt, "workdir="):
 			wdi = i
+			if !strings.Contains(opt, "{{") {
+				needTransform = true
+			}
+		case strings.HasPrefix(opt, "lowerdir="):
+			if strings.Contains(opt, "{{") {
+				hasLowerTmpl = true
+				// Extract the end index from overlay template
+				if matches := overlayRe.FindStringSubmatch(opt); len(matches) == 3 {
+					start, _ := strconv.Atoi(matches[1])
+					end, _ := strconv.Atoi(matches[2])
+					if end > start {
+						overlayEnd = end
+					} else {
+						overlayEnd = start
+					}
+				}
+			}
 		}
-		// Note: virtiofs for lowerdir is not handled here.
 	}
-	if wdi > -1 && udi > -1 {
-		//
-		// If any upperdir or workdir isn't transformed, they both
-		// should fall back to virtiofs passthroughfs.  But...
-		//
-		if !strings.Contains(mnt.Options[wdi], "{{") ||
-			!strings.Contains(mnt.Options[udi], "{{") {
-			// Having the upper as virtiofs may return invalid argument, avoid
-			// transforming and attempt to perform the mounts on the host if
-			// supported.
-			return fmt.Errorf("cannot use virtiofs for upper dir in overlay: %w", errdefs.ErrNotImplemented)
+
+	// If lowerdir has a template but upperdir/workdir are host paths,
+	// transform them to use tmpfs inside the guest.
+	// This enables running containers with EROFS layers in VMs without virtiofs.
+	if hasLowerTmpl && needTransform && udi >= 0 && wdi >= 0 && overlayEnd >= 0 {
+		// The tmpfs mount will be at index overlayEnd+1
+		// We use templates to reference it for upperdir/workdir
+		tmpfsIndex := overlayEnd + 1
+
+		log.G(ctx).WithFields(log.Fields{
+			"id":         id,
+			"overlayEnd": overlayEnd,
+			"tmpfsIndex": tmpfsIndex,
+			"needsUpper": needTransform,
+		}).Debug("transforming overlay for VM use with tmpfs upper/work dirs")
+
+		// Create a copy of options with transformed paths using templates
+		// Pre-allocate capacity for original options + 2 mkdir paths
+		newOpts := make([]string, 0, len(mnt.Options)+2)
+		for i, opt := range mnt.Options {
+			switch i {
+			case udi:
+				// Transform upperdir to use tmpfs mount point via template
+				newOpts = append(newOpts, fmt.Sprintf("upperdir={{ mount %d }}/upper", tmpfsIndex))
+			case wdi:
+				// Transform workdir to use tmpfs mount point via template
+				newOpts = append(newOpts, fmt.Sprintf("workdir={{ mount %d }}/work", tmpfsIndex))
+			default:
+				newOpts = append(newOpts, opt)
+			}
 		}
-	} else {
-		log.G(ctx).WithField("options", mnt.Options).Warnf("overlayfs missing workdir or upperdir")
+
+		// Add X-containerd.mkdir.path options to create the directories
+		// These are processed by the mkdir/ prefix handler before mounting
+		// The templates are expanded by format/ prefix first
+		newOpts = append(newOpts,
+			fmt.Sprintf("X-containerd.mkdir.path={{ mount %d }}/upper", tmpfsIndex),
+			fmt.Sprintf("X-containerd.mkdir.path={{ mount %d }}/work", tmpfsIndex),
+		)
+
+		// Create a tmpfs mount that will be mounted at index tmpfsIndex
+		// This provides ephemeral storage for overlay's upper/work directories
+		tmpfsMount := &types.Mount{
+			Type:   "tmpfs",
+			Source: "tmpfs",
+			Options: []string{
+				"mode=0755",
+			},
+		}
+
+		// The overlay mount with transformed options
+		// Use format/mkdir/ prefix to:
+		// 1. format/ - expand templates (lowerdir, upperdir, workdir, mkdir paths)
+		// 2. mkdir/ - create upper/work directories inside tmpfs
+		overlayMount := &types.Mount{
+			Type:    "format/mkdir/overlay",
+			Source:  mnt.Source,
+			Target:  mnt.Target,
+			Options: newOpts,
+		}
+
+		return []*types.Mount{tmpfsMount, overlayMount}, nil, nil
 	}
-	return nil
+
+	// No transformation needed - pass through as-is
+	if wdi < 0 || udi < 0 {
+		log.G(ctx).WithField("options", mnt.Options).Warn("overlayfs missing workdir or upperdir")
+	}
+
+	return []*types.Mount{mnt}, nil, nil
 }
 
 func (m *linuxManager) addDisksToVM(ctx context.Context, vmi vm.Instance, disks []diskOptions) error {
@@ -286,6 +383,87 @@ func filterOptions(options []string) []string {
 		}
 	}
 	return filtered
+}
+
+// maybeGenerateOverlay detects when mounts contain multiple EROFS layers followed by
+// an ext4 layer (from nexuserofs snapshotter) and generates an overlay mount to combine them.
+//
+// Pattern detected:
+//   - 1+ erofs mounts (read-only lower layers)
+//   - 1 ext4 mount at the end (writable upper layer)
+//   - No existing overlay mount
+//
+// Generated overlay uses:
+//   - lowerdir: all EROFS mount points (via {{ overlay 0 N }} template)
+//   - upperdir/workdir: directories inside the ext4 mount (for persistence)
+func (m *linuxManager) maybeGenerateOverlay(ctx context.Context, mounts []*types.Mount) []*types.Mount {
+	if len(mounts) < 2 {
+		return mounts
+	}
+
+	// Check if an overlay mount already exists
+	for _, mnt := range mounts {
+		if mnt.Type == mountTypeOverlay || strings.Contains(mnt.Type, mountTypeOverlay) {
+			return mounts
+		}
+	}
+
+	// Count EROFS mounts and find ext4 mount
+	var erofsCount int
+	var ext4Index int = -1
+	for i, mnt := range mounts {
+		switch mnt.Type {
+		case "erofs":
+			erofsCount++
+		case "ext4":
+			ext4Index = i
+		}
+	}
+
+	// Pattern: 1+ EROFS layers + ext4 as the last mount
+	if erofsCount == 0 || ext4Index != len(mounts)-1 {
+		return mounts
+	}
+
+	log.G(ctx).WithFields(log.Fields{
+		"erofs_count": erofsCount,
+		"ext4_index":  ext4Index,
+	}).Debug("generating overlay mount for nexuserofs layers")
+
+	// The EROFS layers are mounted at indices 0 to erofsCount-1
+	// The ext4 layer is mounted at index ext4Index (= erofsCount)
+	// Upper/work directories go inside the ext4 mount for persistence
+	erofsEndIndex := erofsCount - 1
+
+	// Build overlay options using templates:
+	// - lowerdir references EROFS mount points in order (newest first, as provided by nexuserofs)
+	// - upperdir/workdir reference directories inside the ext4 mount (persistent)
+	// Note: {{ overlay 0 N }} expands ascending: mounts/0:mounts/1:...:mounts/N
+	// nexuserofs provides layers newest-first, which matches overlay's expected lowerdir order
+	overlayOpts := []string{
+		fmt.Sprintf("lowerdir={{ overlay 0 %d }}", erofsEndIndex), // ascending: newest first
+		fmt.Sprintf("upperdir={{ mount %d }}/upper", ext4Index),
+		fmt.Sprintf("workdir={{ mount %d }}/work", ext4Index),
+		// mkdir directives to create upper/work dirs inside ext4
+		fmt.Sprintf("X-containerd.mkdir.path={{ mount %d }}/upper", ext4Index),
+		fmt.Sprintf("X-containerd.mkdir.path={{ mount %d }}/work", ext4Index),
+	}
+
+	// Create new mount list:
+	// 1. All EROFS mounts (indices 0 to erofsCount-1)
+	// 2. ext4 mount (index erofsCount) - used for upperdir/workdir
+	// 3. overlay mount (becomes the rootfs)
+	newMounts := make([]*types.Mount, 0, len(mounts)+1)
+	newMounts = append(newMounts, mounts...) // All original mounts
+
+	// Add overlay mount with format/mkdir prefixes for template expansion
+	newMounts = append(newMounts, &types.Mount{
+		Type:    "format/mkdir/overlay",
+		Source:  mountTypeOverlay,
+		Options: overlayOpts,
+	})
+
+	return newMounts
 }
 
 // translateMountOptions will translate mount options when virtiofs is implemented.

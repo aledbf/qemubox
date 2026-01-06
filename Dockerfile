@@ -146,29 +146,6 @@ RUN --mount=type=bind,target=.,rw \
     --mount=type=cache,target=/root/.cache/go-build,id=vminit-build-$TARGETPLATFORM \
     go build ${GO_DEBUG_GCFLAGS} ${GO_GCFLAGS} ${GO_BUILD_FLAGS} -o /build/vminitd -ldflags '-extldflags \"-static\" -s -w' -tags 'osusergo netgo static_build'  ./cmd/vminitd
 
-# ============================================================================
-# Containerd Build Stage (temporary - from fork with EROFS snapshot support)
-# ============================================================================
-
-FROM base AS containerd-build
-
-# Install git and make (not guaranteed in all golang image variants)
-RUN --mount=type=cache,sharing=locked,id=containerd-aptlib,target=/var/lib/apt \
-    --mount=type=cache,sharing=locked,id=containerd-aptcache,target=/var/cache/apt \
-    apt-get update && apt-get install --no-install-recommends -y git make
-
-WORKDIR /go/src/github.com/containerd/containerd
-
-ARG CONTAINERD_BRANCH="aledbf/erofs-snapshot-narrow"
-ARG CONTAINERD_REPO="https://github.com/aledbf/containerd.git"
-
-RUN git clone --depth 1 --branch ${CONTAINERD_BRANCH} ${CONTAINERD_REPO} .
-
-RUN --mount=type=cache,target=/root/.cache/go-build,id=containerd-build \
-    make bin/containerd bin/containerd-shim-runc-v2 && \
-    mkdir -p /build && \
-    cp bin/containerd bin/containerd-shim-runc-v2 /build/
-
 FROM base AS crun-build
 ARG TARGETARCH
 WORKDIR /usr/src/crun
@@ -233,7 +210,3 @@ COPY --from=initrd-build /build/qemubox-initrd /qemubox-initrd
 
 FROM scratch AS shim
 COPY --from=shim-build /build/containerd-shim-qemubox-v1 /containerd-shim-qemubox-v1
-
-FROM scratch AS containerd
-COPY --from=containerd-build /build/containerd /containerd
-COPY --from=containerd-build /build/containerd-shim-runc-v2 /containerd-shim-runc-v2
