@@ -29,22 +29,22 @@ uid = 0
 address = ""
 grpc_histogram = false
 
-# External nexuserofs snapshotter (EROFS-based)
+# External nexus-erofs snapshotter (EROFS-based)
 #
 # Provides two services via a single external process:
-#   - nexuserofs: Snapshot service that stores image layers as EROFS filesystems
-#   - nexuserofs-diff: Diff service that efficiently applies/compares layers
+#   - nexus-erofs: Snapshot service that stores image layers as EROFS filesystems
+#   - nexus-erofs-diff: Diff service that efficiently applies/compares layers
 #
 # The snapshotter mounts EROFS layers directly and returns standard overlay mounts
 # with real paths - no mount-manager plugin required.
 [proxy_plugins]
-  [proxy_plugins.nexuserofs]
+  [proxy_plugins.nexus-erofs]
     type = "snapshot"
-    address = "/run/qemubox/nexuserofs-snapshotter/snapshotter.sock"
+    address = "/run/qemubox/nexus-erofs-snapshotter/snapshotter.sock"
 
-  [proxy_plugins.nexuserofs-diff]
+  [proxy_plugins.nexus-erofs-diff]
     type = "diff"
-    address = "/run/qemubox/nexuserofs-snapshotter/snapshotter.sock"
+    address = "/run/qemubox/nexus-erofs-snapshotter/snapshotter.sock"
 
 [plugins]
 "io.containerd.internal.v1.tracing" = { }
@@ -57,7 +57,7 @@ grpc_histogram = false
   image_pull_progress_timeout = "5m0s"
   image_pull_with_sync_fs = false
   max_concurrent_downloads = 10
-  snapshotter = "nexuserofs"
+  snapshotter = "nexus-erofs"
   stats_collect_period = 10
   use_local_image_pull = false
 
@@ -127,7 +127,7 @@ sandboxer = "podsandbox"
   platforms = [ "linux/amd64" ]
 
   [plugins."io.containerd.service.v1.diff-service"]
-  default = [ "nexuserofs-diff", "walking" ]
+  default = [ "nexus-erofs-diff", "walking" ]
   sync_fs = false
 
   [plugins."io.containerd.transfer.v1.local"]
@@ -140,8 +140,8 @@ sandboxer = "podsandbox"
 
     [[plugins."io.containerd.transfer.v1.local".unpack_config]]
     platform = "linux/amd64"
-    snapshotter = "nexuserofs"
-    differ = "nexuserofs-diff"
+    snapshotter = "nexus-erofs"
+    differ = "nexus-erofs-diff"
 
 [timeouts]
 "io.containerd.timeout.bolt.open" = "0s"

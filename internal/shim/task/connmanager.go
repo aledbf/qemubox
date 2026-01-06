@@ -56,12 +56,20 @@ func NewConnectionManager(
 func (m *ConnectionManager) GetClient(ctx context.Context) (*ttrpc.Client, error) {
 	// Fast path: check for existing client with read lock
 	m.mu.RLock()
-	if m.client != nil && !m.closed {
+	hasCachedClient := m.client != nil
+	isClosed := m.closed
+	if hasCachedClient && !isClosed {
 		client := m.client
 		m.mu.RUnlock()
+		log.G(ctx).Debug("connmanager: returning cached client")
 		return client, nil
 	}
 	m.mu.RUnlock()
+
+	log.G(ctx).WithFields(log.Fields{
+		"has_cached_client": hasCachedClient,
+		"is_closed":         isClosed,
+	}).Debug("connmanager: no cached client, will dial")
 
 	return m.getOrCreateClient(ctx)
 }
@@ -74,20 +82,24 @@ func (m *ConnectionManager) getOrCreateClient(ctx context.Context) (*ttrpc.Clien
 
 	// Double-check after acquiring write lock (another goroutine may have created it)
 	if m.closed {
+		log.G(ctx).Debug("connmanager: manager is closed, returning canceled")
 		return nil, context.Canceled
 	}
 	if m.client != nil {
+		log.G(ctx).Debug("connmanager: another goroutine created client, returning it")
 		return m.client, nil
 	}
 
-	log.G(ctx).Debug("connmanager: dialing new task client")
+	dialStart := time.Now()
+	log.G(ctx).WithField("timeout", taskClientRetryTimeout).Debug("connmanager: dialing new task client")
 	client, err := m.dialRetryFn(ctx, taskClientRetryTimeout)
+	dialDuration := time.Since(dialStart)
 	if err != nil {
-		log.G(ctx).WithError(err).Error("connmanager: failed to dial task client")
+		log.G(ctx).WithError(err).WithField("dial_duration", dialDuration).Error("connmanager: failed to dial task client")
 		return nil, err
 	}
 
-	log.G(ctx).Debug("connmanager: task client connected")
+	log.G(ctx).WithField("dial_duration", dialDuration).Debug("connmanager: task client connected")
 	m.client = client
 	return client, nil
 }

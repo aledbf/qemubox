@@ -141,23 +141,23 @@ cp "${TC_REDIRECT_TAP_DIR}/tc-redirect-tap" \
 chmod +x "${RELEASE_DIR}/usr/share/qemubox/libexec/cni/tc-redirect-tap"
 echo "  ok: tc-redirect-tap CNI plugin"
 
-echo "Downloading nexuserofs-snapshotter and erofs tools..."
-NEXUSEROFS_VERSION="${NEXUSEROFS_VERSION:-v20250106.01}"
-NEXUSEROFS_BASE_URL="https://github.com/aledbf/nexuserofs/releases/download/${NEXUSEROFS_VERSION}"
+echo "Downloading nexus-erofs-snapshotter and erofs tools..."
+NEXUS_EROFS_VERSION="${NEXUS_EROFS_VERSION:-v20250106.03}"
+NEXUS_EROFS_BASE_URL="https://github.com/aledbf/nexus-erofs/releases/download/${NEXUS_EROFS_VERSION}"
 
-nexuserofs_binaries=(
-  "nexuserofs-snapshotter-linux-amd64:nexuserofs-snapshotter"
+NEXUS_EROFS_BINARIES=(
+  "nexus-erofs-snapshotter-linux-amd64:nexus-erofs-snapshotter"
   "dump.erofs-linux-amd64:dump.erofs"
   "fsck.erofs-linux-amd64:fsck.erofs"
   "mkfs.erofs-linux-amd64:mkfs.erofs"
 )
 
-for entry in "${nexuserofs_binaries[@]}"; do
+for entry in "${NEXUS_EROFS_BINARIES[@]}"; do
   IFS=":" read -r src dest <<< "${entry}"
   bin_path="${OUTPUT_DIR}/${src}"
 
   if [ ! -f "${bin_path}" ]; then
-    curl -L -o "${bin_path}" "${NEXUSEROFS_BASE_URL}/${src}"
+    curl -L -o "${bin_path}" "${NEXUS_EROFS_BASE_URL}/${src}"
   fi
 
   cp "${bin_path}" "${RELEASE_DIR}/usr/share/qemubox/bin/${dest}"

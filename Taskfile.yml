@@ -232,7 +232,7 @@ tasks:
       VERSION: '{{.VERSION | default "ci"}}'
       INTEGRATION_IMAGE: '{{.INTEGRATION_IMAGE | default "ghcr.io/aledbf/qemubox/sandbox:latest"}}'
       INTEGRATION_RUNTIME: '{{.INTEGRATION_RUNTIME | default "io.containerd.qemubox.v1"}}'
-      INTEGRATION_SNAPSHOTTER: '{{.INTEGRATION_SNAPSHOTTER | default "nexuserofs"}}'
+      INTEGRATION_SNAPSHOTTER: '{{.INTEGRATION_SNAPSHOTTER | default "nexus-erofs"}}'
     cmds:
       - task: release
         vars:
@@ -276,12 +276,12 @@ tasks:
         SUDO="${SUDO:-sudo}"
         ${SUDO} systemctl stop qemubox-containerd || true
         ${SUDO} systemctl stop qemubox-buildkit || true
-        ${SUDO} systemctl stop qemubox-nexuserofs-snapshotter.service || true
+        ${SUDO} systemctl stop qemubox-nexus-erofs-snapshotter.service || true
         ${SUDO} "${WORKDIR}/${RELEASE_NAME}/install.sh"
         ${SUDO} systemctl enable --now qemubox-containerd
         ${SUDO} systemctl reset-failed qemubox-containerd || true
-        ${SUDO} systemctl enable --now qemubox-nexuserofs-snapshotter.service
-        ${SUDO} systemctl reset-failed qemubox-nexuserofs-snapshotter.service || true
+        ${SUDO} systemctl enable --now qemubox-nexus-erofs-snapshotter.service
+        ${SUDO} systemctl reset-failed qemubox-nexus-erofs-snapshotter.service || true
 
         if [ ! -e /dev/vsock ]; then
           echo "👹 Error: /dev/vsock not found"
@@ -409,7 +409,7 @@ tasks:
 
         if [ "${CLEANUP:-0}" = "1" ]; then
           ${SUDO} systemctl stop qemubox-containerd || true
-          ${SUDO} systemctl stop qemubox-nexuserofs-snapshotter.service || true
+          ${SUDO} systemctl stop qemubox-nexus-erofs-snapshotter.service || true
           ${SUDO} "${WORKDIR}/${RELEASE_NAME}/uninstall.sh" || true
         fi
 

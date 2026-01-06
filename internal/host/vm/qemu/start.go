@@ -171,8 +171,13 @@ func (q *Instance) startQemuProcess(ctx context.Context, qemuArgs []string) erro
 	}
 
 	// Start QEMU
+	// CRITICAL: Use context.WithoutCancel to prevent the RPC request context from
+	// killing QEMU when it's canceled. The QEMU process must outlive the Create()
+	// RPC call - it runs until explicit Shutdown(). Without this, when Create()
+	// returns and the TTRPC layer cancels the context, Go's exec.CommandContext
+	// would SIGKILL the QEMU process.
 	//nolint:gosec // QEMU path and args are controlled by VM configuration.
-	q.cmd = exec.CommandContext(ctx, q.binaryPath, qemuArgs...)
+	q.cmd = exec.CommandContext(context.WithoutCancel(ctx), q.binaryPath, qemuArgs...)
 	q.cmd.Stdout = qemuLogFile
 	q.cmd.Stderr = qemuLogFile
 	q.cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -214,9 +219,8 @@ func (q *Instance) monitorProcess(ctx context.Context) {
 	go func() {
 		exitErr := q.cmd.Wait()
 
-		logger := log.G(ctx)
 		if exitErr != nil {
-			logger.WithError(exitErr).Debug("qemu: process exited")
+			log.G(ctx).WithError(exitErr).Debug("qemu: process exited")
 		}
 
 		// Signal Shutdown() that process exited

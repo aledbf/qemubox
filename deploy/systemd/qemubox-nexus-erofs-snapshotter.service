@@ -1,6 +1,6 @@
 [Unit]
-Description=nexuserofs external snapshotter for containerd
-Documentation=https://github.com/aledbf/nexuserofs
+Description=nexus-erofs external snapshotter for containerd
+Documentation=https://github.com/aledbf/nexus-erofs
 After=network.target
 Before=qemubox-containerd.service
 
@@ -12,11 +12,11 @@ ExecSearchPath=/usr/sbin
 ExecSearchPath=/usr/bin
 ExecSearchPath=/sbin
 ExecSearchPath=/bin
-ExecStartPre=-/bin/mkdir -p /run/qemubox/nexuserofs-snapshotter
-ExecStartPre=-/bin/mkdir -p /var/lib/qemubox/nexuserofs-snapshotter
-ExecStart=/usr/share/qemubox/bin/nexuserofs-snapshotter \
-  --root /var/lib/qemubox/nexuserofs-snapshotter \
-  --address /run/qemubox/nexuserofs-snapshotter/snapshotter.sock \
+ExecStartPre=-/bin/mkdir -p /run/qemubox/nexus-erofs-snapshotter
+ExecStartPre=-/bin/mkdir -p /var/lib/qemubox/nexus-erofs-snapshotter
+ExecStart=/usr/share/qemubox/bin/nexus-erofs-snapshotter \
+  --root /var/lib/qemubox/nexus-erofs-snapshotter \
+  --address /run/qemubox/nexus-erofs-snapshotter/snapshotter.sock \
   --containerd-address /var/run/qemubox/containerd.sock \
   --containerd-namespace default \
   --log-level debug \
@@ -28,7 +28,7 @@ Restart=always
 RestartSec=5
 
 # Wait for the socket to be ready before declaring service as started
-ExecStartPost=/bin/sh -c 'for i in $(seq 1 30); do [ -S /run/qemubox/nexuserofs-snapshotter/snapshotter.sock ] && exit 0; sleep 0.1; done; exit 1'
+ExecStartPost=/bin/sh -c 'for i in $(seq 1 30); do [ -S /run/qemubox/nexus-erofs-snapshotter/snapshotter.sock ] && exit 0; sleep 0.1; done; exit 1'
 
 [Install]
 WantedBy=multi-user.target

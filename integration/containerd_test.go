@@ -23,7 +23,7 @@
 // Default configuration expects:
 //   - Socket: /var/run/qemubox/containerd.sock
 //   - Runtime: io.containerd.qemubox.v1
-//   - Snapshotter: nexuserofs
+//   - Snapshotter: nexus-erofs
 //   - Namespace: default
 //
 // Override via environment variables (see loadTestConfig).
@@ -155,7 +155,7 @@ const (
 	defaultSocket      = "/var/run/qemubox/containerd.sock"
 	defaultImage       = "ghcr.io/aledbf/qemubox/sandbox:latest"
 	defaultRuntime     = "io.containerd.qemubox.v1"
-	defaultSnapshotter = "nexuserofs"
+	defaultSnapshotter = "nexus-erofs"
 	defaultNamespace   = namespaces.Default
 )
 
@@ -192,16 +192,20 @@ func setupContainerdClient(t *testing.T, cfg testConfig) *containerd.Client {
 	return client
 }
 
-// ensureImagePulled ensures the specified image is available locally.
+// ensureImagePulled ensures the specified image is available locally and unpacked for the snapshotter.
 func ensureImagePulled(t *testing.T, client *containerd.Client, cfg testConfig) {
 	t.Helper()
 
 	ctx := namespaces.WithNamespace(context.Background(), cfg.Namespace)
 
 	// Check if image already exists
-	_, err := client.GetImage(ctx, cfg.Image)
+	image, err := client.GetImage(ctx, cfg.Image)
 	if err == nil {
 		t.Logf("image already exists: %s", cfg.Image)
+		// Ensure image is unpacked for our snapshotter (it may exist but not be unpacked)
+		if err := image.Unpack(ctx, cfg.Snapshotter); err != nil {
+			t.Fatalf("unpack existing image for snapshotter %s: %v", cfg.Snapshotter, err)
+		}
 		return
 	}
 

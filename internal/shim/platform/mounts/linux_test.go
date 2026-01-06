@@ -333,6 +333,33 @@ func TestTransformMount(t *testing.T) {
 	ctx := context.Background()
 	m := &linuxManager{}
 
+	t.Run("handles format/erofs like erofs", func(t *testing.T) {
+		disks := byte('a')
+		mnt := &types.Mount{
+			Type:   "format/erofs",
+			Source: "/path/to/fsmeta.erofs",
+			Options: []string{
+				"ro",
+				"loop",
+				"device=/path/to/layer1.erofs",
+				"device=/path/to/layer2.erofs",
+			},
+		}
+
+		mounts, diskOpts, err := m.transformMount(ctx, "id", &disks, mnt)
+
+		require.NoError(t, err)
+		require.Len(t, mounts, 1)
+		require.Len(t, diskOpts, 1)
+		// Output should be erofs (not format/erofs) for the guest
+		assert.Equal(t, "erofs", mounts[0].Type)
+		assert.Equal(t, "/dev/vda", mounts[0].Source)
+		// device= options should be filtered out (not needed when using VMDK)
+		for _, opt := range mounts[0].Options {
+			assert.False(t, strings.HasPrefix(opt, "device="), "device= options should be filtered")
+		}
+	})
+
 	t.Run("passes through unknown types", func(t *testing.T) {
 		disks := byte('a')
 		mnt := &types.Mount{

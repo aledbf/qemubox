@@ -502,10 +502,13 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	// can become stale between Create completing and Start being called.
 	// We also do NOT close it because that can cause the VM to exit unexpectedly.
 	// Subsequent operations (Start, State, etc.) will dial fresh via the connection manager.
+	log.G(ctx).Debug("create: dialing RPC client for bundle/task creation (NOT caching)")
 	rpcClient, err := s.vmLifecycle.DialClient(ctx)
 	if err != nil {
+		log.G(ctx).WithError(err).Error("create: failed to dial RPC client")
 		return nil, errgrpc.ToGRPC(err)
 	}
+	log.G(ctx).Debug("create: RPC client dialed (will NOT be cached, Start will dial fresh)")
 	// rpcClient will be garbage collected - we don't close it to avoid killing the VM
 
 	// Create bundle in VM
@@ -740,23 +743,52 @@ func sleepWithJitter(base time.Duration, jitterFraction float64) {
 
 // Start a process.
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("start: request received")
+	startTime := time.Now()
+	log.G(ctx).WithFields(log.Fields{
+		"id":                   r.ID,
+		"exec":                 r.ExecID,
+		"has_cached_client":    s.connManager.HasClient(),
+		"intentional_shutdown": s.intentionalShutdown.Load(),
+	}).Info("start: request received")
 
+	clientStart := time.Now()
 	vmc, cleanup, err := s.getTaskClient(ctx)
+	clientDuration := time.Since(clientStart)
 	if err != nil {
-		log.G(ctx).WithError(err).Error("start: failed to get client")
+		log.G(ctx).WithError(err).WithFields(log.Fields{
+			"client_duration": clientDuration,
+			"total_duration":  time.Since(startTime),
+		}).Error("start: failed to get client")
 		return nil, err
 	}
 	defer cleanup()
 
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Info("start: calling guest")
+	log.G(ctx).WithFields(log.Fields{
+		"id":              r.ID,
+		"exec":            r.ExecID,
+		"client_duration": clientDuration,
+	}).Info("start: got client, calling guest")
+
+	rpcStart := time.Now()
 	tc := taskAPI.NewTTRPCTaskClient(vmc)
 	resp, err := tc.Start(ctx, r)
+	rpcDuration := time.Since(rpcStart)
 	if err != nil {
-		log.G(ctx).WithError(err).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID}).Error("start: guest start failed")
+		log.G(ctx).WithError(err).WithFields(log.Fields{
+			"id":             r.ID,
+			"exec":           r.ExecID,
+			"rpc_duration":   rpcDuration,
+			"total_duration": time.Since(startTime),
+		}).Error("start: guest start failed")
 		return nil, errgrpc.ToGRPC(err)
 	}
-	log.G(ctx).WithFields(log.Fields{"id": r.ID, "exec": r.ExecID, "pid": resp.Pid}).Info("task start completed")
+	log.G(ctx).WithFields(log.Fields{
+		"id":             r.ID,
+		"exec":           r.ExecID,
+		"pid":            resp.Pid,
+		"rpc_duration":   rpcDuration,
+		"total_duration": time.Since(startTime),
+	}).Info("task start completed")
 	if r.ExecID == "" {
 		log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("start: init marked started")
 		s.initStarted.Store(true)

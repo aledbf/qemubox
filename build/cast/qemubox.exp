@@ -40,7 +40,7 @@ after 100
 
 comment "=== HOST: Starting QemuBox VM ==="
 comment "Pull qemubox sandbox (Ubuntu 25.10 + Docker)"
-type_cmd "ctr --address /var/run/qemubox/containerd.sock image pull --snapshotter nexuserofs ghcr.io/aledbf/qemubox/sandbox:latest"
+type_cmd "ctr --address /var/run/qemubox/containerd.sock image pull --snapshotter nexus-erofs ghcr.io/aledbf/qemubox/sandbox:latest"
 
 expect {
     -re {not found|failed|error|Error|denied} {
@@ -59,7 +59,7 @@ expect {
 after [expr {$LONG_DELAY * 500}]
 
 comment "Launch VM (watch the boot speed!)"
-type_cmd "ctr --address /var/run/qemubox/containerd.sock run -t --rm --snapshotter nexuserofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:latest demo-vm"
+type_cmd "ctr --address /var/run/qemubox/containerd.sock run -t --rm --snapshotter nexus-erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:latest demo-vm"
 
 # ============================================
 # INSIDE VM

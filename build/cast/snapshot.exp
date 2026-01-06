@@ -46,7 +46,7 @@ comment "Demonstrating persistent disk state between VM runs"
 after 1500
 
 comment "Step 1: Pull the sandbox image"
-type_cmd "$CTR image pull --snapshotter nexuserofs ghcr.io/aledbf/qemubox/sandbox:latest"
+type_cmd "$CTR image pull --snapshotter nexus-erofs ghcr.io/aledbf/qemubox/sandbox:latest"
 
 expect {
     -re {not found|failed|error|Error|denied} {
@@ -65,7 +65,7 @@ expect {
 after [expr {$LONG_DELAY * 500}]
 
 comment "Step 2: Run VM in background"
-type_cmd "$CTR run -d -t --snapshotter nexuserofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:latest snapshot-demo"
+type_cmd "$CTR run -d -t --snapshotter nexus-erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:latest snapshot-demo"
 expect -re {\$|#}
 after 1000
 
@@ -186,7 +186,7 @@ expect -re {\$|#}
 after 1000
 
 comment "Create new image using nerdctl commit"
-type_cmd "$NERDCTL commit --snapshotter nexuserofs snapshot-demo docker.io/aledbf/sandbox:with-changes"
+type_cmd "$NERDCTL commit --snapshotter nexus-erofs snapshot-demo docker.io/aledbf/sandbox:with-changes"
 expect -re {\$|#}
 after 3000
 
@@ -220,7 +220,7 @@ after 1000
 comment "=== Run VM from our custom image ==="
 
 comment "Run new container from the image with our changes"
-type_cmd "$CTR run -d -t --snapshotter nexuserofs --runtime io.containerd.qemubox.v1 docker.io/aledbf/sandbox:with-changes snapshot-new"
+type_cmd "$CTR run -d -t --snapshotter nexus-erofs --runtime io.containerd.qemubox.v1 docker.io/aledbf/sandbox:with-changes snapshot-new"
 expect -re {\$|#}
 after 2000
 

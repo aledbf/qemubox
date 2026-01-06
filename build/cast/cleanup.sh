@@ -16,7 +16,7 @@ cleanup_container() {
     $CTR task kill "$name" 2>/dev/null || true
     $CTR task delete "$name" 2>/dev/null || true
     $CTR container rm "$name" 2>/dev/null || true
-    $CTR snapshots --snapshotter nexuserofs delete "$name" 2>/dev/null || true
+    $CTR snapshots --snapshotter nexus-erofs delete "$name" 2>/dev/null || true
 }
 
 # Get list of IPs allocated to running containers

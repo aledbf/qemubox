@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 	"github.com/mdlayher/vsock"
 
@@ -70,14 +69,11 @@ func (q *Instance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
 		conn = result.conn
 	}
 
-	log.G(ctx).Debug("qemu: vsock dialed for TTRPC")
-
 	if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
 	if err := pingTTRPC(conn); err != nil {
-		log.G(ctx).WithError(err).Debug("qemu: TTRPC ping failed")
 		_ = conn.Close()
 		return nil, err
 	}
@@ -86,7 +82,6 @@ func (q *Instance) DialClient(ctx context.Context) (*ttrpc.Client, error) {
 		return nil, err
 	}
 
-	log.G(ctx).Debug("qemu: TTRPC ping ok, client ready")
 	return ttrpc.NewClient(conn), nil
 }
 

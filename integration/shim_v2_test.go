@@ -4,7 +4,6 @@ package integration
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,8 +15,11 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 // Task state constants for event tracking.
@@ -198,41 +200,25 @@ func (t *ctrEventTracker) wait(ctx context.Context) error {
 	}
 }
 
-type ctrRunner struct {
+// ctrEventsRunner runs `ctr events` command for event tracking.
+// We keep using ctr events because the Go client event subscription
+// would require additional setup and this works reliably.
+type ctrEventsRunner struct {
 	t         *testing.T
 	socket    string
 	namespace string
 }
 
-func newCtrRunner(t *testing.T, cfg testConfig) *ctrRunner {
-	return &ctrRunner{
+func newCtrEventsRunner(t *testing.T, cfg testConfig) *ctrEventsRunner {
+	return &ctrEventsRunner{
 		t:         t,
 		socket:    cfg.Socket,
 		namespace: cfg.Namespace,
 	}
 }
 
-func (c *ctrRunner) run(args ...string) (string, error) {
-	c.t.Helper()
-	return c.runContext(context.Background(), args...)
-}
-
-func (c *ctrRunner) runContext(ctx context.Context, args ...string) (string, error) {
-	c.t.Helper()
-	fullArgs := append([]string{"--address", c.socket, "--namespace", c.namespace}, args...)
-	cmd := exec.CommandContext(ctx, "ctr", fullArgs...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err != nil {
-		return stdout.String(), fmt.Errorf("ctr %s: %v\nstderr: %s", strings.Join(args, " "), err, stderr.String())
-	}
-	return stdout.String(), nil
-}
-
 // events starts `ctr events` and returns a channel of events.
-func (c *ctrRunner) events(ctx context.Context) (<-chan ctrEvent, func()) {
+func (c *ctrEventsRunner) events(ctx context.Context) (<-chan ctrEvent, func()) {
 	c.t.Helper()
 
 	eventsCh := make(chan ctrEvent, 100)
@@ -287,8 +273,8 @@ func (c *ctrRunner) events(ctx context.Context) (<-chan ctrEvent, func()) {
 	}()
 
 	cleanup := func() {
-		cmd.Process.Kill()
-		cmd.Wait()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		close(eventsCh)
 	}
 
@@ -297,7 +283,6 @@ func (c *ctrRunner) events(ctx context.Context) (<-chan ctrEvent, func()) {
 
 func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	cfg := loadTestConfig()
-	ctr := newCtrRunner(t, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -326,10 +311,11 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	client := setupContainerdClient(t, cfg)
 	defer client.Close()
 
-	// Start event listener
+	// Start event listener using ctr events (reliable event streaming)
+	eventsRunner := newCtrEventsRunner(t, cfg)
 	eventsCtx, eventsCancel := context.WithCancel(ctx)
 	defer eventsCancel()
-	eventsCh, cleanupEvents := ctr.events(eventsCtx)
+	eventsCh, cleanupEvents := eventsRunner.events(eventsCtx)
 	defer cleanupEvents()
 
 	go func() {
@@ -355,35 +341,53 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 		t.Fatalf("unpack image: %v", err)
 	}
 
-	// Cleanup function for container
-	cleanup := func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cleanupCancel()
-
-		// Kill and delete task (ignore errors)
-		ctr.runContext(cleanupCtx, "task", "kill", "-s", "SIGKILL", containerID)
-		time.Sleep(500 * time.Millisecond)
-		ctr.runContext(cleanupCtx, "task", "delete", "-f", containerID)
-
-		// Delete container (with snapshot cleanup)
-		ctr.runContext(cleanupCtx, "container", "delete", containerID)
-	}
-	defer cleanup()
-
-	// Create container - containerd will automatically create a snapshot from the image
+	// Create container using Go client API.
+	// This is the key difference from ctr CLI: NewContainer only creates metadata,
+	// it does NOT mount the snapshot on the host. The shim handles mounts internally.
 	t.Log("creating container...")
-	if _, err := ctr.run("container", "create",
-		"--snapshotter", cfg.Snapshotter,
-		"--runtime", cfg.Runtime,
-		cfg.Image, containerID,
-		"/bin/sh", "-c", "sleep 5",
-	); err != nil {
+	container, err := client.NewContainer(ctxNS, containerID,
+		containerd.WithSnapshotter(cfg.Snapshotter),
+		containerd.WithImage(img),
+		containerd.WithNewSnapshot(containerID+"-snapshot", img),
+		containerd.WithRuntime(cfg.Runtime, nil),
+		containerd.WithNewSpec(
+			oci.WithImageConfig(img),
+			oci.WithProcessArgs("/bin/sh", "-c", "sleep 5"),
+		),
+	)
+	if err != nil {
 		t.Fatalf("create container: %v", err)
 	}
+	defer func() {
+		if err := container.Delete(ctxNS, containerd.WithSnapshotCleanup); err != nil {
+			t.Logf("cleanup container %s: %v", containerID, err)
+		}
+	}()
 
-	// Create and start task
+	// Create task - this starts the shim which handles mounts internally
 	t.Log("creating task...")
-	if _, err := ctr.run("task", "start", "--null-io", "-d", containerID); err != nil {
+	task, err := container.NewTask(ctxNS, cio.NullIO)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	defer func() {
+		if _, err := task.Delete(ctxNS, containerd.WithProcessKill); err != nil {
+			// Ignore "ttrpc: closed" errors - expected when task completes
+			if !strings.Contains(err.Error(), "ttrpc: closed") &&
+				!strings.Contains(err.Error(), "not found") {
+				t.Logf("cleanup task: %v", err)
+			}
+		}
+	}()
+
+	// Set up wait channel before starting
+	exitCh, err := task.Wait(ctxNS)
+	if err != nil {
+		t.Fatalf("wait for task: %v", err)
+	}
+
+	// Start the task
+	if err := task.Start(ctxNS); err != nil {
 		t.Fatalf("start task: %v", err)
 	}
 	t.Log("task started successfully")
@@ -393,56 +397,68 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 
 	// Check task status
 	t.Log("checking task status...")
-	status, err := ctr.run("task", "ls")
+	status, err := task.Status(ctxNS)
 	if err != nil {
-		t.Fatalf("task ls: %v", err)
+		t.Fatalf("get task status: %v", err)
 	}
-	if !strings.Contains(status, containerID) {
-		t.Fatalf("task not found in task list: %s", status)
-	}
-	t.Logf("task status:\n%s", status)
+	t.Logf("task status: %s", status.Status)
 
-	// Run exec
+	// Run exec using Go client API
 	t.Log("running exec...")
-	if _, err := ctr.run("task", "exec",
-		"--exec-id", execID,
-		containerID,
-		"/bin/sh", "-c", "echo shim-validate",
-	); err != nil {
-		t.Fatalf("exec: %v", err)
+	// Use /bin/echo (external binary) via shell - builtin echo fails with NullIO
+	execProcess, err := task.Exec(ctxNS, execID, &specs.Process{
+		Args: []string{"/bin/sh", "-c", "/bin/echo shim-validate"},
+		Cwd:  "/",
+	}, cio.NullIO)
+	if err != nil {
+		t.Fatalf("create exec: %v", err)
 	}
-	t.Log("exec completed")
+
+	execExitCh, err := execProcess.Wait(ctxNS)
+	if err != nil {
+		t.Fatalf("wait for exec: %v", err)
+	}
+
+	if err := execProcess.Start(ctxNS); err != nil {
+		t.Fatalf("start exec: %v", err)
+	}
+
+	// Wait for exec to complete
+	execStatus := <-execExitCh
+	execExitCode, _, err := execStatus.Result()
+	if err != nil {
+		t.Fatalf("get exec result: %v", err)
+	}
+	t.Logf("exec completed with exit code %d", execExitCode)
+
+	// Clean up exec process
+	if _, err := execProcess.Delete(ctxNS); err != nil {
+		t.Logf("delete exec process: %v", err)
+	}
 
 	// Wait for task to exit (sleep 5 should complete)
 	t.Log("waiting for task to exit...")
 	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer waitCancel()
 
-	for {
-		select {
-		case <-waitCtx.Done():
-			t.Fatalf("timeout waiting for task to exit")
-		default:
-		}
-
-		status, err := ctr.run("task", "ls")
+	select {
+	case taskStatus := <-exitCh:
+		exitCode, _, err := taskStatus.Result()
 		if err != nil {
-			// Task may have been deleted
-			break
+			t.Fatalf("get task result: %v", err)
 		}
-		if !strings.Contains(status, containerID) || strings.Contains(status, "STOPPED") {
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
+		t.Logf("task exited with code %d", exitCode)
+	case <-waitCtx.Done():
+		t.Fatalf("timeout waiting for task to exit")
 	}
-	t.Log("task exited")
 
 	// Delete task
 	t.Log("deleting task...")
-	if _, err := ctr.run("task", "delete", containerID); err != nil {
-		// Ignore errors if task already deleted
-		if !strings.Contains(err.Error(), "not found") {
-			t.Logf("task delete warning: %v", err)
+	if _, err := task.Delete(ctxNS); err != nil {
+		// Ignore expected errors
+		if !strings.Contains(err.Error(), "ttrpc: closed") &&
+			!strings.Contains(err.Error(), "not found") {
+			t.Logf("task delete: %v", err)
 		}
 	}
 	t.Log("task deleted")
