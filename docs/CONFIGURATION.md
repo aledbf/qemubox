@@ -16,6 +16,7 @@ qemubox uses a single JSON configuration file to manage all runtime settings. Th
 {
   "paths": { ... },
   "runtime": { ... },
+  "timeouts": { ... },
   "cpu_hotplug": { ... },
   "memory_hotplug": { ... }
 }
@@ -105,6 +106,65 @@ Controls qemubox runtime behavior.
 - **Validation**: Must be exactly `"qemu"`
 
 **Note**: Log level is controlled by containerd's configuration, not the shim. Configure logging in containerd's config file (`/etc/containerd/config.toml`).
+
+## Timeouts Configuration
+
+Controls timeout durations for various lifecycle operations.
+
+```json
+{
+  "timeouts": {
+    "vm_start": "10s",
+    "device_detection": "5s",
+    "shutdown_grace": "2s",
+    "event_reconnect": "2s",
+    "task_client_retry": "1s",
+    "io_wait": "30s",
+    "qmp_command": "5s"
+  }
+}
+```
+
+### `timeouts.vm_start`
+- **Type**: duration string
+- **Default**: `"10s"`
+- **Description**: Maximum time to wait for VM to boot and become ready
+- **Examples**: `"5s"`, `"15s"`, `"30s"`
+
+### `timeouts.device_detection`
+- **Type**: duration string
+- **Default**: `"5s"`
+- **Description**: Maximum time for guest to detect hotplugged devices (disks, NICs)
+- **Note**: Increase if using slow storage backends
+
+### `timeouts.shutdown_grace`
+- **Type**: duration string
+- **Default**: `"2s"`
+- **Description**: Grace period after sending shutdown signal before forceful termination (SIGKILL)
+- **Note**: Allows processes to clean up before forced shutdown
+
+### `timeouts.event_reconnect`
+- **Type**: duration string
+- **Default**: `"2s"`
+- **Description**: Timeout for reconnecting to the guest event stream after disconnection
+
+### `timeouts.task_client_retry`
+- **Type**: duration string
+- **Default**: `"1s"`
+- **Description**: Timeout for retrying vsock dial operations to guest
+- **Note**: Controls connection retry behavior during VM startup
+
+### `timeouts.io_wait`
+- **Type**: duration string
+- **Default**: `"30s"`
+- **Description**: Maximum time to wait for I/O forwarders to complete during shutdown
+- **Note**: Ensures stdout/stderr data is flushed before container exits
+
+### `timeouts.qmp_command`
+- **Type**: duration string
+- **Default**: `"5s"`
+- **Description**: Timeout for QMP (QEMU Machine Protocol) commands
+- **Note**: Affects hotplug operations and VM queries
 
 ## CPU Hotplug Configuration
 
@@ -286,7 +346,8 @@ Controls dynamic memory allocation for VMs.
 ### Validation
 Configuration is validated on load:
 - All paths must exist/be writable
-- All durations must parse correctly
+- All durations must parse correctly (e.g., "5s", "2m", "500ms")
+- All timeout durations must be positive
 - All thresholds must be in range (0-100)
 - VMM must be "qemu"
 - Memory increment must be 128MB-aligned
@@ -310,11 +371,12 @@ If configuration is missing or invalid, qemubox will:
   "runtime": {
     "vmm": "qemu"
   },
+  "timeouts": {},
   "cpu_hotplug": {},
   "memory_hotplug": {}
 }
 ```
-Empty hotplug sections use defaults.
+Empty sections use defaults.
 
 ### Debug Configuration
 
@@ -337,6 +399,10 @@ Example qemubox config for aggressive hotplug testing:
   "runtime": {
     "vmm": "qemu"
   },
+  "timeouts": {
+    "vm_start": "30s",
+    "io_wait": "60s"
+  },
   "cpu_hotplug": {
     "monitor_interval": "1s",
     "enable_scale_down": true
@@ -347,7 +413,7 @@ Example qemubox config for aggressive hotplug testing:
   }
 }
 ```
-Fast monitoring for debugging.
+Longer timeouts for debugging, fast hotplug monitoring.
 
 ### Conservative Configuration
 ```json
@@ -360,6 +426,7 @@ Fast monitoring for debugging.
   "runtime": {
     "vmm": "qemu"
   },
+  "timeouts": {},
   "cpu_hotplug": {
     "scale_up_threshold": 90.0,
     "scale_down_threshold": 30.0,
@@ -386,6 +453,9 @@ High thresholds, large safety margin, no scale-down.
   "runtime": {
     "vmm": "qemu"
   },
+  "timeouts": {
+    "qmp_command": "2s"
+  },
   "cpu_hotplug": {
     "monitor_interval": "2s",
     "scale_up_threshold": 70.0,
@@ -405,7 +475,7 @@ High thresholds, large safety margin, no scale-down.
   }
 }
 ```
-Low thresholds, fast response, scale-down enabled.
+Low thresholds, fast response, scale-down enabled, shorter QMP timeout.
 
 ## Troubleshooting
 
