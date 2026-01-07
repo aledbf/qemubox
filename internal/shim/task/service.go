@@ -442,7 +442,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	}
 
 	// Setup mounts
-	setupResult, err := s.platformMounts.Setup(ctx, vmi, r.ID, r.Rootfs, b.Rootfs, r.Bundle+"/mounts")
+	setupResult, err := s.platformMounts.Setup(ctx, vmi, r.ID, r.Rootfs)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}

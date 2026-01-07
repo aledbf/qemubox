@@ -11,11 +11,9 @@ import (
 	"strings"
 
 	"github.com/containerd/containerd/api/types"
-	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/mountutil"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 )
 
@@ -38,60 +36,9 @@ func truncateID(prefix, id string) string {
 	return tag
 }
 
-func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, rootfsMounts []*types.Mount, bundleRootfs string, mountDir string) (SetupResult, error) {
-	// Try virtiofs first (not currently implemented for QEMU), fall back to block devices
-
-	if len(rootfsMounts) == 1 && (rootfsMounts[0].Type == mountTypeOverlay || rootfsMounts[0].Type == "bind") {
-		tag := truncateID("rootfs", id)
-		mnt := mount.Mount{
-			Type:    rootfsMounts[0].Type,
-			Source:  rootfsMounts[0].Source,
-			Options: rootfsMounts[0].Options,
-		}
-		if err := mnt.Mount(bundleRootfs); err != nil {
-			return SetupResult{}, err
-		}
-		if err := vmi.AddFS(ctx, tag, bundleRootfs); err != nil {
-			return SetupResult{}, err
-		}
-		return SetupResult{Mounts: []*types.Mount{{
-			Type:    "virtiofs",
-			Source:  tag,
-			Options: translateMountOptions(ctx, rootfsMounts[0].Options),
-		}}}, nil
-	} else if len(rootfsMounts) == 0 {
-		tag := truncateID("rootfs", id)
-		if err := vmi.AddFS(ctx, tag, bundleRootfs); err != nil {
-			return SetupResult{}, err
-		}
-		return SetupResult{Mounts: []*types.Mount{{
-			Type:   "virtiofs",
-			Source: tag,
-		}}}, nil
-	}
+func (m *linuxManager) Setup(ctx context.Context, vmi vm.Instance, id string, rootfsMounts []*types.Mount) (SetupResult, error) {
+	// Transform mounts to use virtio-blk devices inside the VM
 	mounts, err := m.transformMounts(ctx, vmi, id, rootfsMounts)
-	if err != nil && errdefs.IsNotImplemented(err) {
-		cleanup, err := mountutil.All(ctx, bundleRootfs, mountDir, rootfsMounts)
-		if err != nil {
-			return SetupResult{}, err
-		}
-
-		// Fallback to original rootfs mount
-		tag := truncateID("rootfs", id)
-		if err := vmi.AddFS(ctx, tag, bundleRootfs); err != nil {
-			if cleanup != nil {
-				_ = cleanup(context.WithoutCancel(ctx))
-			}
-			return SetupResult{}, err
-		}
-		return SetupResult{
-			Mounts: []*types.Mount{{
-				Type:   "virtiofs",
-				Source: tag,
-			}},
-			Cleanup: cleanup,
-		}, nil
-	}
 	if err != nil {
 		return SetupResult{}, err
 	}
@@ -236,9 +183,9 @@ func (m *linuxManager) handleExt4(id string, disks *byte, mnt *types.Mount) ([]*
 
 // handleOverlay transforms an overlay mount for VM use.
 //
-// For VMs without virtiofs support (e.g., QEMU), the overlay's upperdir/workdir
-// paths (which are host paths) need to be transformed to use VM-accessible storage.
-// This function transforms them to use tmpfs-based paths inside the guest.
+// The overlay's upperdir/workdir paths (which are host paths) need to be transformed
+// to use VM-accessible storage. This function transforms them to use tmpfs-based
+// paths inside the guest.
 //
 // The lowerdir template (e.g., {{ overlay 0 4 }}) is preserved and will be
 // expanded by the guest's mountutil to reference the EROFS mount points.
@@ -291,7 +238,6 @@ func (m *linuxManager) handleOverlay(ctx context.Context, id string, mnt *types.
 
 	// If lowerdir has a template but upperdir/workdir are host paths,
 	// transform them to use tmpfs inside the guest.
-	// This enables running containers with EROFS layers in VMs without virtiofs.
 	if hasLowerTmpl && needTransform && udi >= 0 && wdi >= 0 && overlayEnd >= 0 {
 		// The tmpfs mount will be at index overlayEnd+1
 		// We use templates to reference it for upperdir/workdir
@@ -469,12 +415,3 @@ func (m *linuxManager) maybeGenerateOverlay(ctx context.Context, mounts []*types
 	return newMounts
 }
 
-// translateMountOptions will translate mount options when virtiofs is implemented.
-// TODO(virtiofs): Implement option translation when adding virtiofs support.
-// Current implementation uses virtio-blk, not virtiofs, so this function is not
-// exercised. When virtiofs is added, this should translate mount options appropriately.
-func translateMountOptions(ctx context.Context, options []string) []string {
-	// Pass through options unchanged for now
-	// AddFS() currently returns ErrNotImplemented, so this code path is not reached
-	return options
-}

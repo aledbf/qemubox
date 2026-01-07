@@ -197,6 +197,3 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 
 	return inst, nil
 }
-
-// AddFS adds a filesystem to the VM.
-// Note: QEMU microvm can use virtio-fs, but we use block devices for simplicity.

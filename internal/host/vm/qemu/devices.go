@@ -17,15 +17,6 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 )
 
-func (q *Instance) AddFS(ctx context.Context, tag, mountPath string, opts ...vm.MountOpt) error {
-	log.G(ctx).WithFields(log.Fields{
-		"tag":  tag,
-		"path": mountPath,
-	}).Warn("qemu: AddFS not supported, use disk-based approach instead")
-
-	return fmt.Errorf("AddFS not implemented for QEMU: use EROFS or block devices")
-}
-
 // generateStableDiskID generates a stable device ID based on file metadata.
 // This ensures consistent device naming across VM reboots and reduces issues
 // with device enumeration order. Uses inode and device number as stable identifiers.

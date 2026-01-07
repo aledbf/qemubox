@@ -132,15 +132,6 @@ func TestInstance_AddDisk(t *testing.T) {
 	})
 }
 
-func TestInstance_AddFS(t *testing.T) {
-	ctx := context.Background()
-	q := &Instance{}
-
-	err := q.AddFS(ctx, "tag", "/path")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "AddFS not implemented")
-}
-
 func TestInstance_AddNIC(t *testing.T) {
 	ctx := context.Background()
 	q := &Instance{}

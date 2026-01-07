@@ -95,38 +95,6 @@ func TestFilterOptions(t *testing.T) {
 	}
 }
 
-func TestTranslateMountOptions(t *testing.T) {
-	ctx := context.Background()
-
-	tests := []struct {
-		name     string
-		options  []string
-		expected []string
-	}{
-		{
-			name:     "passes through options unchanged",
-			options:  []string{"ro", "noatime"},
-			expected: []string{"ro", "noatime"},
-		},
-		{
-			name:     "empty options",
-			options:  []string{},
-			expected: []string{},
-		},
-		{
-			name:     "nil options",
-			options:  nil,
-			expected: nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := translateMountOptions(ctx, tt.options)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
 
 func TestHandleOverlay(t *testing.T) {
 	ctx := context.Background()

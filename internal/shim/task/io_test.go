@@ -34,10 +34,6 @@ func (m *mockVMInstance) AddTAPNIC(ctx context.Context, tapName string, mac net.
 	return nil
 }
 
-func (m *mockVMInstance) AddFS(ctx context.Context, tag, mountPath string, opts ...vm.MountOpt) error {
-	return nil
-}
-
 func (m *mockVMInstance) AddNIC(ctx context.Context, endpoint string, mac net.HardwareAddr, mode vm.NetworkMode, features, flags uint32) error {
 	return nil
 }

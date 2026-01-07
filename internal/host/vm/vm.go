@@ -125,8 +125,6 @@ type DeviceConfigurator interface {
 	AddDisk(ctx context.Context, blockID, mountPath string, opts ...MountOpt) error
 	// AddTAPNIC adds a TAP-based network interface to the VM.
 	AddTAPNIC(ctx context.Context, tapName string, mac net.HardwareAddr) error
-	// AddFS adds a virtio-fs filesystem to the VM.
-	AddFS(ctx context.Context, tag, mountPath string, opts ...MountOpt) error
 	// AddNIC adds a network interface with the specified configuration.
 	AddNIC(ctx context.Context, endpoint string, mac net.HardwareAddr, mode NetworkMode, features, flags uint32) error
 }
