@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,39 +54,25 @@ func DumpInfo(ctx context.Context) {
 
 // DumpFile writes a file's contents to stderr for debugging.
 func DumpFile(ctx context.Context, name string) {
-	e := log.G(ctx)
-	if e.Logger.IsLevelEnabled(log.DebugLevel) {
-		f, err := os.Open(name)
-		if err == nil {
-			defer func() { _ = f.Close() }()
-			log.G(ctx).WithField("f", name).Debug("dumping file to stderr")
-			if strings.HasSuffix(name, ".json") {
-				var b bytes.Buffer
-				v := map[string]any{}
-				if _, err := io.Copy(&b, f); err != nil {
-					log.G(ctx).WithError(err).WithField("f", name).Warn("failed to read json file")
-					return
-				}
-				if err := json.Unmarshal(b.Bytes(), &v); err != nil {
-					if _, werr := os.Stderr.Write(b.Bytes()); werr != nil {
-						log.G(ctx).WithError(werr).Warn("failed to write raw json to stderr")
-					}
-					fmt.Fprintln(os.Stderr)
-					return
-				}
-				enc := json.NewEncoder(os.Stderr)
-				enc.SetIndent("", "  ")
-				if err := enc.Encode(v); err != nil {
-					log.G(ctx).WithError(err).WithField("f", name).Warn("failed to encode json to stderr")
-				}
-			} else {
-				if _, err := io.Copy(os.Stderr, f); err != nil {
-					log.G(ctx).WithError(err).WithField("f", name).Warn("failed to dump file")
-				}
-				fmt.Fprintln(os.Stderr)
-			}
-		} else {
-			log.G(ctx).WithError(err).WithField("f", name).Warn("failed to open file to dump")
+	if !log.G(ctx).Logger.IsLevelEnabled(log.DebugLevel) {
+		return
+	}
+
+	data, err := os.ReadFile(name)
+	if err != nil {
+		log.G(ctx).WithError(err).WithField("f", name).Warn("failed to read file")
+		return
+	}
+
+	log.G(ctx).WithField("f", name).Debug("dumping file to stderr")
+
+	// Pretty-print JSON files
+	if strings.HasSuffix(name, ".json") {
+		var formatted bytes.Buffer
+		if json.Indent(&formatted, data, "", "  ") == nil {
+			data = formatted.Bytes()
 		}
 	}
+
+	fmt.Fprintln(os.Stderr, string(data))
 }

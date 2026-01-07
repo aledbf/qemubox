@@ -56,62 +56,46 @@ func (m *mockCloser) Close() error {
 	return m.err
 }
 
-func TestInstance_CloseClientConnections_NilFields(t *testing.T) {
+func TestInstance_NilFieldsSafety(t *testing.T) {
 	logger := log.L.WithField("test", true)
 
-	// Test that nil fields don't cause panics
-	q := &Instance{}
-	// Should not panic when all connection fields are nil
-	q.closeClientConnections(logger)
+	t.Run("closeClientConnections with nil fields", func(t *testing.T) {
+		q := &Instance{}
+		q.closeClientConnections(logger) // Should not panic
+	})
+
+	t.Run("cancelBackgroundMonitors with nil cancel", func(t *testing.T) {
+		q := &Instance{}
+		q.cancelBackgroundMonitors(logger) // Should not panic
+	})
+
+	t.Run("cleanupAfterFailedKill with nil qmpClient", func(t *testing.T) {
+		q := &Instance{}
+		q.cleanupAfterFailedKill() // Should not panic
+	})
+
+	t.Run("stopQemuProcess with nil cmd", func(t *testing.T) {
+		q := &Instance{cmd: nil}
+		err := q.stopQemuProcess(t.Context(), logger)
+		require.NoError(t, err)
+	})
 }
 
 func TestInstance_CancelBackgroundMonitors(t *testing.T) {
-	logger := log.L.WithField("test", true)
-
-	t.Run("nil cancel - no panic", func(t *testing.T) {
-		q := &Instance{}
-		// Should not panic
-		q.cancelBackgroundMonitors(logger)
-	})
-
-	t.Run("calls cancel function", func(t *testing.T) {
+	t.Run("calls cancel function when set", func(t *testing.T) {
 		cancelled := false
 		q := &Instance{
 			runCancel: func() { cancelled = true },
 		}
-		q.cancelBackgroundMonitors(logger)
+		q.cancelBackgroundMonitors(log.L.WithField("test", true))
 		assert.True(t, cancelled)
 	})
 }
 
-func TestInstance_CleanupAfterFailedKill_NilFields(t *testing.T) {
-	// Test that nil qmpClient doesn't cause panics
-	q := &Instance{}
-	// Should not panic when qmpClient is nil
-	q.cleanupAfterFailedKill()
-}
-
 func TestInstance_Shutdown_NotRunning(t *testing.T) {
-	// When VM is not in running state, Shutdown should be idempotent
 	q := &Instance{}
 	q.setState(vmStateShutdown)
-
-	// Verify state was set
 	assert.Equal(t, vmStateShutdown, q.getState())
-
-	// Shutdown should return nil without error (idempotent)
-	// Can't fully test without starting a real VM
-}
-
-func TestInstance_StopQemuProcess_NilCmd(t *testing.T) {
-	logger := log.L.WithField("test", true)
-	q := &Instance{
-		cmd: nil,
-	}
-
-	ctx := t.Context()
-	err := q.stopQemuProcess(ctx, logger)
-	require.NoError(t, err)
 }
 
 // Verify io.Closer interface satisfaction
@@ -124,8 +108,7 @@ func BenchmarkCloseAndLog(b *testing.B) {
 	logger := log.L.WithField("bench", true)
 	closer := &mockCloser{}
 
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		closer.closed = false
 		closeAndLog(logger, "test", closer)
 	}

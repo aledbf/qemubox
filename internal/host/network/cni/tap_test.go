@@ -10,12 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestExtractTAPDevice_Success(t *testing.T) {
+func TestExtractTAPDevice(t *testing.T) {
 	tests := []struct {
-		name        string
-		result      *current.Result
-		expectedTAP string
-		expectError bool
+		name          string
+		result        *current.Result
+		expectedTAP   string
+		expectError   bool
+		errorContains string
 	}{
 		{
 			name: "tap device with tap prefix",
@@ -26,20 +27,18 @@ func TestExtractTAPDevice_Success(t *testing.T) {
 				},
 			},
 			expectedTAP: "tap123",
-			expectError: false,
 		},
 		{
-			name: "tap device with tap prefix and hex suffix",
+			name: "tap device with hex suffix",
 			result: &current.Result{
 				Interfaces: []*current.Interface{
 					{Name: "tapABC123", Mac: "11:22:33:44:55:66", Sandbox: "/var/run/netns/test"},
 				},
 			},
 			expectedTAP: "tapABC123",
-			expectError: false,
 		},
 		{
-			name: "multiple interfaces, tap is second",
+			name: "multiple interfaces returns first tap",
 			result: &current.Result{
 				Interfaces: []*current.Interface{
 					{Name: "qemubox0", Sandbox: ""},
@@ -48,16 +47,6 @@ func TestExtractTAPDevice_Success(t *testing.T) {
 				},
 			},
 			expectedTAP: "tap999",
-			expectError: false,
-		},
-		{
-			name: "no tap device - only veth in sandbox",
-			result: &current.Result{
-				Interfaces: []*current.Interface{
-					{Name: "veth123", Sandbox: "/var/run/netns/test"},
-				},
-			},
-			expectError: true,
 		},
 		{
 			name: "tap device in sandbox",
@@ -67,62 +56,52 @@ func TestExtractTAPDevice_Success(t *testing.T) {
 				},
 			},
 			expectedTAP: "tap456",
-			expectError: false,
+		},
+		{
+			name: "multiple tap devices returns first",
+			result: &current.Result{
+				Interfaces: []*current.Interface{
+					{Name: "qemubox0", Sandbox: ""},
+					{Name: "tap111", Sandbox: "/var/run/netns/test"},
+					{Name: "tap222", Sandbox: "/var/run/netns/test"},
+					{Name: "tap333", Sandbox: "/var/run/netns/test"},
+				},
+			},
+			expectedTAP: "tap111",
+		},
+		{
+			name: "case sensitive - returns lowercase tap",
+			result: &current.Result{
+				Interfaces: []*current.Interface{
+					{Name: "TAP123", Sandbox: "/var/run/netns/test"},
+					{Name: "Tap456", Sandbox: "/var/run/netns/test"},
+					{Name: "tap789", Sandbox: "/var/run/netns/test"},
+				},
+			},
+			expectedTAP: "tap789",
+		},
+		{
+			name:          "nil result",
+			result:        nil,
+			expectError:   true,
+			errorContains: "nil",
 		},
 		{
 			name: "no interfaces",
 			result: &current.Result{
 				Interfaces: []*current.Interface{},
 			},
-			expectError: true,
+			expectError:   true,
+			errorContains: "no TAP device found",
 		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tapDevice, err := ExtractTAPDevice(tt.result)
-
-			if tt.expectError {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, tt.expectedTAP, tapDevice)
-			}
-		})
-	}
-}
-
-func TestExtractTAPDevice_NilResult(t *testing.T) {
-	_, err := ExtractTAPDevice(nil)
-	require.Error(t, err)
-}
-
-func TestExtractTAPDevice_PrefersTCRedirectTapPattern(t *testing.T) {
-	// When multiple patterns match, first matching TAP device should be returned
-	result := &current.Result{
-		Interfaces: []*current.Interface{
-			{Name: "tap123", Sandbox: "/var/run/netns/test"},
-			{Name: "tap456", Sandbox: "/var/run/netns/test"},
-		},
-	}
-
-	tapDevice, err := ExtractTAPDevice(result)
-	require.NoError(t, err)
-	// Should return first matching TAP device
-	assert.Equal(t, "tap123", tapDevice)
-}
-
-func TestExtractTAPDevice_ErrorMessages(t *testing.T) {
-	tests := []struct {
-		name          string
-		result        *current.Result
-		errorContains string
-	}{
 		{
-			name: "no interfaces at all",
+			name: "only veth in sandbox",
 			result: &current.Result{
-				Interfaces: []*current.Interface{},
+				Interfaces: []*current.Interface{
+					{Name: "veth123", Sandbox: "/var/run/netns/test"},
+				},
 			},
+			expectError:   true,
 			errorContains: "no TAP device found",
 		},
 		{
@@ -133,6 +112,7 @@ func TestExtractTAPDevice_ErrorMessages(t *testing.T) {
 					{Name: "veth1", Sandbox: "/var/run/netns/test"},
 				},
 			},
+			expectError:   true,
 			errorContains: "no TAP device found",
 		},
 		{
@@ -142,46 +122,24 @@ func TestExtractTAPDevice_ErrorMessages(t *testing.T) {
 					{Name: "qemubox0", Sandbox: ""},
 				},
 			},
+			expectError:   true,
 			errorContains: "no TAP device found",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ExtractTAPDevice(tt.result)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.errorContains)
+			tapDevice, err := ExtractTAPDevice(tt.result)
+
+			if tt.expectError {
+				require.Error(t, err)
+				if tt.errorContains != "" {
+					assert.Contains(t, err.Error(), tt.errorContains)
+				}
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.expectedTAP, tapDevice)
+			}
 		})
 	}
-}
-
-func TestExtractTAPDevice_MultipleMatches(t *testing.T) {
-	// When multiple TAP devices exist, return the first one
-	result := &current.Result{
-		Interfaces: []*current.Interface{
-			{Name: "qemubox0", Sandbox: ""},
-			{Name: "tap111", Sandbox: "/var/run/netns/test"},
-			{Name: "tap222", Sandbox: "/var/run/netns/test"},
-			{Name: "tap333", Sandbox: "/var/run/netns/test"},
-		},
-	}
-
-	tapDevice, err := ExtractTAPDevice(result)
-	require.NoError(t, err)
-	assert.Equal(t, "tap111", tapDevice)
-}
-
-func TestExtractTAPDevice_CaseSensitive(t *testing.T) {
-	// TAP prefix is case-sensitive (must be lowercase "tap")
-	result := &current.Result{
-		Interfaces: []*current.Interface{
-			{Name: "TAP123", Sandbox: "/var/run/netns/test"}, // Wrong case
-			{Name: "Tap456", Sandbox: "/var/run/netns/test"}, // Wrong case
-			{Name: "tap789", Sandbox: "/var/run/netns/test"}, // Correct
-		},
-	}
-
-	tapDevice, err := ExtractTAPDevice(result)
-	require.NoError(t, err)
-	assert.Equal(t, "tap789", tapDevice)
 }

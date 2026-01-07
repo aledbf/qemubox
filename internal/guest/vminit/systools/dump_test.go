@@ -9,125 +9,81 @@ import (
 	"github.com/containerd/log"
 )
 
-func TestDumpFile_PlainText(t *testing.T) {
-	ctx := context.Background()
-
-	// Create a test file
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "test.txt")
-	testContent := "Hello, World!\nLine 2\n"
-
-	if err := os.WriteFile(testFile, []byte(testContent), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
+func TestDumpFile(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, tmpDir string) string
+	}{
+		{
+			name: "plain text file",
+			setup: func(t *testing.T, tmpDir string) string {
+				path := filepath.Join(tmpDir, "test.txt")
+				if err := os.WriteFile(path, []byte("Hello, World!\nLine 2\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "JSON file",
+			setup: func(t *testing.T, tmpDir string) string {
+				path := filepath.Join(tmpDir, "test.json")
+				if err := os.WriteFile(path, []byte(`{"key": "value", "number": 123}`), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "invalid JSON file",
+			setup: func(t *testing.T, tmpDir string) string {
+				path := filepath.Join(tmpDir, "bad.json")
+				if err := os.WriteFile(path, []byte(`{invalid json`), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "non-existent file",
+			setup: func(t *testing.T, _ string) string {
+				return "/nonexistent/file.txt"
+			},
+		},
+		{
+			name: "debug level disabled",
+			setup: func(t *testing.T, tmpDir string) string {
+				path := filepath.Join(tmpDir, "debug.txt")
+				if err := os.WriteFile(path, []byte("content"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
 	}
 
-	// DumpFile should not error on valid file
-	// It writes to stderr, so we can't easily capture output in tests
-	// But we can verify it doesn't panic
-	DumpFile(ctx, testFile)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			path := tt.setup(t, tmpDir)
 
-	// If we get here without panic, the test passes
-}
-
-func TestDumpFile_JSONFile(t *testing.T) {
-	ctx := context.Background()
-
-	// Create a test JSON file
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "test.json")
-	testContent := `{"key": "value", "number": 123}`
-
-	if err := os.WriteFile(testFile, []byte(testContent), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
+			// DumpFile should not panic for any input
+			DumpFile(context.Background(), path)
+		})
 	}
-
-	// DumpFile should handle JSON files specially
-	DumpFile(ctx, testFile)
-
-	// If we get here without panic, the test passes
-}
-
-func TestDumpFile_InvalidJSON(t *testing.T) {
-	ctx := context.Background()
-
-	// Create a test file with invalid JSON
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "bad.json")
-	testContent := `{invalid json`
-
-	if err := os.WriteFile(testFile, []byte(testContent), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-
-	// DumpFile should handle invalid JSON gracefully
-	DumpFile(ctx, testFile)
-
-	// If we get here without panic, the test passes
-}
-
-func TestDumpFile_NonexistentFile(t *testing.T) {
-	ctx := context.Background()
-
-	// Try to dump a file that doesn't exist
-	testFile := "/nonexistent/file.txt"
-
-	// DumpFile should log a warning but not panic
-	DumpFile(ctx, testFile)
-
-	// If we get here without panic, the test passes
-}
-
-func TestDumpFile_DebugLevelDisabled(t *testing.T) {
-	// When debug level is disabled, DumpFile should be a no-op
-	ctx := context.Background()
-
-	// Create a test file
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "test.txt")
-	if err := os.WriteFile(testFile, []byte("content"), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-
-	// Set log level to Info (not Debug)
-	// Note: In real usage, this depends on logger configuration
-	// This test just verifies the function doesn't panic
-	DumpFile(ctx, testFile)
 }
 
 func TestDumpInfo(t *testing.T) {
-	// DumpInfo walks the filesystem and calls various system commands
-	// It's primarily a debugging/logging function
-	// Skip by default as it walks "/" which is very slow (~14s)
+	// DumpInfo walks the filesystem and calls various system commands.
+	// Skip by default as it walks "/" which is very slow (~14s).
+	// Covers: /proc/cmdline access, /sbin/crun --version, filesystem traversal.
 	t.Skip("skipping DumpInfo test (walks entire filesystem, ~14s)")
 
-	ctx := context.Background()
-
-	// Call DumpInfo and verify it doesn't panic
-	// It will log warnings about missing /sbin/crun on non-Linux systems
-	DumpInfo(ctx)
-}
-
-func TestDumpInfo_ProcCmdline(t *testing.T) {
-	// This test is redundant with TestDumpInfo - just verifies DumpInfo handles /proc gracefully
-	// Skip by default as it calls DumpInfo which walks "/" (~14s)
-	t.Skip("skipping DumpInfo test (walks entire filesystem, ~14s)")
-
-	ctx := context.Background()
-	DumpInfo(ctx)
-}
-
-func TestDumpInfo_CrunVersion(t *testing.T) {
-	// This test is redundant with TestDumpInfo - documents that DumpInfo tries /sbin/crun --version
-	// Skip by default as it calls DumpInfo which walks "/" (~14s)
-	t.Skip("skipping DumpInfo test (walks entire filesystem, ~14s)")
-
-	ctx := context.Background()
-	DumpInfo(ctx)
+	DumpInfo(context.Background())
 }
 
 // Benchmark DumpFile performance
 func BenchmarkDumpFile_PlainText(b *testing.B) {
-	// Set log level to Debug to ensure DumpFile actually runs
 	ctx := log.WithLogger(context.Background(), log.L)
 
 	tmpDir := b.TempDir()
@@ -136,8 +92,7 @@ func BenchmarkDumpFile_PlainText(b *testing.B) {
 		b.Fatalf("failed to create test file: %v", err)
 	}
 
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		DumpFile(ctx, testFile)
 	}
 }
@@ -152,8 +107,7 @@ func BenchmarkDumpFile_JSON(b *testing.B) {
 		b.Fatalf("failed to create test file: %v", err)
 	}
 
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		DumpFile(ctx, testFile)
 	}
 }

@@ -106,28 +106,25 @@ func (m *mockMemoryManager) online(ctx context.Context, memoryID int) error {
 func TestDefaultConfig(t *testing.T) {
 	config := DefaultConfig()
 
-	if config.MonitorInterval != 10*time.Second {
-		t.Errorf("expected MonitorInterval=10s, got %v", config.MonitorInterval)
+	tests := []struct {
+		name string
+		got  any
+		want any
+	}{
+		{"MonitorInterval", config.MonitorInterval, 10 * time.Second},
+		{"ScaleUpThreshold", config.ScaleUpThreshold, 85.0},
+		{"ScaleDownThreshold", config.ScaleDownThreshold, 60.0},
+		{"OOMSafetyMarginMB", config.OOMSafetyMarginMB, int64(128)},
+		{"IncrementSize", config.IncrementSize, int64(128 * 1024 * 1024)},
+		{"EnableScaleDown", config.EnableScaleDown, false},
 	}
 
-	if config.ScaleUpThreshold != 85.0 {
-		t.Errorf("expected ScaleUpThreshold=85, got %f", config.ScaleUpThreshold)
-	}
-
-	if config.ScaleDownThreshold != 60.0 {
-		t.Errorf("expected ScaleDownThreshold=60, got %f", config.ScaleDownThreshold)
-	}
-
-	if config.OOMSafetyMarginMB != 128 {
-		t.Errorf("expected OOMSafetyMarginMB=128, got %d", config.OOMSafetyMarginMB)
-	}
-
-	if config.IncrementSize != 128*1024*1024 {
-		t.Errorf("expected IncrementSize=128MB, got %d", config.IncrementSize)
-	}
-
-	if config.EnableScaleDown != false {
-		t.Errorf("expected EnableScaleDown=false, got %v", config.EnableScaleDown)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("%s = %v, want %v", tt.name, tt.got, tt.want)
+			}
+		})
 	}
 }
 
@@ -525,53 +522,83 @@ func TestControllerErrorHandling(t *testing.T) {
 }
 
 func TestFindFreeSlot(t *testing.T) {
-	controller := &Controller{
-		usedSlots: make(map[int]bool),
-		config:    Config{MaxSlots: 8},
+	tests := []struct {
+		name      string
+		usedSlots map[int]bool
+		want      int
+	}{
+		{
+			name:      "all slots free",
+			usedSlots: map[int]bool{},
+			want:      0,
+		},
+		{
+			name:      "first slot used",
+			usedSlots: map[int]bool{0: true},
+			want:      1,
+		},
+		{
+			name:      "first two slots used",
+			usedSlots: map[int]bool{0: true, 1: true},
+			want:      2,
+		},
+		{
+			name:      "all slots used",
+			usedSlots: map[int]bool{0: true, 1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true},
+			want:      -1,
+		},
 	}
 
-	// Initially all slots should be free
-	slot := controller.findFreeSlot()
-	if slot != 0 {
-		t.Errorf("expected first free slot=0, got %d", slot)
-	}
-
-	// Mark slot 0 as used
-	controller.usedSlots[0] = true
-	slot = controller.findFreeSlot()
-	if slot != 1 {
-		t.Errorf("expected free slot=1 after 0 is used, got %d", slot)
-	}
-
-	// Fill all slots
-	for i := range 8 {
-		controller.usedSlots[i] = true
-	}
-	slot = controller.findFreeSlot()
-	if slot != -1 {
-		t.Errorf("expected -1 when all slots used, got %d", slot)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			controller := &Controller{
+				usedSlots: tt.usedSlots,
+				config:    Config{MaxSlots: 8},
+			}
+			if got := controller.findFreeSlot(); got != tt.want {
+				t.Errorf("findFreeSlot() = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
 
 func TestFindUsedSlot(t *testing.T) {
-	controller := &Controller{
-		usedSlots: make(map[int]bool),
-		config:    Config{MaxSlots: 8},
+	tests := []struct {
+		name      string
+		usedSlots map[int]bool
+		want      int
+	}{
+		{
+			name:      "no slots used",
+			usedSlots: map[int]bool{},
+			want:      -1,
+		},
+		{
+			name:      "single slot used",
+			usedSlots: map[int]bool{3: true},
+			want:      3,
+		},
+		{
+			name:      "multiple slots used returns highest",
+			usedSlots: map[int]bool{2: true, 5: true},
+			want:      5,
+		},
+		{
+			name:      "first slot only",
+			usedSlots: map[int]bool{0: true},
+			want:      0,
+		},
 	}
 
-	// No used slots
-	slot := controller.findUsedSlot()
-	if slot != -1 {
-		t.Errorf("expected -1 when no slots used, got %d", slot)
-	}
-
-	// Add some used slots
-	controller.usedSlots[2] = true
-	controller.usedSlots[5] = true
-
-	// Should return highest slot (LIFO)
-	slot = controller.findUsedSlot()
-	if slot != 5 {
-		t.Errorf("expected highest used slot=5, got %d", slot)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			controller := &Controller{
+				usedSlots: tt.usedSlots,
+				config:    Config{MaxSlots: 8},
+			}
+			if got := controller.findUsedSlot(); got != tt.want {
+				t.Errorf("findUsedSlot() = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
