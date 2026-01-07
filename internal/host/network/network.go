@@ -114,6 +114,11 @@ type cniNetworkManager struct {
 	// Multiple concurrent calls for the same ID will coordinate through this map
 	inFlight   map[string]*setupInFlight
 	inflightMu sync.Mutex
+
+	// Tracks in-flight teardown operations to avoid duplicate cleanup
+	// Prevents race conditions when multiple goroutines try to release the same container
+	teardownInFlight map[string]*teardownInFlight
+	teardownMu       sync.Mutex
 }
 
 // NewNetworkManager creates a network manager for the configured mode.

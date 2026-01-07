@@ -136,12 +136,16 @@ func verifyNetNS(netnsPath string, hostNS netns.NsHandle) error {
 }
 
 // DeleteNetNS deletes a network namespace.
+// Returns an error if unmount or removal fails.
 func DeleteNetNS(vmID string) error {
 	netnsPath := filepath.Join(netnsBasePath, vmID)
 
-	// Unmount the namespace
-	// Continue with deletion even if unmount fails
-	_ = unmountNetNS(netnsPath)
+	// Unmount the namespace first
+	if err := unmountNetNS(netnsPath); err != nil {
+		// Log but continue - file might not be mounted (e.g., already unmounted)
+		log.L.WithError(err).WithField("vmID", vmID).
+			Debug("netns unmount failed (may already be unmounted)")
+	}
 
 	// Remove the file
 	if err := os.Remove(netnsPath); err != nil && !os.IsNotExist(err) {
