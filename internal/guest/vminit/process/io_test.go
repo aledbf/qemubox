@@ -14,40 +14,58 @@ import (
 )
 
 func TestNewBinaryIO(t *testing.T) {
-	ctx := namespaces.WithNamespace(context.Background(), "test")
-	uri, _ := url.Parse("binary:///bin/echo?test")
-
-	before := descriptorCount(t)
-
-	io, err := NewBinaryIO(ctx, "1", uri)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name           string
+		uri            string
+		wantErr        bool
+		fdDeltaOnClose int // expected fd count change after close (0 for errors, -1 for success)
+	}{
+		{
+			name:           "valid binary",
+			uri:            "binary:///bin/echo?test",
+			wantErr:        false,
+			fdDeltaOnClose: -1, // one descriptor closed from shim logger side
+		},
+		{
+			name:           "invalid binary cleans up",
+			uri:            "binary:///not/existing",
+			wantErr:        true,
+			fdDeltaOnClose: 0, // all descriptors cleaned up on error
+		},
 	}
 
-	err = io.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := namespaces.WithNamespace(context.Background(), "test")
+			uri, _ := url.Parse(tt.uri)
 
-	after := descriptorCount(t)
-	if before != after-1 { // one descriptor must be closed from shim logger side
-		t.Fatalf("some descriptors weren't closed (%d != %d -1)", before, after)
-	}
-}
+			before := descriptorCount(t)
 
-func TestNewBinaryIOCleanup(t *testing.T) {
-	ctx := namespaces.WithNamespace(context.Background(), "test")
-	uri, _ := url.Parse("binary:///not/existing")
+			io, err := NewBinaryIO(ctx, t.Name(), uri)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				after := descriptorCount(t)
+				if before != after {
+					t.Fatalf("descriptors leaked on error (%d != %d)", before, after)
+				}
+				return
+			}
 
-	before := descriptorCount(t)
-	_, err := NewBinaryIO(ctx, "2", uri)
-	if err == nil {
-		t.Fatal("error expected for invalid binary")
-	}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-	after := descriptorCount(t)
-	if before != after {
-		t.Fatalf("some descriptors weren't closed (%d != %d)", before, after)
+			if err := io.Close(); err != nil {
+				t.Fatalf("Close failed: %v", err)
+			}
+
+			after := descriptorCount(t)
+			if before != after+tt.fdDeltaOnClose {
+				t.Fatalf("fd count mismatch: before=%d, after=%d, expected delta=%d", before, after, tt.fdDeltaOnClose)
+			}
+		})
 	}
 }
 

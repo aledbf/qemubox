@@ -238,7 +238,7 @@ func TestConstants(t *testing.T) {
 
 func BenchmarkVmdkDescAddExtent(b *testing.B) {
 	var buf bytes.Buffer
-	for range b.N {
+	for b.Loop() {
 		buf.Reset()
 		_ = vmdkDescAddExtent(&buf, 1000000, "/dev/vda", 0)
 	}
@@ -250,9 +250,7 @@ func BenchmarkDumpVMDKDescriptor(b *testing.B) {
 	_ = os.WriteFile(devicePath, make([]byte, 1024*1024), 0600)
 
 	var buf bytes.Buffer
-	b.ResetTimer()
-
-	for range b.N {
+	for b.Loop() {
 		buf.Reset()
 		_ = DumpVMDKDescriptor(&buf, 0x12345678, []string{devicePath})
 	}

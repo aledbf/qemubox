@@ -18,44 +18,52 @@ import (
 
 func TestReadSysfsValue(t *testing.T) {
 	tests := []struct {
-		name      string
-		content   string
-		wantValue string
-		wantErr   bool
+		name       string
+		content    *string // nil means don't create file
+		wantValue  string
+		wantErr    bool
+		checkIsNot bool // check os.IsNotExist
 	}{
 		{
 			name:      "simple value",
-			content:   "1",
+			content:   ptr("1"),
 			wantValue: "1",
-			wantErr:   false,
 		},
 		{
 			name:      "value with whitespace",
-			content:   "  1  \n",
+			content:   ptr("  1  \n"),
 			wantValue: "1",
-			wantErr:   false,
 		},
 		{
 			name:      "multiline value",
-			content:   "online\n",
+			content:   ptr("online\n"),
 			wantValue: "online",
-			wantErr:   false,
+		},
+		{
+			name:       "file not exist",
+			content:    nil,
+			wantErr:    true,
+			checkIsNot: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create temp file
 			tmpFile := filepath.Join(t.TempDir(), "test")
-			if err := os.WriteFile(tmpFile, []byte(tt.content), 0600); err != nil {
-				t.Fatalf("failed to write test file: %v", err)
+
+			if tt.content != nil {
+				if err := os.WriteFile(tmpFile, []byte(*tt.content), 0600); err != nil {
+					t.Fatalf("failed to write test file: %v", err)
+				}
 			}
 
-			// Read value
 			value, err := readSysfsValue(tmpFile)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("expected error, got nil")
+					t.Fatal("expected error, got nil")
+				}
+				if tt.checkIsNot && !os.IsNotExist(err) {
+					t.Errorf("expected NotExist error, got %v", err)
 				}
 				return
 			}
@@ -71,15 +79,7 @@ func TestReadSysfsValue(t *testing.T) {
 	}
 }
 
-func TestReadSysfsValue_NotExist(t *testing.T) {
-	_, err := readSysfsValue("/nonexistent/file")
-	if err == nil {
-		t.Fatalf("expected error for nonexistent file, got nil")
-	}
-	if !os.IsNotExist(err) {
-		t.Errorf("expected NotExist error, got %v", err)
-	}
-}
+func ptr(s string) *string { return &s }
 
 func TestWriteSysfsValue(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "test")
@@ -541,8 +541,7 @@ func BenchmarkReadSysfsValue(b *testing.B) {
 		b.Fatalf("failed to write test file: %v", err)
 	}
 
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		_, _ = readSysfsValue(tmpFile)
 	}
 }
@@ -550,8 +549,7 @@ func BenchmarkReadSysfsValue(b *testing.B) {
 func BenchmarkWriteSysfsValue(b *testing.B) {
 	tmpFile := filepath.Join(b.TempDir(), "test")
 
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		_ = writeSysfsValue(tmpFile, "1")
 	}
 }

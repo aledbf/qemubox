@@ -201,8 +201,7 @@ func BenchmarkGenerateStableDiskID(b *testing.B) {
 	testFile := filepath.Join(tmpDir, "test.img")
 	_ = os.WriteFile(testFile, []byte("test"), 0600)
 
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		_, _ = generateStableDiskID(testFile)
 	}
 }
@@ -213,8 +212,7 @@ func BenchmarkAddDisk(b *testing.B) {
 	testFile := filepath.Join(tmpDir, "test.img")
 	_ = os.WriteFile(testFile, []byte("test"), 0600)
 
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		q := &Instance{}
 		q.setState(vmStateNew)
 		_ = q.AddDisk(ctx, "disk", testFile)

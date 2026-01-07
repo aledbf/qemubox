@@ -45,39 +45,33 @@ func TestCgroupManager_Stats_NilManager(t *testing.T) {
 	_, _ = mgr.Stats(ctx)
 }
 
-func TestLoadProcessCgroup_InvalidPID(t *testing.T) {
-	ctx := context.Background()
+func TestLoadProcessCgroup(t *testing.T) {
+	t.Run("invalid PID", func(t *testing.T) {
+		ctx := context.Background()
+		_, err := LoadProcessCgroup(ctx, -1)
+		assert.Error(t, err, "invalid PID should return error")
+	})
 
-	// Test with invalid PID (PID 0 is kernel, -1 is invalid)
-	_, err := LoadProcessCgroup(ctx, -1)
-	assert.Error(t, err, "invalid PID should return error")
-}
+	t.Run("non-existent PID", func(t *testing.T) {
+		ctx := context.Background()
+		_, err := LoadProcessCgroup(ctx, 999999999)
+		assert.Error(t, err, "non-existent PID should return error")
+	})
 
-func TestLoadProcessCgroup_NonExistentPID(t *testing.T) {
-	ctx := context.Background()
+	t.Run("PID 1 (requires cgroup v2)", func(t *testing.T) {
+		if !isCgroupV2Available() {
+			t.Skip("cgroup v2 (unified mode) not available")
+		}
 
-	// Use a very high PID that's unlikely to exist
-	_, err := LoadProcessCgroup(ctx, 999999999)
-	assert.Error(t, err, "non-existent PID should return error")
-}
+		ctx := context.Background()
+		mgr, err := LoadProcessCgroup(ctx, 1)
 
-func TestLoadProcessCgroup_CurrentProcess(t *testing.T) {
-	// Skip if not in cgroup v2 unified mode
-	if !isCgroupV2Available() {
-		t.Skip("cgroup v2 (unified mode) not available")
-	}
+		if err != nil {
+			t.Skipf("cannot load cgroup for PID 1: %v", err)
+		}
 
-	ctx := context.Background()
-
-	// Load cgroup for current process
-	mgr, err := LoadProcessCgroup(ctx, 1) // PID 1 (init/systemd)
-
-	// This may fail if we don't have permissions or cgroup v2 isn't set up
-	if err != nil {
-		t.Skipf("cannot load cgroup for PID 1: %v", err)
-	}
-
-	require.NotNil(t, mgr)
+		require.NotNil(t, mgr)
+	})
 }
 
 // MockCgroupManager provides a test implementation of CgroupManager
