@@ -61,15 +61,9 @@ func (m *ConnectionManager) GetClient(ctx context.Context) (*ttrpc.Client, error
 	if hasCachedClient && !isClosed {
 		client := m.client
 		m.mu.RUnlock()
-		log.G(ctx).Debug("connmanager: returning cached client")
 		return client, nil
 	}
 	m.mu.RUnlock()
-
-	log.G(ctx).WithFields(log.Fields{
-		"has_cached_client": hasCachedClient,
-		"is_closed":         isClosed,
-	}).Debug("connmanager: no cached client, will dial")
 
 	return m.getOrCreateClient(ctx)
 }
@@ -82,11 +76,9 @@ func (m *ConnectionManager) getOrCreateClient(ctx context.Context) (*ttrpc.Clien
 
 	// Double-check after acquiring write lock (another goroutine may have created it)
 	if m.closed {
-		log.G(ctx).Debug("connmanager: manager is closed, returning canceled")
 		return nil, context.Canceled
 	}
 	if m.client != nil {
-		log.G(ctx).Debug("connmanager: another goroutine created client, returning it")
 		return m.client, nil
 	}
 
@@ -124,12 +116,10 @@ func (m *ConnectionManager) SetClient(client *ttrpc.Client) {
 
 	// Close existing client if different
 	if m.client != nil && m.client != client {
-		log.L.Debug("connmanager: replacing existing client")
 		m.client.Close()
 	}
 
 	m.client = client
-	log.L.Debug("connmanager: client set")
 }
 
 // ClearClient removes the cached client without closing it.
@@ -158,7 +148,6 @@ func (m *ConnectionManager) Invalidate(ctx context.Context) {
 	defer m.mu.Unlock()
 
 	if m.client != nil {
-		log.G(ctx).Debug("connmanager: invalidating stale client")
 		m.client.Close()
 		m.client = nil
 	}
@@ -178,7 +167,6 @@ func (m *ConnectionManager) Close() error {
 	m.closed = true
 
 	if m.client != nil {
-		log.L.Debug("connmanager: closing task client")
 		err := m.client.Close()
 		m.client = nil
 		return err

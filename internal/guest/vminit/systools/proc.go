@@ -13,8 +13,6 @@ import (
 
 // DumpPids logs basic information for processes in /proc.
 func DumpPids(ctx context.Context) {
-	log.G(ctx).Debug("dumping /proc process info")
-
 	es, err := os.ReadDir("/proc")
 	if err != nil {
 		log.G(ctx).WithError(err).Error("failed to read /proc")

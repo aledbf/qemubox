@@ -502,13 +502,11 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	// can become stale between Create completing and Start being called.
 	// We also do NOT close it because that can cause the VM to exit unexpectedly.
 	// Subsequent operations (Start, State, etc.) will dial fresh via the connection manager.
-	log.G(ctx).Debug("create: dialing RPC client for bundle/task creation (NOT caching)")
 	rpcClient, err := s.vmLifecycle.DialClient(ctx)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("create: failed to dial RPC client")
 		return nil, errgrpc.ToGRPC(err)
 	}
-	log.G(ctx).Debug("create: RPC client dialed (will NOT be cached, Start will dial fresh)")
 	// rpcClient will be garbage collected - we don't close it to avoid killing the VM
 
 	// Create bundle in VM
@@ -1217,12 +1215,10 @@ func (s *service) CloseIO(ctx context.Context, r *taskAPI.CloseIORequest) (*ptyp
 			if r.ExecID == "" {
 				// Container stdin
 				s.container.io.init.forwarder.CloseStdin()
-				log.G(ctx).Debug("signaled forwarder to close container stdin")
 			} else {
 				// Exec stdin
 				if pio, ok := s.container.io.exec[r.ExecID]; ok {
 					pio.forwarder.CloseStdin()
-					log.G(ctx).WithField("exec", r.ExecID).Debug("signaled forwarder to close exec stdin")
 				}
 			}
 		}
@@ -1431,10 +1427,7 @@ func (s *service) send(evt interface{}) {
 	// and channel close. If the channel is closed after our check, the send
 	// would panic - we catch this and silently drop the event.
 	defer func() {
-		if r := recover(); r != nil {
-			// Event dropped during shutdown race - this is expected and safe
-			log.L.Debug("event dropped during shutdown")
-		}
+		_ = recover() // Event dropped during shutdown race - expected and safe
 	}()
 	s.events <- evt
 }

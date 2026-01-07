@@ -45,8 +45,6 @@ func TransformBindMounts(ctx context.Context, b *bundle.Bundle) error {
 // - Ensure cgroup2 mount exists
 // - Grant full capabilities (VM is the security boundary)
 func AdaptForVM(ctx context.Context, b *bundle.Bundle) error {
-	log.G(ctx).Debug("adapting OCI spec for VM execution")
-
 	// Remove network and cgroup namespaces
 	if b.Spec.Linux != nil {
 		var namespaces []specs.LinuxNamespace

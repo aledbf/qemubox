@@ -80,7 +80,6 @@ func (p *linuxPlatform) CopyConsole(ctx context.Context, cons console.Console, i
 		cwg.Add(1)
 		go func() {
 			cwg.Done()
-			log.L.Debug("console stdin copy goroutine started")
 			bp := iobuf.Get()
 			defer iobuf.Put(bp)
 			n, err := io.CopyBuffer(epollConsole, in, *bp)

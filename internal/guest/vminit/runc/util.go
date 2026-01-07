@@ -132,6 +132,5 @@ func RelaxOCISpec(ctx context.Context, bundlePath string) error {
 
 	spec.Mounts = newMounts
 
-	log.G(ctx).Debug("relaxed OCI spec for VM isolation")
 	return writeSpec(bundlePath, spec)
 }

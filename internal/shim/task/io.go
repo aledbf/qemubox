@@ -141,7 +141,6 @@ func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forw
 	if u.Scheme == "" {
 		u.Scheme = defaultScheme
 	}
-	log.G(ctx).WithField("scheme", u.Scheme).Debug("resolved stdout scheme")
 
 	switch u.Scheme {
 	case "stream":
@@ -159,7 +158,6 @@ func setupForwardIO(ctx context.Context, vmi vm.Instance, pio stdio.Stdio) (forw
 // setupFileScheme handles the "file://" URI scheme.
 // It creates VM-side streams and saves the original file path for host-side copying.
 func setupFileScheme(ctx context.Context, vmi vm.Instance, pio stdio.Stdio, stdoutFilePath string) (forwardIOSetup, error) {
-	log.G(ctx).WithField("stdoutFilePath", stdoutFilePath).Debug("file scheme: using host file paths for logging")
 
 	// Validate parent directory can be created for stdout
 	if err := os.MkdirAll(filepath.Dir(stdoutFilePath), 0750); err != nil {
@@ -189,13 +187,6 @@ func setupFileScheme(ctx context.Context, vmi vm.Instance, pio stdio.Stdio, stdo
 	if err != nil {
 		return forwardIOSetup{}, err
 	}
-
-	log.G(ctx).WithFields(log.Fields{
-		"stdout":         streamPio.Stdout,
-		"stderr":         streamPio.Stderr,
-		"stdoutFilePath": stdoutFilePath,
-		"stderrFilePath": stderrFilePath,
-	}).Debug("file scheme: created VM streams, copying to host files")
 
 	// Return setup with:
 	// - streamPio: Contains stream:// URIs for VM
@@ -278,13 +269,6 @@ func (s *service) forwardIOWithIDs(ctx context.Context, vmi vm.Instance, contain
 		// pio.Stdout/Stderr contain stream:// URIs which will be sent to the VM
 		stdoutPath = setup.stdoutFilePath
 		stderrPath = setup.stderrFilePath
-		log.G(ctx).WithFields(log.Fields{
-			"stdoutPath":  stdoutPath,
-			"stderrPath":  stderrPath,
-			"vmStdout":    pio.Stdout,
-			"vmStderr":    pio.Stderr,
-			"usePIOPaths": setup.usePIOPaths,
-		}).Debug("forwardIO: using file paths for copyStreams, stream URIs for VM")
 	}
 	keepalives, err := copyStreams(ctx, streams, stdinPath, stdoutPath, stderrPath, ioDone)
 	if err != nil {
@@ -433,12 +417,10 @@ func openOutputDestination(ctx context.Context, name, stdout, stderr string, sam
 		return nil, nil, fmt.Errorf("containerd-shim: creating parent directory for %q failed: %w", name, err)
 	}
 
-	log.G(ctx).WithField("file", name).Debug("openOutputDestination: opening file for writing")
 	fw, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
 	if err != nil {
 		return nil, nil, fmt.Errorf("containerd-shim: opening file %q failed: %w", name, err)
 	}
-	log.G(ctx).WithField("file", name).Debug("openOutputDestination: successfully opened file")
 	if stdout == stderr {
 		*sameFile = newCountingWriteCloser(fw, 1)
 		return *sameFile, nil, nil
@@ -450,10 +432,6 @@ func startOutputCopy(ctx context.Context, cwg *sync.WaitGroup, copying *atomic.I
 	cwg.Add(1)
 	go func() {
 		cwg.Done()
-		log.G(ctx).WithFields(log.Fields{
-			"target": target.name,
-			"label":  target.label,
-		}).Debug("startOutputCopy: starting to copy stream data")
 		p := iobuf.Get()
 		defer iobuf.Put(p)
 		n, err := io.CopyBuffer(wc, target.stream, *p)
@@ -463,12 +441,6 @@ func startOutputCopy(ctx context.Context, cwg *sync.WaitGroup, copying *atomic.I
 				"label":  target.label,
 				"bytes":  n,
 			}).Warn("output stream copy failed")
-		} else {
-			log.G(ctx).WithFields(log.Fields{
-				"target": target.name,
-				"label":  target.label,
-				"bytes":  n,
-			}).Debug("startOutputCopy: finished copying stream data")
 		}
 		if copying.Add(-1) == 0 {
 			close(done)
@@ -482,10 +454,8 @@ func startOutputCopy(ctx context.Context, cwg *sync.WaitGroup, copying *atomic.I
 
 func startStdinCopy(ctx context.Context, cwg *sync.WaitGroup, stream io.ReadWriteCloser, stdin string) error {
 	if stdin == "" {
-		log.G(ctx).Debug("startStdinCopy: stdin is empty, skipping")
 		return nil
 	}
-	log.G(ctx).WithField("stdin", stdin).Debug("startStdinCopy: opening stdin FIFO")
 	// Open FIFO with background context - it needs to stay open for the lifetime of I/O forwarding,
 	// not tied to any specific operation context. Using the RPC context would cause the FIFO to
 	// close when the Create RPC completes, breaking stdin for later attach operations.
@@ -493,11 +463,9 @@ func startStdinCopy(ctx context.Context, cwg *sync.WaitGroup, stream io.ReadWrit
 	if err != nil {
 		return fmt.Errorf("containerd-shim: opening %s failed: %w", stdin, err)
 	}
-	log.G(ctx).WithField("stdin", stdin).Debug("startStdinCopy: stdin FIFO opened, starting copy goroutine")
 	cwg.Add(1)
 	go func() {
 		cwg.Done()
-		log.G(ctx).Debug("startStdinCopy: copy goroutine started")
 		defer func() {
 			if err := stream.Close(); err != nil {
 				if !isAlreadyClosedError(err) {
