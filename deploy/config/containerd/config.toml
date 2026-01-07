@@ -41,6 +41,8 @@ grpc_histogram = false
   [proxy_plugins.nexus-erofs]
     type = "snapshot"
     address = "/run/qemubox/nexus-erofs-snapshotter/snapshotter.sock"
+    # Enable parallel layer unpacking (requires containerd 2.0+)
+    capabilities = ["rebase"]
 
   [proxy_plugins.nexus-erofs-diff]
     type = "diff"
