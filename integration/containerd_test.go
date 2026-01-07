@@ -161,13 +161,32 @@ const (
 
 // loadTestConfig loads test configuration from environment variables.
 func loadTestConfig() testConfig {
-	return testConfig{
+	cfg := testConfig{
 		Socket:      defaultSocket,
 		Image:       defaultImage,
 		Runtime:     defaultRuntime,
 		Snapshotter: defaultSnapshotter,
 		Namespace:   defaultNamespace,
 	}
+
+	// Override from environment variables if set
+	if v := os.Getenv("QEMUBOX_CONTAINERD_SOCKET"); v != "" {
+		cfg.Socket = v
+	}
+	if v := os.Getenv("QEMUBOX_IMAGE"); v != "" {
+		cfg.Image = v
+	}
+	if v := os.Getenv("QEMUBOX_RUNTIME"); v != "" {
+		cfg.Runtime = v
+	}
+	if v := os.Getenv("QEMUBOX_SNAPSHOTTER"); v != "" {
+		cfg.Snapshotter = v
+	}
+	if v := os.Getenv("QEMUBOX_NAMESPACE"); v != "" {
+		cfg.Namespace = v
+	}
+
+	return cfg
 }
 
 // setupContainerdClient creates a containerd client connected to the configured socket.

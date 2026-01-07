@@ -319,7 +319,16 @@ tasks:
           "{{.INTEGRATION_IMAGE}}"
 
         cleanup_ctr() {
+          # Kill the task
           ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks kill --signal SIGKILL "${CTR_ID}" >/dev/null 2>&1 || true
+          # Wait for task to stop (max 10 seconds)
+          for _ in $(seq 1 10); do
+            TASK_STATUS=$(${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks list 2>/dev/null | awk -v id="${CTR_ID}" 'NR>1 && $1==id {print $3}')
+            if [ -z "${TASK_STATUS}" ] || [ "${TASK_STATUS}" = "STOPPED" ]; then
+              break
+            fi
+            sleep 1
+          done
           ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks delete "${CTR_ID}" >/dev/null 2>&1 || true
           ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" containers delete "${CTR_ID}" >/dev/null 2>&1 || true
         }

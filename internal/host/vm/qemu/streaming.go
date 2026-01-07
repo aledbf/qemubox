@@ -111,7 +111,6 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 		// Connect directly via vsock using kernel's vhost-vsock driver
 		conn, err := vsock.Dial(q.guestCID, vsockports.DefaultRPCPort, nil)
 		if err != nil {
-			log.G(ctx).WithError(err).Debug("qemu: failed to dial vsock")
 			time.Sleep(backoff)
 			backoff = min(backoff*2, maxBackoff)
 			continue
@@ -119,14 +118,12 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 
 		// Try to ping the TTRPC server with a deadline
 		if err := conn.SetReadDeadline(time.Now().Add(pingDeadline)); err != nil {
-			log.G(ctx).WithError(err).Debug("qemu: failed to set ping deadline")
 			_ = conn.Close()
 			time.Sleep(backoff)
 			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
 		if err := pingTTRPC(conn); err != nil {
-			log.G(ctx).WithError(err).WithField("deadline", pingDeadline).Debug("qemu: TTRPC ping failed, retrying")
 			_ = conn.Close()
 			pingDeadline += 10 * time.Millisecond
 			time.Sleep(backoff)
@@ -136,14 +133,12 @@ func (q *Instance) connectVsockRPC(ctx context.Context) (net.Conn, error) {
 
 		// Clear the deadline and verify connection is still alive
 		if err := conn.SetReadDeadline(time.Time{}); err != nil {
-			log.G(ctx).WithError(err).Debug("qemu: failed to clear ping deadline")
 			_ = conn.Close()
 			time.Sleep(backoff)
 			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
 		if err := pingTTRPC(conn); err != nil {
-			log.G(ctx).WithError(err).Debug("qemu: TTRPC ping failed after clearing deadline, retrying")
 			_ = conn.Close()
 			time.Sleep(backoff)
 			backoff = min(backoff*2, maxBackoff)

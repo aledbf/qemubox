@@ -122,13 +122,22 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          go test -v -short -timeout 120s -race -coverprofile=coverage.txt -covermode=atomic -coverpkg=./internal/... ./...
+          go test -v -short -timeout 120s -race -coverprofile=${{ github.workspace }}/coverage.txt -covermode=atomic -coverpkg=./internal/... ./...
+
+      - name: Verify coverage file
+        run: |
+          echo "=== Coverage file info ==="
+          ls -la ${{ github.workspace }}/coverage.txt
+          echo "=== Coverage file size ==="
+          wc -l ${{ github.workspace }}/coverage.txt
+          echo "=== Coverage file head ==="
+          head -20 ${{ github.workspace }}/coverage.txt
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage.txt
+          files: ${{ github.workspace }}/coverage.txt
           fail_ci_if_error: false
           verbose: true
 
