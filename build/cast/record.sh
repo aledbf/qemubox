@@ -1,15 +1,45 @@
 #!/bin/bash
-# Simple asciinema recorder for qemubox demo
-# Usage: ./record.sh [output-name]
+# Unified asciinema recorder for qemubox demos
+# Usage: ./record.sh [demo|snapshot] [output-name]
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT="${1:-qemubox-demo}"
+MODE="${1:-demo}"
+CTR="ctr --address /var/run/qemubox/containerd.sock"
+NERDCTL="nerdctl --address /var/run/qemubox/containerd.sock"
 
-# Ensure cleanup on exit/interrupt
+# Validate mode and set defaults
+case "$MODE" in
+    demo)
+        OUTPUT="${2:-qemubox-demo}"
+        EXPECT_SCRIPT="$SCRIPT_DIR/qemubox.exp"
+        CONTAINERS="demo-vm"
+        ;;
+    snapshot)
+        OUTPUT="${2:-qemubox-snapshot-demo}"
+        EXPECT_SCRIPT="$SCRIPT_DIR/snapshot.exp"
+        CONTAINERS="snapshot-demo snapshot-new"
+        ;;
+    *)
+        echo "Usage: $0 [demo|snapshot] [output-name]"
+        echo "  demo     - Basic demo (boot, Docker)"
+        echo "  snapshot - Snapshot demo (persist state)"
+        exit 1
+        ;;
+esac
+
+# Cleanup function
 cleanup() {
-    "$SCRIPT_DIR/cleanup.sh" demo-vm
+    for name in $CONTAINERS; do
+        $CTR task kill "$name" 2>/dev/null || true
+        $CTR task delete "$name" 2>/dev/null || true
+        $CTR container rm "$name" 2>/dev/null || true
+        $CTR snapshots --snapshotter nexus-erofs rm "${name}-snapshot" 2>/dev/null || true
+    done
+    if [ "$MODE" = "snapshot" ]; then
+        $NERDCTL rmi docker.io/aledbf/sandbox:with-changes 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT
 
@@ -22,34 +52,31 @@ for cmd in asciinema expect; do
 done
 
 # Check expect script exists
-[ -f "$SCRIPT_DIR/qemubox.exp" ] || { echo "Error: qemubox.exp not found"; exit 1; }
+[ -f "$EXPECT_SCRIPT" ] || { echo "Error: $(basename "$EXPECT_SCRIPT") not found"; exit 1; }
 
-echo "QemuBox Demo - Recording to ${OUTPUT}.cast"
+echo "QemuBox ${MODE^} Demo - Recording to ${OUTPUT}.cast"
 
-# Pre-cleanup to avoid conflicts from previous runs
-"$SCRIPT_DIR/cleanup.sh" demo-vm
+# Pre-cleanup
+cleanup
 
 echo "Starting in 3 seconds..."
 sleep 3
 
 # Terminal size
-COLS=120
+COLS=240
 ROWS=40
 export COLUMNS=$COLS LINES=$ROWS
 stty cols $COLS rows $ROWS 2>/dev/null || true
 
 # Record
 echo "Recording..."
-asciinema rec "${OUTPUT}.cast" -c "expect $SCRIPT_DIR/qemubox.exp" \
+asciinema rec "${OUTPUT}.cast" -c "expect $EXPECT_SCRIPT" \
     --cols $COLS --rows $ROWS --overwrite || {
     echo "Recording failed"
     exit 1
 }
 
-# Success
-echo "Recording saved to: ${OUTPUT}.cast"
 echo ""
+echo "Recording saved to: ${OUTPUT}.cast"
 echo "Play:   asciinema play ${OUTPUT}.cast"
 echo "Upload: asciinema upload ${OUTPUT}.cast"
-
-# Cleanup handled by trap

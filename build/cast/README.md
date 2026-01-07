@@ -9,35 +9,37 @@ Automated asciinema recordings using expect scripts.
 sudo apt-get install asciinema expect
 
 # Record basic demo
-./record.sh
+./record.sh demo
 
 # Record snapshot demo
-./record-snapshot.sh
+./record.sh snapshot
 
 # Play back
 asciinema play qemubox-demo.cast
 ```
 
-## Files
+## Usage
 
-| Script | Description | Output |
-|--------|-------------|--------|
-| `record.sh` | Basic demo (boot, Docker) | `qemubox-demo.cast` |
-| `record-snapshot.sh` | Snapshot demo (persist state) | `qemubox-snapshot-demo.cast` |
-| `qemubox.exp` | Expect script for basic demo | |
-| `snapshot.exp` | Expect script for snapshot demo | |
+```bash
+./record.sh [demo|snapshot] [output-name]
+```
+
+| Mode | Description | Default Output |
+|------|-------------|----------------|
+| `demo` | Basic demo (boot, Docker) | `qemubox-demo.cast` |
+| `snapshot` | Snapshot demo (persist state) | `qemubox-snapshot-demo.cast` |
 
 ## What Gets Recorded
 
-**Basic Demo:**
+**Basic Demo (`demo`):**
 - Pull qemubox sandbox image
 - Boot VM with qemubox runtime
 - Show systemd boot analysis
 - Run Docker inside VM
 
-**Snapshot Demo:**
+**Snapshot Demo (`snapshot`):**
 - Run VM and make changes (files, packages)
-- Commit running VM to new image with `nerdctl commit`
+- Commit running VM to new image
 - Run new VM from committed image
 - Verify changes persisted
 
@@ -63,4 +65,10 @@ asciinema upload qemubox-demo.cast
 **Test without recording:**
 ```bash
 expect qemubox.exp
+```
+
+**Manual cleanup:**
+```bash
+./cleanup.sh demo-vm
+./cleanup.sh snapshot-demo snapshot-new
 ```
