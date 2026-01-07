@@ -244,88 +244,81 @@ func TestPipeSchemeSupport(t *testing.T) {
 	})
 }
 
-// TestStreamSchemePassthrough tests that stream scheme passes through
-func TestStreamSchemePassthrough(t *testing.T) {
-	svc := &service{}
-	ss := &mockVMInstance{}
-
-	sio := stdio.Stdio{
-		Stdin:  "",
-		Stdout: "stream://123",
-		Stderr: "stream://456",
+func TestForwardIO(t *testing.T) {
+	tests := []struct {
+		name          string
+		sio           stdio.Stdio
+		wantErr       bool
+		checkPassthru bool // check stdout/stderr pass through unchanged
+		checkNull     bool // check IsNull()
+		checkNoopFwd  bool // check forwarder is noopForwarder
+	}{
+		{
+			name: "stream scheme passes through",
+			sio: stdio.Stdio{
+				Stdout: "stream://123",
+				Stderr: "stream://456",
+			},
+			checkPassthru: true,
+		},
+		{
+			name: "unsupported scheme returns error",
+			sio: stdio.Stdio{
+				Stdout: "unsupported://invalid",
+			},
+			wantErr: true,
+		},
+		{
+			name:         "null stdio returns noopForwarder",
+			sio:          stdio.Stdio{},
+			checkNull:    true,
+			checkNoopFwd: true,
+		},
 	}
 
-	ctx := context.Background()
-	pio, forwarder, err := svc.forwardIO(ctx, ss, sio)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &service{}
+			ss := &mockVMInstance{}
+			ctx := context.Background()
 
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+			pio, forwarder, err := svc.forwardIO(ctx, ss, tt.sio)
 
-	// Stream scheme should pass through unchanged
-	if pio.Stdout != sio.Stdout {
-		t.Errorf("expected stdout %q, got %q", sio.Stdout, pio.Stdout)
-	}
-	if pio.Stderr != sio.Stderr {
-		t.Errorf("expected stderr %q, got %q", sio.Stderr, pio.Stderr)
-	}
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-	// Forwarder exists but should be a no-op for stream scheme
-	if forwarder != nil {
-		if err := forwarder.Shutdown(ctx); err != nil {
-			t.Errorf("unexpected shutdown error for stream scheme: %v", err)
-		}
-	}
-}
+			if tt.checkPassthru {
+				if pio.Stdout != tt.sio.Stdout {
+					t.Errorf("stdout = %q, want %q", pio.Stdout, tt.sio.Stdout)
+				}
+				if pio.Stderr != tt.sio.Stderr {
+					t.Errorf("stderr = %q, want %q", pio.Stderr, tt.sio.Stderr)
+				}
+			}
 
-// TestUnsupportedScheme tests that unsupported schemes return error
-func TestUnsupportedScheme(t *testing.T) {
-	svc := &service{}
-	ss := &mockVMInstance{}
+			if tt.checkNull && !pio.IsNull() {
+				t.Error("expected null stdio")
+			}
 
-	sio := stdio.Stdio{
-		Stdin:  "",
-		Stdout: "unsupported://invalid",
-		Stderr: "",
-	}
+			if tt.checkNoopFwd {
+				if forwarder == nil {
+					t.Error("expected noopForwarder (Null Object Pattern)")
+				} else if _, ok := forwarder.(*noopForwarder); !ok {
+					t.Errorf("expected noopForwarder, got %T", forwarder)
+				}
+			}
 
-	ctx := context.Background()
-	_, _, err := svc.forwardIO(ctx, ss, sio)
-
-	if err == nil {
-		t.Fatal("expected error for unsupported scheme, got nil")
-	}
-}
-
-// TestNullStdio tests that null/empty stdio is handled correctly
-func TestNullStdio(t *testing.T) {
-	svc := &service{}
-	ss := &mockVMInstance{}
-
-	sio := stdio.Stdio{
-		Stdin:  "",
-		Stdout: "",
-		Stderr: "",
-	}
-
-	ctx := context.Background()
-	pio, forwarder, err := svc.forwardIO(ctx, ss, sio)
-
-	if err != nil {
-		t.Fatalf("unexpected error for null stdio: %v", err)
-	}
-
-	if !pio.IsNull() {
-		t.Error("expected null stdio to remain null")
-	}
-
-	// IOForwarder uses Null Object Pattern - always returns non-nil forwarder
-	// to eliminate nil checks at call sites (see IOForwarder interface docs)
-	if forwarder == nil {
-		t.Error("expected noopForwarder for null stdio (Null Object Pattern)")
-	}
-	if _, ok := forwarder.(*noopForwarder); !ok {
-		t.Errorf("expected noopForwarder type, got %T", forwarder)
+			if forwarder != nil {
+				_ = forwarder.Shutdown(ctx)
+			}
+		})
 	}
 }
 

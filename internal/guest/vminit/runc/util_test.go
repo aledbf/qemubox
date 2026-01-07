@@ -15,14 +15,15 @@ const devPath = "/dev"
 
 func TestReadSpec(t *testing.T) {
 	tests := []struct {
-		name     string
-		specJSON string
-		wantErr  bool
-		validate func(t *testing.T, spec *specs.Spec)
+		name       string
+		specJSON   *string // nil means don't create file
+		wantErr    bool
+		checkIsNot bool // check os.IsNotExist
+		validate   func(t *testing.T, spec *specs.Spec)
 	}{
 		{
 			name: "valid minimal spec",
-			specJSON: `{
+			specJSON: ptr(`{
 				"ociVersion": "1.0.0",
 				"process": {
 					"terminal": true,
@@ -33,8 +34,7 @@ func TestReadSpec(t *testing.T) {
 					"path": "rootfs",
 					"readonly": true
 				}
-			}`,
-			wantErr: false,
+			}`),
 			validate: func(t *testing.T, spec *specs.Spec) {
 				if spec.Version != "1.0.0" {
 					t.Errorf("Version = %q, want %q", spec.Version, "1.0.0")
@@ -49,29 +49,40 @@ func TestReadSpec(t *testing.T) {
 		},
 		{
 			name:     "invalid JSON",
-			specJSON: `{invalid json`,
+			specJSON: ptr(`{invalid json`),
 			wantErr:  true,
 		},
 		{
 			name:     "empty file",
-			specJSON: ``,
+			specJSON: ptr(``),
 			wantErr:  true,
+		},
+		{
+			name:       "file not exist",
+			specJSON:   nil,
+			wantErr:    true,
+			checkIsNot: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			bundleDir := t.TempDir()
-			configPath := filepath.Join(bundleDir, "config.json")
 
-			if err := os.WriteFile(configPath, []byte(tt.specJSON), 0600); err != nil {
-				t.Fatalf("failed to write test config: %v", err)
+			if tt.specJSON != nil {
+				configPath := filepath.Join(bundleDir, "config.json")
+				if err := os.WriteFile(configPath, []byte(*tt.specJSON), 0600); err != nil {
+					t.Fatalf("failed to write test config: %v", err)
+				}
 			}
 
 			spec, err := readSpec(bundleDir)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
+				}
+				if tt.checkIsNot && !os.IsNotExist(err) {
+					t.Errorf("expected NotExist error, got %v", err)
 				}
 				return
 			}
@@ -87,17 +98,7 @@ func TestReadSpec(t *testing.T) {
 	}
 }
 
-func TestReadSpec_FileNotExist(t *testing.T) {
-	bundleDir := t.TempDir()
-
-	_, err := readSpec(bundleDir)
-	if err == nil {
-		t.Fatal("expected error for missing config.json, got nil")
-	}
-	if !os.IsNotExist(err) {
-		t.Errorf("expected NotExist error, got %v", err)
-	}
-}
+func ptr(s string) *string { return &s }
 
 func TestWriteSpec(t *testing.T) {
 	bundleDir := t.TempDir()

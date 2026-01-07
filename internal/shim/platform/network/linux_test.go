@@ -10,33 +10,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewManager(t *testing.T) {
-	mgr := newManager()
-	require.NotNil(t, mgr)
+func TestManager(t *testing.T) {
+	t.Run("New returns linuxManager", func(t *testing.T) {
+		mgr := New()
+		require.NotNil(t, mgr)
+		_, ok := mgr.(*linuxManager)
+		assert.True(t, ok)
+	})
 
-	_, ok := mgr.(*linuxManager)
-	assert.True(t, ok, "should return linuxManager")
+	t.Run("newManager returns linuxManager", func(t *testing.T) {
+		mgr := newManager()
+		require.NotNil(t, mgr)
+		_, ok := mgr.(*linuxManager)
+		assert.True(t, ok)
+	})
 }
 
 func TestResolveHostDNSServers(t *testing.T) {
-	ctx := context.Background()
-
-	// This test exercises the resolveHostDNSServers function
 	// Results depend on the host's /etc/resolv.conf
-	servers := resolveHostDNSServers(ctx)
+	servers := resolveHostDNSServers(context.Background())
 
-	// Should return something (or nil if no valid DNS)
-	// We can't assert specific values since they depend on the host
 	for _, s := range servers {
-		// Each server should be a valid IPv4 address
-		assert.NotEmpty(t, s)
+		assert.NotEmpty(t, s, "each server should be a valid address")
 	}
-}
-
-func TestNew(t *testing.T) {
-	mgr := New()
-	require.NotNil(t, mgr)
-
-	_, ok := mgr.(*linuxManager)
-	assert.True(t, ok, "New() should return linuxManager on Linux")
 }
