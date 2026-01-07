@@ -117,8 +117,8 @@ func (c *Config) validateTimeouts() error {
 func validateHotplug(h *HotplugConfig, prefix string) error {
 	// Validate durations
 	for name, val := range map[string]string{
-		"monitor_interval":   h.MonitorInterval,
-		"scale_up_cooldown":  h.ScaleUpCooldown,
+		"monitor_interval":    h.MonitorInterval,
+		"scale_up_cooldown":   h.ScaleUpCooldown,
 		"scale_down_cooldown": h.ScaleDownCooldown,
 	} {
 		if _, err := time.ParseDuration(val); err != nil {

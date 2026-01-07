@@ -107,7 +107,7 @@ func TestCanonicalizePath_SymlinkEscapeAttempt(t *testing.T) {
 	// Callers should then validate the resolved path is within allowed boundaries
 }
 
-func TestValidateDirectoryExists_AllowsSymlinkTarget(t *testing.T) {
+func TestValidateDirExists_AllowsSymlinkTarget(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create a target directory outside "allowed" area
@@ -126,19 +126,19 @@ func TestValidateDirectoryExists_AllowsSymlinkTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// validateDirectoryExists should succeed (the target exists)
+	// validateDirExists should succeed (the target exists)
 	// but the error message should show the resolved path
-	err := validateDirectoryExists(symlinkPath, "test_field")
+	err := validateDirExists(symlinkPath, "test_field")
 	if err != nil {
 		t.Logf("Error (expected none): %v", err)
-		t.Fatal("validateDirectoryExists should succeed for valid symlink target")
+		t.Fatal("validateDirExists should succeed for valid symlink target")
 	}
 
 	// The key security benefit: error messages and logs show the real path
 	// Administrators can detect symlink-based configuration manipulation
 }
 
-func TestEnsureDirectoryWritable_CreatesAtCanonicalPath(t *testing.T) {
+func TestEnsureDirWritable_CreatesAtCanonicalPath(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create a symlink to a directory
@@ -155,9 +155,9 @@ func TestEnsureDirectoryWritable_CreatesAtCanonicalPath(t *testing.T) {
 	// Request a new subdirectory via the symlink
 	newSubDir := filepath.Join(symlinkPath, "newsubdir")
 
-	err := ensureDirectoryWritable(newSubDir, "test_field")
+	err := ensureDirWritable(newSubDir, "test_field")
 	if err != nil {
-		t.Fatalf("ensureDirectoryWritable failed: %v", err)
+		t.Fatalf("ensureDirWritable failed: %v", err)
 	}
 
 	// The directory should be created at the canonical location
