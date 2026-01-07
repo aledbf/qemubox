@@ -150,7 +150,7 @@ expect {
 after 1000
 send_user "\n"
 send_user "Demo complete!\n"
-send_user "  - VM boot: ~300ms with full systemd\n"
+send_user "  - VM boot: ~240ms with full systemd\n"
 send_user "  - Isolated kernel from host\n"
 send_user "  - Docker running in VM\n"
 send_user "  - Containers with VM-level isolation\n"

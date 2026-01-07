@@ -21,18 +21,29 @@ proc type_cmd {cmd} {
 }
 
 proc comment {text} {
+    global SHELL_PROMPT
     send "# $text\r"
-    expect -re {\$|#}
+    expect -re $SHELL_PROMPT
+}
+
+# Comment procedure for inside VM (different prompt)
+proc vm_comment {text} {
+    global PROMPT
+    send "# $text\r"
+    expect -re $PROMPT
 }
 
 # Start clean bash
 spawn bash --norc --noprofile
 expect -re {\$|#}
 send "PS1='\\n\$ '\r"
-expect -re {\$}
+expect -re {\n\$ $}
 send "clear\r"
-expect -re {\$}
+expect -re {\n\$ $}
 after 100
+
+# Define shell prompt pattern (newline + $ + space at end of line)
+set SHELL_PROMPT {\n\$ $}
 
 # Define ctr command
 set CTR "ctr --address /var/run/qemubox/containerd.sock"
@@ -54,9 +65,9 @@ expect {
         exit 1
     }
     -re {saved|digest|unpacking|done|elapsed} {
-        expect -re {\$|#}
+        expect -re $SHELL_PROMPT
     }
-    -re {\$|#} {}
+    -re $SHELL_PROMPT {}
     timeout {
         send_user "\nERROR: Pull timeout\n"
         exit 1
@@ -66,26 +77,24 @@ after [expr {$LONG_DELAY * 500}]
 
 comment "Step 2: Run VM in background"
 type_cmd "$CTR run -d -t --snapshotter nexus-erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:latest snapshot-demo"
-expect -re {\$|#}
+expect -re $SHELL_PROMPT
 after 1000
 
 comment "Wait for VM to boot..."
 type_cmd "sleep 3"
-expect -re {\$|#}
+expect -re $SHELL_PROMPT
 after 4000
 
 comment "Check VM is running"
 type_cmd "$CTR task ls | grep snapshot-demo"
-expect -re {\$|#}
+expect -re $SHELL_PROMPT
 after 1000
 
-comment "Attach to VM console"
+comment "Attach to VM console (ctr task attach snapshot-demo)"
 after 500
 
-# Save the bash spawn id
+# Save the bash spawn id and spawn attach for better terminal handling
 set bash_spawn $spawn_id
-
-# Spawn attach directly for better terminal handling
 spawn ctr --address /var/run/qemubox/containerd.sock task attach snapshot-demo
 set vm_spawn $spawn_id
 
@@ -95,19 +104,17 @@ exp_internal 0
 # Wait for login prompt
 expect {
     -re {login:} {
-        send_user "\n>>> Saw login prompt, sending root...\n"
         after 500
         send "root\r"
     }
     timeout {
-        send_user "\nERROR: Login timeout waiting for login:\n"
+        send_user "\nERROR: Login timeout\n"
         exit 1
     }
 }
 
 expect {
     -re {Password:} {
-        send_user "\n>>> Saw password prompt...\n"
         after 500
         send "qemubox\r"
     }
@@ -126,39 +133,34 @@ set PROMPT {root@localhost.*#|~#}
 # PHASE 2: Make changes inside VM
 # ============================================
 
-comment "=== INSIDE VM: Making persistent changes ==="
+vm_comment "=== INSIDE VM: Making persistent changes ==="
 
-comment "Create a file that will persist"
+vm_comment "Create a file that will persist"
 type_cmd "echo 'Hello from the original VM!' > /root/persistent-data.txt"
 expect -re $PROMPT
 after 500
 
-comment "Create a directory with content"
+vm_comment "Create a directory with content"
 type_cmd "mkdir -p /root/my-project && echo 'version: 1.0' > /root/my-project/config.yaml"
 expect -re $PROMPT
 after 500
 
-comment "Install a package (this will persist)"
-type_cmd "apt-get update -qq && apt-get install -qq -y cowsay > /dev/null 2>&1"
+vm_comment "Add more files to demonstrate persistence"
+type_cmd "date > /root/timestamp.txt && echo 'snapshot test' >> /root/persistent-data.txt"
 expect -re $PROMPT
-after 2000
+after 500
 
-comment "Verify the package works"
-type_cmd "/usr/games/cowsay 'State will persist!'"
-expect -re $PROMPT
-after 1500
-
-comment "Show what we created"
-type_cmd "cat /root/persistent-data.txt && cat /root/my-project/config.yaml"
+vm_comment "Show what we created"
+type_cmd "cat /root/persistent-data.txt && cat /root/my-project/config.yaml && cat /root/timestamp.txt"
 expect -re $PROMPT
 after 1500
 
-comment "Sync filesystem"
+vm_comment "Sync filesystem"
 type_cmd "sync"
 expect -re $PROMPT
 after 500
 
-comment "Logout to detach from VM"
+vm_comment "Logout to detach from VM"
 send "exit\r"
 after 2000
 
@@ -177,40 +179,50 @@ set NERDCTL "nerdctl --address /var/run/qemubox/containerd.sock"
 
 comment "Stop VM before creating snapshot"
 type_cmd "$CTR task kill snapshot-demo"
-expect -re {\$|#}
+expect -re $SHELL_PROMPT
 after 2000
 
 comment "Wait for VM to stop"
 type_cmd "$CTR task ls | grep snapshot-demo || echo 'VM stopped'"
-expect -re {\$|#}
+expect -re $SHELL_PROMPT
 after 1000
 
 comment "Create new image using nerdctl commit"
 type_cmd "$NERDCTL commit --snapshotter nexus-erofs snapshot-demo docker.io/aledbf/sandbox:with-changes"
-expect -re {\$|#}
-after 3000
+# Wait for sha256 output indicating commit completed
+expect {
+    -re {sha256:[a-f0-9]+} {
+        expect -re $SHELL_PROMPT
+    }
+    -re $SHELL_PROMPT {}
+    timeout {
+        send_user "\nERROR: Commit timeout\n"
+        exit 1
+    }
+}
+after 1000
 
 comment "Verify new image was created"
 type_cmd "$CTR images ls | grep with-changes"
-expect -re {\$|#}
+expect -re $SHELL_PROMPT
 after 1000
 
 comment "Compare original image layers"
 type_cmd "$CTR images inspect ghcr.io/aledbf/qemubox/sandbox:latest | head -12"
-expect -re {\$|#}
+expect -re $SHELL_PROMPT
 after 2000
 
 comment "New image has additional layer with our changes"
 type_cmd "$CTR images inspect docker.io/aledbf/sandbox:with-changes | head -13"
-expect -re {\$|#}
+expect -re $SHELL_PROMPT
 after 2000
 
 comment "Clean up original container"
 type_cmd "$CTR task delete snapshot-demo 2>/dev/null || true"
-expect -re {\$|#}
+expect -re $SHELL_PROMPT
 after 1000
 type_cmd "$CTR container rm snapshot-demo 2>/dev/null || true"
-expect -re {\$|#}
+expect -re $SHELL_PROMPT
 after 1000
 
 # ============================================
@@ -221,15 +233,19 @@ comment "=== Run VM from our custom image ==="
 
 comment "Run new container from the image with our changes"
 type_cmd "$CTR run -d -t --snapshotter nexus-erofs --runtime io.containerd.qemubox.v1 docker.io/aledbf/sandbox:with-changes snapshot-new"
-expect -re {\$|#}
+expect -re $SHELL_PROMPT
 after 2000
 
 comment "Wait for VM to boot..."
 type_cmd "sleep 3"
-expect -re {\$|#}
+expect -re $SHELL_PROMPT
 after 4000
 
-comment "Attach to new VM"
+comment "Attach to new VM (ctr task attach snapshot-new)"
+after 500
+
+# Save bash spawn id for cleanup later
+set bash_spawn $spawn_id
 spawn ctr --address /var/run/qemubox/containerd.sock task attach snapshot-new
 
 # Wait for login
@@ -258,37 +274,69 @@ after [expr {$CMD_DELAY * 500}]
 # PHASE 5: Verify changes persisted
 # ============================================
 
-comment "=== VERIFY: Changes from first VM are here! ==="
+vm_comment "=== VERIFY: Changes from first VM are here! ==="
 
-comment "Check our persistent file"
+vm_comment "Check our persistent file"
 type_cmd "cat /root/persistent-data.txt"
 expect -re $PROMPT
 after 1000
 
-comment "Check our project directory"
+vm_comment "Check our project directory"
 type_cmd "cat /root/my-project/config.yaml"
 expect -re $PROMPT
 after 1000
 
-comment "Verify installed package still works"
-type_cmd "/usr/games/cowsay 'Snapshot works!'"
+vm_comment "Check timestamp file"
+type_cmd "cat /root/timestamp.txt"
 expect -re $PROMPT
-after 2000
+after 1000
 
-comment "Done! Shutting down..."
+vm_comment "Done! Shutting down..."
 type_cmd "halt"
 
 expect {
-    -re {\$|#} {}
+    -re $SHELL_PROMPT {}
     eof {}
     timeout {}
 }
 
+after 2000
+
+# Close VM attach and switch back to bash for cleanup
+catch {close}
+catch {wait}
+set spawn_id $bash_spawn
+
+# ============================================
+# PHASE 6: Cleanup
+# ============================================
+
+comment "=== Cleaning up ==="
+
+comment "Remove snapshot-new container"
+type_cmd "$CTR task kill snapshot-new 2>/dev/null || true"
+expect -re $SHELL_PROMPT
 after 1000
+type_cmd "$CTR task delete snapshot-new 2>/dev/null || true"
+expect -re $SHELL_PROMPT
+after 500
+type_cmd "$CTR container rm snapshot-new 2>/dev/null || true"
+expect -re $SHELL_PROMPT
+after 500
+
+comment "Remove the committed image"
+type_cmd "$CTR images rm docker.io/aledbf/sandbox:with-changes 2>/dev/null || true"
+expect -re $SHELL_PROMPT
+after 500
+
+comment "Cleanup complete!"
+after 1000
+
 send_user "\n"
 send_user "Snapshot Demo Complete!\n"
-send_user "  - Made changes in first VM (files + packages)\n"
+send_user "  - Made changes in first VM (files + directories)\n"
 send_user "  - Committed snapshot to preserve state\n"
 send_user "  - Ran new VM from saved snapshot\n"
 send_user "  - All changes persisted!\n"
+send_user "  - Resources cleaned up\n"
 send_user "\n"
