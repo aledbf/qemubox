@@ -142,7 +142,7 @@ chmod +x "${RELEASE_DIR}/usr/share/qemubox/libexec/cni/tc-redirect-tap"
 echo "  ok: tc-redirect-tap CNI plugin"
 
 echo "Downloading nexus-erofs-snapshotter and erofs tools..."
-NEXUS_EROFS_VERSION="${NEXUS_EROFS_VERSION:-v20250106.09}"
+NEXUS_EROFS_VERSION="${NEXUS_EROFS_VERSION:-v20250107.04}"
 NEXUS_EROFS_BASE_URL="https://github.com/aledbf/nexus-erofs/releases/download/${NEXUS_EROFS_VERSION}"
 
 NEXUS_EROFS_BINARIES=(

@@ -20,8 +20,7 @@ ExecStart=/usr/share/qemubox/bin/nexus-erofs-snapshotter \
   --containerd-address /var/run/qemubox/containerd.sock \
   --containerd-namespace default \
   --log-level debug \
-  --set-immutable \
-  --mkfs-options="-C65536"
+  --set-immutable
 
 Type=simple
 Restart=always
