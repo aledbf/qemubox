@@ -114,6 +114,18 @@ type cniNetworkManager struct {
 	// Multiple concurrent calls for the same ID will coordinate through this map
 	inFlight   map[string]*setupInFlight
 	inflightMu sync.Mutex
+
+	// Tracks in-flight teardown operations to avoid duplicate cleanup
+	// Prevents race conditions when multiple goroutines try to release the same container
+	teardownInFlight map[string]*teardownInFlight
+	teardownMu       sync.Mutex
+
+	// Metrics for CNI operations - allows per-instance tracking for testing
+	metrics *Metrics
+
+	// ipamDir is the directory where IPAM state files are stored.
+	// Defaults to /var/lib/cni/networks. Configurable for testing.
+	ipamDir string
 }
 
 // NewNetworkManager creates a network manager for the configured mode.
@@ -142,4 +154,9 @@ func (nm *cniNetworkManager) EnsureNetworkResources(ctx context.Context, env *En
 // ReleaseNetworkResources releases network resources for an environment using CNI.
 func (nm *cniNetworkManager) ReleaseNetworkResources(ctx context.Context, env *Environment) error {
 	return nm.releaseNetworkResourcesCNI(ctx, env)
+}
+
+// Metrics returns the CNI operation metrics for this manager instance.
+func (nm *cniNetworkManager) Metrics() *Metrics {
+	return nm.metrics
 }

@@ -84,6 +84,11 @@ func (m *CNIManager) loadAndCacheConfig() error {
 
 // Setup executes the CNI plugin chain to configure networking for a VM.
 // It returns a CNIResult containing the TAP device name and network configuration.
+//
+// Errors returned are wrapped with classification. Use errors.Is() to check:
+//   - cni.ErrResourceConflict: veth/IP already exists (orphaned from previous run)
+//   - cni.ErrIPAMExhausted: no IPs available in pool
+//   - cni.ErrTAPNotCreated: tc-redirect-tap plugin didn't create TAP device
 func (m *CNIManager) Setup(ctx context.Context, vmID string, netns string) (*CNIResult, error) {
 	// Get cached network configuration
 	netConfList, err := m.getNetworkConfig()
@@ -94,7 +99,8 @@ func (m *CNIManager) Setup(ctx context.Context, vmID string, netns string) (*CNI
 	// Execute CNI plugin chain
 	result, err := m.execPluginChain(ctx, vmID, netns, netConfList)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute CNI plugin chain: %w", err)
+		// Classify the error for callers to handle appropriately
+		return nil, ClassifyError(ctx, "ADD", netConfList.Name, err)
 	}
 	log.G(ctx).WithFields(log.Fields{
 		"net":        netConfList.Name,
@@ -105,8 +111,11 @@ func (m *CNIManager) Setup(ctx context.Context, vmID string, netns string) (*CNI
 	// Parse the result
 	cniResult, err := ParseCNIResultWithNetNS(result, netns)
 	if err != nil {
-		// Clean up on parse failure
-		_ = m.Teardown(ctx, vmID, netns)
+		// Clean up on parse failure - log teardown errors but return parse error
+		if teardownErr := m.Teardown(ctx, vmID, netns); teardownErr != nil {
+			log.G(ctx).WithError(teardownErr).WithField("vmID", vmID).
+				Warn("failed to teardown CNI after parse failure")
+		}
 		return nil, fmt.Errorf("failed to parse CNI result: %w", err)
 	}
 
@@ -114,6 +123,7 @@ func (m *CNIManager) Setup(ctx context.Context, vmID string, netns string) (*CNI
 }
 
 // Teardown executes the CNI plugin chain to clean up networking for a VM.
+// Errors are classified - use errors.Is() to check error categories.
 func (m *CNIManager) Teardown(ctx context.Context, vmID string, netns string) error {
 	// Get cached network configuration
 	netConfList, err := m.getNetworkConfig()
@@ -130,7 +140,7 @@ func (m *CNIManager) Teardown(ctx context.Context, vmID string, netns string) er
 
 	// Execute DEL operation
 	if err := m.cniConfig.DelNetworkList(ctx, netConfList, rt); err != nil {
-		return fmt.Errorf("failed to delete CNI network: %w", err)
+		return ClassifyError(ctx, "DEL", netConfList.Name, err)
 	}
 
 	return nil
@@ -188,8 +198,11 @@ func (m *CNIManager) execPluginChain(ctx context.Context, vmID string, netns str
 	// Convert to current version
 	currentResult, err := current.NewResultFromResult(result)
 	if err != nil {
-		// Clean up on conversion failure
-		_ = m.cniConfig.DelNetworkList(ctx, netConfList, rt)
+		// Clean up on conversion failure - log errors but return conversion error
+		if delErr := m.cniConfig.DelNetworkList(ctx, netConfList, rt); delErr != nil {
+			log.G(ctx).WithError(delErr).WithField("vmID", vmID).
+				Warn("failed to cleanup CNI after result conversion failure")
+		}
 		return nil, fmt.Errorf("failed to convert CNI result: %w", err)
 	}
 

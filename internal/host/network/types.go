@@ -46,4 +46,7 @@ type NetworkManager interface {
 
 	// ReleaseNetworkResources releases network resources for an environment
 	ReleaseNetworkResources(ctx context.Context, env *Environment) error
+
+	// Metrics returns the CNI operation metrics for this manager instance
+	Metrics() *Metrics
 }
