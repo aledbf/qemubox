@@ -1,11 +1,94 @@
+//go:build linux
+
 package qemu
 
 import (
 	"context"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const qmpTestSocketPath = "/tmp/test-qemu-qmp.sock"
+
+// TestMemoryAlignmentValidation tests the 128MB alignment requirement.
+// This is a unit test that doesn't require QEMU.
+func TestMemoryAlignmentValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		sizeBytes int64
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name:      "128MB aligned",
+			sizeBytes: 128 * 1024 * 1024,
+			wantErr:   false,
+		},
+		{
+			name:      "256MB aligned",
+			sizeBytes: 256 * 1024 * 1024,
+			wantErr:   false,
+		},
+		{
+			name:      "512MB aligned",
+			sizeBytes: 512 * 1024 * 1024,
+			wantErr:   false,
+		},
+		{
+			name:      "1GB aligned",
+			sizeBytes: 1024 * 1024 * 1024,
+			wantErr:   false,
+		},
+		{
+			name:      "64MB unaligned",
+			sizeBytes: 64 * 1024 * 1024,
+			wantErr:   true,
+			errMsg:    "128MB aligned",
+		},
+		{
+			name:      "100MB unaligned",
+			sizeBytes: 100 * 1024 * 1024,
+			wantErr:   true,
+			errMsg:    "128MB aligned",
+		},
+		{
+			name:      "200MB unaligned",
+			sizeBytes: 200 * 1024 * 1024,
+			wantErr:   true,
+			errMsg:    "128MB aligned",
+		},
+		{
+			name:      "1 byte unaligned",
+			sizeBytes: 1,
+			wantErr:   true,
+			errMsg:    "128MB aligned",
+		},
+	}
+
+	// Create a mock client that will fail on any actual QMP operation
+	// The alignment check happens before any QMP call
+	client := &qmpClient{}
+	client.closed.Store(true) // Mark as closed so it fails fast if we reach QMP calls
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := client.HotplugMemory(context.Background(), 0, tt.sizeBytes)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				// For aligned sizes, we expect to fail at the QMP call (client closed)
+				// not at alignment validation
+				if err != nil {
+					assert.NotContains(t, err.Error(), "aligned")
+				}
+			}
+		})
+	}
+}
 
 // TestQMPMemoryHotplug tests the memory hotplug functionality via QMP
 // This is an integration test that requires a running QEMU VM
@@ -240,7 +323,7 @@ func TestObjectAddDel(t *testing.T) {
 
 	// Add a memory backend
 	backendID := "test-mem-backend"
-	args := map[string]interface{}{
+	args := map[string]any{
 		"size": int64(128 * 1024 * 1024), // 128MB
 	}
 
