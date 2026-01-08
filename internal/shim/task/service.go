@@ -17,11 +17,15 @@
 //   - NEVER hold both locks simultaneously unless absolutely necessary
 //   - NEVER hold locks during slow operations (VM start, network setup, TTRPC calls)
 //
+// State Machine (lifecycle/StateMachine):
+//   - Manages shim state transitions: Idle -> Creating -> Running -> Deleting -> ShuttingDown
+//   - Replaces scattered atomics: creationInProgress, deletionInProgress, intentionalShutdown
+//   - Enforces valid state transitions and prevents race conditions
+//
 // Atomics (lock-free state):
 //   - eventsClosed: Set when event channel is closed (shutdown signal)
-//   - intentionalShutdown: Distinguishes clean shutdown from VM crash
-//   - deletionInProgress: Prevents new Create() calls during Delete()
 //   - inflight: Counts in-flight RPC operations for graceful shutdown
+//   - initStarted: Tracks if init process has been started
 //
 // Goroutine Ownership:
 //   - Main goroutine: Handles TTRPC service calls (Create, Start, Delete, etc.)
@@ -69,7 +73,6 @@ import (
 	"io"
 	"math/rand/v2"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -157,6 +160,7 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 
 	vmLM := lifecycle.NewManager()
 	s := &service{
+		stateMachine:             lifecycle.NewStateMachine(),
 		events:                   make(chan any, eventChannelBuffer),
 		cpuHotplugControllers:    make(map[string]cpuhotplug.CPUHotplugController),
 		memoryHotplugControllers: make(map[string]memhotplug.MemoryHotplugController),
@@ -222,6 +226,11 @@ type taskIO struct {
 
 // service is the shim implementation of a remote shim over TTRPC.
 type service struct {
+	// === State Machine ===
+	// Manages shim lifecycle state transitions (Idle -> Creating -> Running -> Deleting -> ShuttingDown)
+	// Replaces scattered atomics: creationInProgress, deletionInProgress, intentionalShutdown
+	stateMachine *lifecycle.StateMachine
+
 	// === Synchronization Primitives ===
 	// LOCK ORDER: Always acquire containerMu before controllerMu if you need both
 
@@ -252,15 +261,12 @@ type service struct {
 	events chan any
 
 	// === Shutdown Coordination ===
-	initiateShutdown    func()      // Callback to trigger shutdown service
-	eventsClosed        atomic.Bool // True when events channel is closed
-	eventsCloseOnce     sync.Once   // Ensures events channel closed exactly once
-	intentionalShutdown atomic.Bool // True for clean shutdown, false for VM crash
-	deletionInProgress  atomic.Bool // True during Delete() to reject concurrent Create()
-	creationInProgress  atomic.Bool // True during Create() to reject concurrent Create() and Delete()
-	shutdownSvc         shutdown.Service
-	inflight            atomic.Int64   // Count of in-flight RPC calls for graceful shutdown
-	exitFunc            func(code int) // Exit function (default: os.Exit), injectable for testing
+	initiateShutdown func()      // Callback to trigger shutdown service
+	eventsClosed     atomic.Bool // True when events channel is closed
+	eventsCloseOnce  sync.Once   // Ensures events channel closed exactly once
+	shutdownSvc      shutdown.Service
+	inflight         atomic.Int64   // Count of in-flight RPC calls for graceful shutdown
+	exitFunc         func(code int) // Exit function (default: os.Exit), injectable for testing
 
 	initStarted atomic.Bool // True once the init process has been started
 	connManager *ConnectionManager
@@ -272,82 +278,151 @@ func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
 }
 
 func (s *service) shutdown(ctx context.Context) error {
-	// Lock all mutexes in consistent order to prevent deadlocks
+	// Transition to ShuttingDown state
+	s.stateMachine.ForceTransition(lifecycle.StateShuttingDown)
+
+	// Get container ID before cleanup (briefly hold lock)
 	s.containerMu.Lock()
-	defer s.containerMu.Unlock()
+	containerID := s.containerID
+	s.containerMu.Unlock()
 
-	var errs []error
-	var mountCleanup func(context.Context) error
+	// Build and execute cleanup using the orchestrator
+	// This ensures proper ordering: hotplug -> io -> connection -> vm -> network -> mounts -> events
+	phases := s.buildCleanupPhases(containerID)
+	orchestrator := lifecycle.NewCleanupOrchestrator(phases)
+	result := orchestrator.Execute(ctx)
 
-	// Stop hotplug controllers before VM shutdown
+	// Reset init tracking
+	s.initStarted.Store(false)
+
+	// Close network manager (separate from ReleaseNetworkResources)
+	if s.networkManager != nil {
+		if err := s.networkManager.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to close network manager")
+		}
+	}
+
+	return result.AsError()
+}
+
+// =============================================================================
+// Cleanup Helper Methods (collect-then-execute pattern)
+// =============================================================================
+//
+// These methods follow the collect-then-execute pattern to avoid holding locks
+// during slow operations. Each method:
+// 1. Acquires lock briefly to extract resources
+// 2. Releases lock immediately
+// 3. Performs slow cleanup operations outside the lock
+//
+// This prevents deadlocks and reduces lock contention during shutdown.
+
+// stopAllHotplugControllers stops all CPU and memory hotplug controllers.
+// It collects controllers under lock and stops them outside the lock.
+func (s *service) stopAllHotplugControllers(_ context.Context) error {
+	// Collect controllers under lock
 	s.controllerMu.Lock()
-	for id, controller := range s.cpuHotplugControllers {
-		controller.Stop()
+	cpuControllers := make([]cpuhotplug.CPUHotplugController, 0, len(s.cpuHotplugControllers))
+	memControllers := make([]memhotplug.MemoryHotplugController, 0, len(s.memoryHotplugControllers))
+	for id, c := range s.cpuHotplugControllers {
+		cpuControllers = append(cpuControllers, c)
 		delete(s.cpuHotplugControllers, id)
 	}
-	for id, controller := range s.memoryHotplugControllers {
-		controller.Stop()
+	for id, c := range s.memoryHotplugControllers {
+		memControllers = append(memControllers, c)
 		delete(s.memoryHotplugControllers, id)
 	}
 	s.controllerMu.Unlock()
 
-	// Shutdown IO for container and execs
+	// Stop controllers outside lock (non-blocking, just signals goroutines to exit)
+	for _, c := range cpuControllers {
+		c.Stop()
+	}
+	for _, c := range memControllers {
+		c.Stop()
+	}
+	return nil
+}
+
+// shutdownAllIO shuts down all I/O forwarders for the container and execs.
+// It collects forwarders under lock and shuts them down outside the lock.
+func (s *service) shutdownAllIO(ctx context.Context) error {
+	// Collect forwarders under lock
+	s.containerMu.Lock()
+	var forwarders []IOForwarder
 	if s.container != nil && s.container.io != nil {
-		// Forwarder is always non-nil when io is set (noopForwarder for passthrough mode)
-		if err := s.container.io.init.forwarder.Shutdown(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("container %q io shutdown: %w", s.containerID, err))
-		}
-		for execID, pio := range s.container.io.exec {
-			if err := pio.forwarder.Shutdown(ctx); err != nil {
-				errs = append(errs, fmt.Errorf("container %q exec %q io shutdown: %w", s.containerID, execID, err))
-			}
+		forwarders = append(forwarders, s.container.io.init.forwarder)
+		for _, pio := range s.container.io.exec {
+			forwarders = append(forwarders, pio.forwarder)
 		}
 	}
-	if s.container != nil {
-		mountCleanup = s.container.mountCleanup
-		s.container.mountCleanup = nil
-	}
+	s.containerMu.Unlock()
 
-	// Close the connection manager before shutting down the VM.
-	if err := s.connManager.Close(); err != nil {
-		errs = append(errs, fmt.Errorf("connection manager close: %w", err))
-	}
-
-	// Shutdown VM (idempotent)
-	// IMPORTANT: This must happen BEFORE network cleanup so QEMU can exit cleanly
-	if err := s.vmLifecycle.Shutdown(ctx); err != nil {
-		errs = append(errs, fmt.Errorf("vm shutdown: %w", err))
-	}
-	s.initStarted.Store(false)
-
-	// Release network resources AFTER VM shutdown
-	if s.containerID != "" {
-		env := &network.Environment{ID: s.containerID}
-		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
-			log.G(ctx).WithError(err).WithField("id", s.containerID).Warn("failed to release network resources")
+	// Shutdown forwarders outside lock
+	var errs []error
+	for _, f := range forwarders {
+		if err := f.Shutdown(ctx); err != nil {
+			errs = append(errs, err)
 		}
 	}
+	return errors.Join(errs...)
+}
 
-	if mountCleanup != nil {
-		if err := mountCleanup(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("mount cleanup: %w", err))
-		}
+// extractMountCleanup extracts the mount cleanup function under lock.
+// Returns nil if no cleanup function is registered.
+func (s *service) extractMountCleanup() func(context.Context) error {
+	s.containerMu.Lock()
+	defer s.containerMu.Unlock()
+
+	if s.container == nil {
+		return nil
 	}
+	cleanup := s.container.mountCleanup
+	s.container.mountCleanup = nil
+	return cleanup
+}
 
-	// Close network manager
-	if s.networkManager != nil {
-		if err := s.networkManager.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("network manager close: %w", err))
-		}
-	}
-
-	// Stop forwarding events
+// closeEvents safely closes the events channel.
+// This signals the event forwarder goroutine to exit.
+func (s *service) closeEvents() error {
 	s.eventsClosed.Store(true)
 	s.eventsCloseOnce.Do(func() {
 		close(s.events)
 	})
+	return nil
+}
 
-	return errors.Join(errs...)
+// buildCleanupPhases constructs the cleanup phases for the CleanupOrchestrator.
+// The containerID is used for network cleanup.
+func (s *service) buildCleanupPhases(containerID string) lifecycle.CleanupPhases {
+	mountCleanup := s.extractMountCleanup()
+
+	return lifecycle.CleanupPhases{
+		HotplugStop: s.stopAllHotplugControllers,
+		IOShutdown:  s.shutdownAllIO,
+		ConnClose: func(ctx context.Context) error {
+			return s.connManager.Close()
+		},
+		VMShutdown: func(ctx context.Context) error {
+			return s.vmLifecycle.Shutdown(ctx)
+		},
+		NetworkCleanup: func(ctx context.Context) error {
+			if containerID == "" {
+				return nil
+			}
+			env := &network.Environment{ID: containerID}
+			return s.networkManager.ReleaseNetworkResources(ctx, env)
+		},
+		MountCleanup: func(ctx context.Context) error {
+			if mountCleanup == nil {
+				return nil
+			}
+			return mountCleanup(ctx)
+		},
+		EventClose: func(_ context.Context) error {
+			return s.closeEvents()
+		},
+	}
 }
 
 // getTaskClient returns the cached TTRPC client for task RPC calls.
@@ -381,7 +456,7 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 			ev, err := sc.Recv()
 			if err != nil {
 				// Check intentional shutdown first to avoid spurious warnings during normal shutdown
-				if s.intentionalShutdown.Load() {
+				if s.stateMachine.IsIntentionalShutdown() {
 					log.G(ctx).Debug("vm event stream closed (intentional shutdown)")
 					return
 				}
@@ -447,7 +522,7 @@ func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Cli
 	backoff := initialBackoff
 
 	for time.Now().Before(reconnectDeadline) {
-		if s.intentionalShutdown.Load() {
+		if s.stateMachine.IsIntentionalShutdown() {
 			log.G(ctx).Info("vm event stream reconnect aborted (intentional shutdown)")
 			return nil, nil, false
 		}
@@ -495,7 +570,7 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		"id":                   r.ID,
 		"exec":                 r.ExecID,
 		"has_cached_client":    s.connManager.HasClient(),
-		"intentional_shutdown": s.intentionalShutdown.Load(),
+		"intentional_shutdown": s.stateMachine.IsIntentionalShutdown(),
 	}).Info("start: request received")
 
 	clientStart := time.Now()
@@ -543,16 +618,6 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	return resp, nil
 }
 
-func isProcessAlreadyFinished(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, os.ErrProcessDone) {
-		return true
-	}
-	return strings.Contains(err.Error(), "process already finished")
-}
-
 type deleteCleanup struct {
 	ioForwarders     []IOForwarder
 	cpuController    cpuhotplug.CPUHotplugController
@@ -563,42 +628,15 @@ type deleteCleanup struct {
 }
 
 func (s *service) cleanupOnDeleteFailure(ctx context.Context, id string) {
-	var (
-		ioForwarder  IOForwarder
-		mountCleanup func(context.Context) error
-	)
+	s.stateMachine.SetIntentionalShutdown(true)
 
-	s.containerMu.Lock()
-	if s.container != nil && s.container.io != nil {
-		ioForwarder = s.container.io.init.forwarder
-	}
-	if s.container != nil {
-		mountCleanup = s.container.mountCleanup
-		s.container.mountCleanup = nil
-	}
-	s.containerMu.Unlock()
+	// Use partial cleanup starting from IO shutdown (skip hotplug which may not be running)
+	phases := s.buildCleanupPhases(id)
+	orchestrator := lifecycle.NewCleanupOrchestrator(phases)
+	result := orchestrator.ExecutePartial(ctx, lifecycle.PhaseIOShutdown)
 
-	if ioForwarder != nil {
-		if ioErr := ioForwarder.Shutdown(ctx); ioErr != nil {
-			log.G(ctx).WithError(ioErr).Warn("failed to shutdown io after delete failure")
-		}
-	}
-
-	s.intentionalShutdown.Store(true)
-	if shutdownErr := s.vmLifecycle.Shutdown(ctx); shutdownErr != nil {
-		if !isProcessAlreadyFinished(shutdownErr) {
-			log.G(ctx).WithError(shutdownErr).Warn("failed to shutdown VM after delete error")
-		}
-	}
-
-	env := &network.Environment{ID: id}
-	if netErr := s.networkManager.ReleaseNetworkResources(ctx, env); netErr != nil {
-		log.G(ctx).WithError(netErr).WithField("id", id).Warn("failed to release network resources after delete failure")
-	}
-	if mountCleanup != nil {
-		if err := mountCleanup(ctx); err != nil {
-			log.G(ctx).WithError(err).WithField("id", id).Warn("failed to cleanup mounts after delete failure")
-		}
+	if result.HasErrors() {
+		log.G(ctx).WithField("failed_phases", result.FailedPhases()).Warn("cleanup after delete failure had errors")
 	}
 }
 
@@ -643,6 +681,7 @@ func (s *service) collectDeleteCleanup(r *taskAPI.DeleteRequest) deleteCleanup {
 }
 
 func (s *service) runDeleteCleanup(ctx context.Context, r *taskAPI.DeleteRequest, cleanup deleteCleanup) {
+	// Shutdown I/O forwarders (already extracted from state)
 	for i, forwarder := range cleanup.ioForwarders {
 		if err := forwarder.Shutdown(ctx); err != nil {
 			if i == 0 && r.ExecID == "" {
@@ -653,6 +692,7 @@ func (s *service) runDeleteCleanup(ctx context.Context, r *taskAPI.DeleteRequest
 		}
 	}
 
+	// Stop hotplug controllers (already extracted from state)
 	if cleanup.cpuController != nil {
 		cleanup.cpuController.Stop()
 	}
@@ -660,30 +700,37 @@ func (s *service) runDeleteCleanup(ctx context.Context, r *taskAPI.DeleteRequest
 		cleanup.memController.Stop()
 	}
 
+	// For container deletion, use orchestrator for VM/network/mount cleanup
 	if cleanup.needVMShutdown {
 		log.G(ctx).Info("container deleted, shutting down VM")
-		s.intentionalShutdown.Store(true)
-		if err := s.vmLifecycle.Shutdown(ctx); err != nil {
-			if !isProcessAlreadyFinished(err) {
-				log.G(ctx).WithError(err).Warn("failed to shutdown VM after container deleted")
-			}
-		}
-	}
+		s.stateMachine.SetIntentionalShutdown(true)
 
-	if cleanup.needNetworkClean {
-		env := &network.Environment{ID: r.ID}
-		if err := s.networkManager.ReleaseNetworkResources(ctx, env); err != nil {
-			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to release network resources during delete")
+		// Build phases with pre-extracted mount cleanup
+		phases := lifecycle.CleanupPhases{
+			VMShutdown: func(ctx context.Context) error {
+				return s.vmLifecycle.Shutdown(ctx)
+			},
+			NetworkCleanup: func(ctx context.Context) error {
+				if !cleanup.needNetworkClean {
+					return nil
+				}
+				env := &network.Environment{ID: r.ID}
+				return s.networkManager.ReleaseNetworkResources(ctx, env)
+			},
+			MountCleanup: func(ctx context.Context) error {
+				if cleanup.mountCleanup == nil {
+					return nil
+				}
+				return cleanup.mountCleanup(ctx)
+			},
 		}
-	}
+		orchestrator := lifecycle.NewCleanupOrchestrator(phases)
+		result := orchestrator.ExecutePartial(ctx, lifecycle.PhaseVMShutdown)
 
-	if cleanup.mountCleanup != nil {
-		if err := cleanup.mountCleanup(ctx); err != nil {
-			log.G(ctx).WithError(err).WithField("id", r.ID).Warn("failed to cleanup mounts during delete")
+		if result.HasErrors() {
+			log.G(ctx).WithField("failed_phases", result.FailedPhases()).Warn("delete cleanup had errors")
 		}
-	}
 
-	if cleanup.needVMShutdown {
 		log.G(ctx).Info("VM and network cleanup complete, scheduling shim exit")
 		go s.requestShutdownAndExit(ctx, "container deleted")
 	}
@@ -697,14 +744,18 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 
 	// Mark deletion in progress (only for container, not exec)
 	if r.ExecID == "" {
-		if !s.deletionInProgress.CompareAndSwap(false, true) {
-			return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "delete already in progress")
-		}
-
-		// Check if creation is in progress - fail fast to avoid race
-		if s.creationInProgress.Load() {
-			s.deletionInProgress.Store(false) // Reset deletion flag
-			return nil, errgrpc.ToGRPCf(errdefs.ErrFailedPrecondition, "cannot delete while container creation is in progress")
+		if !s.stateMachine.TryStartDeleting() {
+			state := s.stateMachine.State()
+			if state == lifecycle.StateCreating {
+				return nil, errgrpc.ToGRPCf(errdefs.ErrFailedPrecondition, "cannot delete while container creation is in progress")
+			}
+			if state == lifecycle.StateShuttingDown {
+				return nil, errgrpc.ToGRPCf(errdefs.ErrFailedPrecondition, "shim is shutting down")
+			}
+			if state == lifecycle.StateDeleting {
+				return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "delete already in progress")
+			}
+			return nil, errgrpc.ToGRPCf(errdefs.ErrFailedPrecondition, "cannot delete in state: %s", state)
 		}
 	}
 
@@ -1055,7 +1106,7 @@ func (s *service) Shutdown(ctx context.Context, r *taskAPI.ShutdownRequest) (*pt
 	defer s.inflight.Add(-1)
 	log.G(ctx).WithFields(log.Fields{"id": r.ID}).Debug("shutdown request")
 
-	s.intentionalShutdown.Store(true)
+	s.stateMachine.SetIntentionalShutdown(true)
 
 	if s.shutdownSvc != nil {
 		go s.requestShutdownAndExit(ctx, "shutdown rpc")

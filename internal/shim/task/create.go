@@ -75,15 +75,16 @@ func (s *service) validateCreateRequest(ctx context.Context, r *taskAPI.CreateTa
 		return errgrpc.ToGRPC(fmt.Errorf("checkpoints not supported: %w", errdefs.ErrNotImplemented))
 	}
 
-	// Atomically mark creation in progress to prevent concurrent Create() or Delete()
-	if !s.creationInProgress.CompareAndSwap(false, true) {
+	// Atomically transition to Creating state to prevent concurrent Create() or Delete()
+	if !s.stateMachine.TryStartCreating() {
+		state := s.stateMachine.State()
+		if state == lifecycle.StateDeleting {
+			return errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim is deleting container; requires fresh shim per container")
+		}
+		if state == lifecycle.StateShuttingDown {
+			return errgrpc.ToGRPCf(errdefs.ErrFailedPrecondition, "shim is shutting down")
+		}
 		return errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "container creation already in progress")
-	}
-
-	// Check if deletion is in progress
-	if s.deletionInProgress.Load() {
-		s.creationInProgress.Store(false)
-		return errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim is deleting container; requires fresh shim per container")
 	}
 
 	// Check if container already exists
@@ -92,13 +93,13 @@ func (s *service) validateCreateRequest(ctx context.Context, r *taskAPI.CreateTa
 	s.containerMu.Unlock()
 
 	if _, err := s.vmLifecycle.Instance(); err == nil || hasContainer {
-		s.creationInProgress.Store(false)
+		_ = s.stateMachine.MarkCreationFailed()
 		return errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "shim already running a container; requires fresh shim per container")
 	}
 
 	// Security: prevent path traversal via container ID
 	if strings.ContainsAny(r.ID, "/\\") {
-		s.creationInProgress.Store(false)
+		_ = s.stateMachine.MarkCreationFailed()
 		return errgrpc.ToGRPCf(errdefs.ErrInvalidArgument, "container ID contains invalid path separators: %q", r.ID)
 	}
 
@@ -187,7 +188,7 @@ func (s *service) startVM(ctx context.Context, state *createState) error {
 
 	bootTime := time.Since(prestart)
 	log.G(ctx).WithField("bootTime", bootTime).Debug("VM boot completed")
-	s.intentionalShutdown.Store(false)
+	s.stateMachine.SetIntentionalShutdown(false)
 
 	// Get VM client for event stream
 	vmc, err := s.vmLifecycle.Client()
@@ -335,11 +336,18 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 		"bundle": r.Bundle,
 	}).Debug("creating container task")
 
-	// Phase 1: Validation (no cleanup needed)
+	// Phase 1: Validation (transitions state to Creating)
 	if err := s.validateCreateRequest(ctx, r); err != nil {
 		return nil, err
 	}
-	defer s.creationInProgress.Store(false)
+
+	// On any failure, mark creation as failed (transitions Creating -> Idle)
+	var createSucceeded bool
+	defer func() {
+		if !createSucceeded {
+			_ = s.stateMachine.MarkCreationFailed()
+		}
+	}()
 
 	presetup := time.Now()
 	state := &createState{request: r}
@@ -369,6 +377,12 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*ta
 	// Phase 5: Finalize (store state, start controllers)
 	// No rollback after this - container is considered created
 	s.finalizeCreate(ctx, state, resp)
+
+	// Transition to Running state
+	if err := s.stateMachine.MarkCreated(); err != nil {
+		log.G(ctx).WithError(err).Error("failed to transition to running state")
+	}
+	createSucceeded = true
 
 	return &taskAPI.CreateTaskResponse{Pid: resp.Pid}, nil
 }
