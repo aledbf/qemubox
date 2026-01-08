@@ -112,16 +112,20 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 	r := state.request
 
 	// Check KVM availability
+	kvmStart := time.Now()
 	if err := lifecycle.CheckKVM(); err != nil {
 		return err
 	}
+	kvmDuration := time.Since(kvmStart)
 
 	// Load and transform bundle
+	bundleStart := time.Now()
 	b, err := transform.LoadForCreate(ctx, r.Bundle)
 	if err != nil {
 		return err
 	}
 	state.bundle = b
+	bundleDuration := time.Since(bundleStart)
 
 	// Compute resource configuration
 	resourceCfg, _ := resources.ComputeConfig(ctx, &b.Spec)
@@ -135,19 +139,23 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 	}).Debug("VM resource configuration")
 
 	// Create VM instance
+	vmCreateStart := time.Now()
 	vmi, err := s.vmLifecycle.CreateVM(ctx, r.ID, r.Bundle, resourceCfg)
 	if err != nil {
 		return err
 	}
 	state.vmInstance = vmi
+	vmCreateDuration := time.Since(vmCreateStart)
 
 	// Setup mounts
+	mountStart := time.Now()
 	setupResult, err := s.platformMounts.Setup(ctx, vmi, r.ID, r.Rootfs)
 	if err != nil {
 		return err
 	}
 	state.mountCleanup = setupResult.Cleanup
 	state.mounts = setupResult.Mounts
+	mountDuration := time.Since(mountStart)
 
 	// Register mount cleanup
 	state.cleanup.add("mounts", func(ctx context.Context) error {
@@ -158,18 +166,28 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 	})
 
 	// Setup networking
+	networkStart := time.Now()
 	state.netnsPath = "/var/run/netns/" + r.ID
 	netCfg, err := s.platformNetwork.Setup(ctx, s.networkManager, vmi, r.ID, state.netnsPath)
 	if err != nil {
 		return err
 	}
 	state.netConfig = netCfg
+	networkDuration := time.Since(networkStart)
 
 	// Register network cleanup
 	state.cleanup.add("network", func(ctx context.Context) error {
 		env := &network.Environment{ID: r.ID}
 		return s.networkManager.ReleaseNetworkResources(ctx, env)
 	})
+
+	log.G(ctx).WithFields(log.Fields{
+		"t_kvm_check":  kvmDuration,
+		"t_bundle":     bundleDuration,
+		"t_vm_create":  vmCreateDuration,
+		"t_mounts":     mountDuration,
+		"t_network":    networkDuration,
+	}).Info("setupVMInstance timings")
 
 	return nil
 }
@@ -187,21 +205,30 @@ func (s *service) startVM(ctx context.Context, state *createState) error {
 	}
 
 	bootTime := time.Since(prestart)
-	log.G(ctx).WithField("bootTime", bootTime).Debug("VM boot completed")
 	s.stateMachine.SetIntentionalShutdown(false)
 
 	// Get VM client for event stream
+	clientStart := time.Now()
 	vmc, err := s.vmLifecycle.Client()
 	if err != nil {
 		return err
 	}
+	clientDuration := time.Since(clientStart)
 
 	// Start forwarding events
+	eventStart := time.Now()
 	ns, _ := namespaces.Namespace(ctx)
 	eventCtx := namespaces.WithNamespace(context.WithoutCancel(ctx), ns)
 	if err := s.startEventForwarder(eventCtx, vmc); err != nil {
 		return err
 	}
+	eventDuration := time.Since(eventStart)
+
+	log.G(ctx).WithFields(log.Fields{
+		"t_boot":   bootTime,
+		"t_client": clientDuration,
+		"t_event":  eventDuration,
+	}).Info("startVM timings")
 
 	return nil
 }
@@ -213,18 +240,23 @@ func (s *service) createTaskInVM(ctx context.Context, state *createState) (*task
 	// Dial TTRPC client for Create RPCs.
 	// NOTE: We intentionally do NOT cache this connection because vsock connections
 	// can become stale between Create completing and Start being called.
+	dialStart := time.Now()
 	rpcClient, err := s.vmLifecycle.DialClient(ctx)
 	if err != nil {
 		log.G(ctx).WithError(err).Error("create: failed to dial RPC client")
 		return nil, err
 	}
+	dialDuration := time.Since(dialStart)
 
 	// Create bundle in VM
+	bundleFilesStart := time.Now()
 	bundleFiles, err := state.bundle.Files()
 	if err != nil {
 		return nil, err
 	}
+	bundleFilesDuration := time.Since(bundleFilesStart)
 
+	bundleRPCStart := time.Now()
 	bundleService := bundleAPI.NewTTRPCBundleClient(rpcClient)
 	br, err := bundleService.Create(ctx, &bundleAPI.CreateRequest{
 		ID:    r.ID,
@@ -233,8 +265,10 @@ func (s *service) createTaskInVM(ctx context.Context, state *createState) (*task
 	if err != nil {
 		return nil, err
 	}
+	bundleRPCDuration := time.Since(bundleRPCStart)
 
 	// Setup I/O forwarding
+	ioSetupStart := time.Now()
 	state.containerIO = stdio.Stdio{
 		Stdin:    r.Stdin,
 		Stdout:   r.Stdout,
@@ -248,8 +282,10 @@ func (s *service) createTaskInVM(ctx context.Context, state *createState) (*task
 	}
 	state.guestIO = cio
 	state.ioForwarder = ioForwarder
+	ioSetupDuration := time.Since(ioSetupStart)
 
 	// Create task in VM
+	taskRPCStart := time.Now()
 	vr := &taskAPI.CreateTaskRequest{
 		ID:       r.ID,
 		Bundle:   br.Bundle,
@@ -270,12 +306,24 @@ func (s *service) createTaskInVM(ctx context.Context, state *createState) (*task
 		}
 		return nil, err
 	}
+	taskRPCDuration := time.Since(taskRPCStart)
 
 	// Start the I/O forwarder AFTER guest has created the process
+	ioStartStart := time.Now()
 	if err := ioForwarder.Start(ctx); err != nil {
 		log.G(ctx).WithError(err).Error("failed to start I/O forwarder")
 		// Don't fail the create, just log - I/O may not work but container is created
 	}
+	ioStartDuration := time.Since(ioStartStart)
+
+	log.G(ctx).WithFields(log.Fields{
+		"t_dial":         dialDuration,
+		"t_bundle_files": bundleFilesDuration,
+		"t_bundle_rpc":   bundleRPCDuration,
+		"t_io_setup":     ioSetupDuration,
+		"t_task_rpc":     taskRPCDuration,
+		"t_io_start":     ioStartDuration,
+	}).Info("createTaskInVM timings")
 
 	return resp, nil
 }
