@@ -9,6 +9,7 @@ import (
 	"github.com/containerd/console"
 	google_protobuf "github.com/containerd/containerd/v2/pkg/protobuf/types"
 	"github.com/containerd/errdefs"
+	"github.com/containerd/log"
 )
 
 // validTransitions defines which state transitions are allowed.
@@ -100,7 +101,11 @@ func (s *initStateMachine) SetExited(status int) {
 	switch s.currentState {
 	case StateCreated, StateRunning:
 		s.p.setExited(status)
-		_ = s.transition(StateStopped)
+		if err := s.transition(StateStopped); err != nil {
+			// Log but don't panic - the process has already exited, we must reflect that
+			log.L.WithError(err).Error("invalid state transition during exit, forcing to stopped state")
+			s.currentState = StateStopped
+		}
 	case StateStopped, StateDeleted:
 		// no-op
 	}
@@ -207,7 +212,11 @@ func (s *execStateMachine) SetExited(status int) {
 	switch s.currentState {
 	case StateCreated, StateRunning:
 		s.p.setExited(status)
-		_ = s.transition(StateStopped)
+		if err := s.transition(StateStopped); err != nil {
+			// Log but don't panic - the process has already exited, we must reflect that
+			log.L.WithError(err).Error("invalid state transition during exit, forcing to stopped state")
+			s.currentState = StateStopped
+		}
 	case StateStopped, StateDeleted:
 		// no-op
 	}
