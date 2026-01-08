@@ -80,10 +80,81 @@ func (p *processIO) Copy(ctx context.Context, wg *sync.WaitGroup) (io.Closer, er
 	return c, nil
 }
 
+// ioConfig holds configuration for creating process I/O.
+// Note: context is passed separately to factory functions (not stored in struct).
+type ioConfig struct {
+	id      string
+	ioUID   int
+	ioGID   int
+	stdio   stdio.Stdio
+	streams stream.Manager
+}
+
+// ioFactory creates I/O for a specific scheme.
+// ctx is passed separately to avoid storing context in a struct.
+type ioFactory func(ctx context.Context, cfg ioConfig, u *url.URL, pio *processIO) error
+
+// ioFactories maps scheme names to their factory functions.
+// Each factory is responsible for setting up pio.io, pio.copy, and pio.streams.
+var ioFactories = map[string]ioFactory{
+	"stream": createStreamIO,
+	"fifo":   createFifoIO,
+	"binary": createBinaryIO,
+	"file":   createFileIO,
+}
+
+func createStreamIO(ctx context.Context, cfg ioConfig, u *url.URL, pio *processIO) error {
+	streams, err := getStreams(cfg.stdio, cfg.streams)
+	if err != nil {
+		return err
+	}
+	log.G(ctx).WithField("id", cfg.id).WithField("streams", streams).Debug("using stream-based I/O")
+	pio.streams = streams
+	pio.copy = true
+	pio.io, err = runc.NewPipeIO(cfg.ioUID, cfg.ioGID, withConditionalIO(cfg.stdio))
+	return err
+}
+
+func createFifoIO(_ context.Context, cfg ioConfig, _ *url.URL, pio *processIO) error {
+	pio.copy = true
+	var err error
+	pio.io, err = runc.NewPipeIO(cfg.ioUID, cfg.ioGID, withConditionalIO(cfg.stdio))
+	return err
+}
+
+func createBinaryIO(ctx context.Context, cfg ioConfig, u *url.URL, pio *processIO) error {
+	var err error
+	pio.io, err = NewBinaryIO(ctx, cfg.id, u)
+	return err
+}
+
+func createFileIO(_ context.Context, cfg ioConfig, u *url.URL, pio *processIO) error {
+	filePath := u.Path
+	if err := os.MkdirAll(filepath.Dir(filePath), 0750); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	pio.stdio.Stdout = filePath
+	pio.stdio.Stderr = filePath
+	pio.copy = true
+	pio.io, err = runc.NewPipeIO(cfg.ioUID, cfg.ioGID, withConditionalIO(cfg.stdio))
+	return err
+}
+
+// createIO creates I/O for a process based on the stdio configuration.
+// Supported schemes: null, stream, fifo (default), binary, file.
 func createIO(ctx context.Context, id string, ioUID, ioGID int, stdio stdio.Stdio, ss stream.Manager) (*processIO, error) {
 	pio := &processIO{
 		stdio: stdio,
 	}
+
+	// Handle null I/O case
 	if stdio.IsNull() {
 		i, err := runc.NewNullIO()
 		if err != nil {
@@ -92,53 +163,35 @@ func createIO(ctx context.Context, id string, ioUID, ioGID int, stdio stdio.Stdi
 		pio.io = i
 		return pio, nil
 	}
+
+	// Parse stdout URI to determine scheme
 	u, err := url.Parse(stdio.Stdout)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse stdout uri: %w", err)
 	}
 	if u.Scheme == "" {
-		u.Scheme = "fifo"
+		u.Scheme = "fifo" // Default scheme
 	}
 	pio.uri = u
-	switch u.Scheme {
-	case "stream":
-		var streams [3]io.ReadWriteCloser
-		streams, err = getStreams(stdio, ss)
-		if err != nil {
-			return nil, err
-		}
-		log.G(ctx).WithField("id", id).WithField("streams", streams).Debug("using stream-based I/O")
-		pio.streams = streams
-		pio.copy = true
-		pio.io, err = runc.NewPipeIO(ioUID, ioGID, withConditionalIO(stdio))
-	case "fifo":
-		pio.copy = true
-		pio.io, err = runc.NewPipeIO(ioUID, ioGID, withConditionalIO(stdio))
-	case "binary":
-		pio.io, err = NewBinaryIO(ctx, id, u)
-	case "file":
-		filePath := u.Path
-		if err := os.MkdirAll(filepath.Dir(filePath), 0750); err != nil {
-			return nil, err
-		}
-		var f *os.File
-		f, err = os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-		if err != nil {
-			return nil, err
-		}
-		if err := f.Close(); err != nil {
-			return nil, err
-		}
-		pio.stdio.Stdout = filePath
-		pio.stdio.Stderr = filePath
-		pio.copy = true
-		pio.io, err = runc.NewPipeIO(ioUID, ioGID, withConditionalIO(stdio))
-	default:
+
+	// Look up factory for this scheme
+	factory, ok := ioFactories[u.Scheme]
+	if !ok {
 		return nil, fmt.Errorf("unsupported STDIO scheme %s: %w", u.Scheme, errdefs.ErrNotImplemented)
 	}
-	if err != nil {
+
+	// Create I/O using the factory
+	cfg := ioConfig{
+		id:      id,
+		ioUID:   ioUID,
+		ioGID:   ioGID,
+		stdio:   stdio,
+		streams: ss,
+	}
+	if err := factory(ctx, cfg, u, pio); err != nil {
 		return nil, err
 	}
+
 	return pio, nil
 }
 

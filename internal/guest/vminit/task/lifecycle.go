@@ -20,27 +20,45 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/systools"
 )
 
-// Create a new initial process and container with the underlying OCI runtime
+// Create a new initial process and container with the underlying OCI runtime.
+// The lock is held only briefly to check for duplicates and store the container,
+// not during the slow runc.NewContainer() call.
 func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (*taskAPI.CreateTaskResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	ctx = log.WithLogger(ctx, log.G(ctx).WithField("id", r.ID))
 
 	log.G(ctx).WithField("bundle", r.Bundle).Info("create task request")
 
+	// Check if container already exists (quick lock)
+	s.mu.RLock()
+	if _, exists := s.containers[r.ID]; exists {
+		s.mu.RUnlock()
+		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "container %s already exists", r.ID)
+	}
+	s.mu.RUnlock()
+
+	// Subscribe for early exit detection before creating container
 	handleStarted, cleanup := s.preStart(nil)
 	defer cleanup()
 
 	systools.DumpFile(ctx, filepath.Join(r.Bundle, "config.json"))
 
+	// Create container outside lock - this is the slow operation (200-500ms)
 	container, err := runc.NewContainer(ctx, s.platform, r, s.streams)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
 	log.G(ctx).WithField("container_id", container.ID).Info("created container")
 
+	// Store container with lock - handle race where another Create happened concurrently
+	s.mu.Lock()
+	if _, exists := s.containers[r.ID]; exists {
+		s.mu.Unlock()
+		// Another Create won the race - clean up our container
+		_, _ = container.Delete(ctx, &taskAPI.DeleteRequest{ID: r.ID})
+		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "container %s already exists", r.ID)
+	}
 	s.containers[r.ID] = container
+	s.mu.Unlock()
 
 	s.send(&eventstypes.TaskCreate{
 		ContainerID: r.ID,

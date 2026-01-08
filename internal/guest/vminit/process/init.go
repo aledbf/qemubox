@@ -88,7 +88,7 @@ func New(id string, runtime *runc.Runc, stdio stdio.Stdio, sm stream.Manager) *I
 		waitBlock: make(chan struct{}),
 		streams:   sm,
 	}
-	p.initState = &createdState{p: p}
+	p.initState = newInitStateMachine(p)
 	return p
 }
 
@@ -428,7 +428,7 @@ func (p *Init) exec(_ context.Context, path string, r *ExecConfig) (Process, err
 		},
 		waitBlock: make(chan struct{}),
 	}
-	e.execState = &execCreatedState{p: e}
+	e.execState = newExecStateMachine(e)
 	return e, nil
 }
 

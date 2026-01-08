@@ -12,22 +12,25 @@ import (
 func TestInitStateSetExited(t *testing.T) {
 	tests := []struct {
 		name          string
-		setupState    func(*Init) initState
-		expectedFinal string
+		initialState  State
+		expectedFinal State
 	}{
-		{"created → stopped", func(p *Init) initState { return &createdState{p: p} }, stateStopped},
-		{"running → stopped", func(p *Init) initState { return &runningState{p: p} }, stateStopped},
+		{"created → stopped", StateCreated, StateStopped},
+		{"running → stopped", StateRunning, StateStopped},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			proc := &Init{}
-			state := tt.setupState(proc)
-			proc.initState = state
+			proc := &Init{waitBlock: make(chan struct{})}
+			sm := newInitStateMachine(proc)
 
-			state.SetExited(0)
+			// Manually set state for testing
+			sm.currentState = tt.initialState
+			proc.initState = sm
 
-			if got := stateName(proc.initState); got != tt.expectedFinal {
+			sm.SetExited(0)
+
+			if got := sm.state(); got != tt.expectedFinal {
 				t.Errorf("Expected state %s, got %s", tt.expectedFinal, got)
 			}
 		})
@@ -38,33 +41,43 @@ func TestInitStateSetExited(t *testing.T) {
 func TestInitInvalidStateTransitions(t *testing.T) {
 	tests := []struct {
 		name          string
-		state         initState
-		operation     func(initState) error
+		initialState  State
+		operation     func(*initStateMachine) error
 		expectedError string
 	}{
 		{
 			name:          "stopped: cannot start",
-			state:         &stoppedState{p: &Init{}},
-			operation:     func(s initState) error { return s.Start(context.Background()) },
+			initialState:  StateStopped,
+			operation:     func(s *initStateMachine) error { return s.Start(context.Background()) },
 			expectedError: "cannot start a stopped process",
 		},
 		{
 			name:          "deleted: cannot start",
-			state:         &deletedState{},
-			operation:     func(s initState) error { return s.Start(context.Background()) },
+			initialState:  StateDeleted,
+			operation:     func(s *initStateMachine) error { return s.Start(context.Background()) },
 			expectedError: "cannot start a deleted process",
 		},
 		{
 			name:          "deleted: cannot delete",
-			state:         &deletedState{},
-			operation:     func(s initState) error { return s.Delete(context.Background()) },
+			initialState:  StateDeleted,
+			operation:     func(s *initStateMachine) error { return s.Delete(context.Background()) },
 			expectedError: "cannot delete a deleted process",
+		},
+		{
+			name:          "running: cannot delete",
+			initialState:  StateRunning,
+			operation:     func(s *initStateMachine) error { return s.Delete(context.Background()) },
+			expectedError: "cannot delete a running process",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.operation(tt.state)
+			proc := &Init{}
+			sm := newInitStateMachine(proc)
+			sm.currentState = tt.initialState
+
+			err := tt.operation(sm)
 
 			if err == nil {
 				t.Fatal("Expected error but got nil")
@@ -81,22 +94,23 @@ func TestInitInvalidStateTransitions(t *testing.T) {
 func TestExecStateSetExited(t *testing.T) {
 	tests := []struct {
 		name          string
-		setupState    func(*execProcess) execState
-		expectedFinal string
+		initialState  State
+		expectedFinal State
 	}{
-		{"execCreated → stopped", func(p *execProcess) execState { return &execCreatedState{p: p} }, stateStopped},
-		{"execRunning → stopped", func(p *execProcess) execState { return &execRunningState{p: p} }, stateStopped},
+		{"created → stopped", StateCreated, StateStopped},
+		{"running → stopped", StateRunning, StateStopped},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			proc := &execProcess{}
-			state := tt.setupState(proc)
-			proc.execState = state
+			proc := &execProcess{waitBlock: make(chan struct{})}
+			sm := newExecStateMachine(proc)
+			sm.currentState = tt.initialState
+			proc.execState = sm
 
-			state.SetExited(0)
+			sm.SetExited(0)
 
-			if got := stateName(proc.execState); got != tt.expectedFinal {
+			if got := sm.state(); got != tt.expectedFinal {
 				t.Errorf("Expected state %s, got %s", tt.expectedFinal, got)
 			}
 		})
@@ -107,33 +121,43 @@ func TestExecStateSetExited(t *testing.T) {
 func TestExecInvalidStateTransitions(t *testing.T) {
 	tests := []struct {
 		name          string
-		state         execState
-		operation     func(execState) error
+		initialState  State
+		operation     func(*execStateMachine) error
 		expectedError string
 	}{
 		{
-			name:          "execStopped: cannot start",
-			state:         &execStoppedState{p: &execProcess{}},
-			operation:     func(s execState) error { return s.Start(context.Background()) },
+			name:          "stopped: cannot start",
+			initialState:  StateStopped,
+			operation:     func(s *execStateMachine) error { return s.Start(context.Background()) },
 			expectedError: "cannot start a stopped process",
 		},
 		{
 			name:          "deleted: cannot start",
-			state:         &deletedState{},
-			operation:     func(s execState) error { return s.Start(context.Background()) },
+			initialState:  StateDeleted,
+			operation:     func(s *execStateMachine) error { return s.Start(context.Background()) },
 			expectedError: "cannot start a deleted process",
 		},
 		{
 			name:          "deleted: cannot delete",
-			state:         &deletedState{},
-			operation:     func(s execState) error { return s.Delete(context.Background()) },
+			initialState:  StateDeleted,
+			operation:     func(s *execStateMachine) error { return s.Delete(context.Background()) },
 			expectedError: "cannot delete a deleted process",
+		},
+		{
+			name:          "running: cannot delete",
+			initialState:  StateRunning,
+			operation:     func(s *execStateMachine) error { return s.Delete(context.Background()) },
+			expectedError: "cannot delete a running process",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.operation(tt.state)
+			proc := &execProcess{}
+			sm := newExecStateMachine(proc)
+			sm.currentState = tt.initialState
+
+			err := tt.operation(sm)
 
 			if err == nil {
 				t.Fatal("Expected error but got nil")
@@ -146,27 +170,22 @@ func TestExecInvalidStateTransitions(t *testing.T) {
 	}
 }
 
-// TestStateNameFunction tests the stateName helper
-func TestStateNameFunction(t *testing.T) {
+// TestStateString tests the State.String() method
+func TestStateString(t *testing.T) {
 	tests := []struct {
-		name         string
-		state        interface{}
-		expectedName string
+		state    State
+		expected string
 	}{
-		{"createdState", &createdState{}, stateCreated},
-		{"runningState", &runningState{}, stateRunning},
-		{"stoppedState", &stoppedState{}, stateStopped},
-		{"deletedState", &deletedState{}, stateDeleted},
-		{"execCreatedState", &execCreatedState{}, stateCreated},
-		{"execRunningState", &execRunningState{}, stateRunning},
-		{"execStoppedState", &execStoppedState{}, stateStopped},
+		{StateCreated, "created"},
+		{StateRunning, "running"},
+		{StateStopped, "stopped"},
+		{StateDeleted, "deleted"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			name := stateName(tt.state)
-			if name != tt.expectedName {
-				t.Errorf("Expected state name %s, got %s", tt.expectedName, name)
+		t.Run(tt.expected, func(t *testing.T) {
+			if got := tt.state.String(); got != tt.expected {
+				t.Errorf("Expected %s, got %s", tt.expected, got)
 			}
 		})
 	}
@@ -174,19 +193,20 @@ func TestStateNameFunction(t *testing.T) {
 
 // TestDeletedStateSetExitedNoOp tests that SetExited on deleted state is a no-op
 func TestDeletedStateSetExitedNoOp(t *testing.T) {
-	// SetExited on deleted state should be a no-op (not panic)
-	state := &deletedState{}
+	proc := &Init{}
+	sm := newInitStateMachine(proc)
+	sm.currentState = StateDeleted
 
 	// Should not panic
-	state.SetExited(0)
+	sm.SetExited(0)
 
 	// Status should still be deleted
-	status, err := state.Status(context.Background())
+	status, err := sm.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Status() returned error: %v", err)
 	}
-	if status != stateDeleted {
-		t.Errorf("Expected status %s, got %s", stateDeleted, status)
+	if status != StateDeleted.String() {
+		t.Errorf("Expected status %s, got %s", StateDeleted.String(), status)
 	}
 }
 
@@ -194,18 +214,22 @@ func TestDeletedStateSetExitedNoOp(t *testing.T) {
 func TestStatusMethod(t *testing.T) {
 	tests := []struct {
 		name           string
-		state          initState
+		state          State
 		expectedStatus string
 	}{
-		{"created", &createdState{p: &Init{}}, stateCreated},
-		{"running", &runningState{p: &Init{}}, stateRunning},
-		{"stopped", &stoppedState{p: &Init{}}, stateStopped},
-		{"deleted", &deletedState{}, stateDeleted},
+		{"created", StateCreated, "created"},
+		{"running", StateRunning, "running"},
+		{"stopped", StateStopped, "stopped"},
+		{"deleted", StateDeleted, "deleted"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			status, err := tt.state.Status(context.Background())
+			proc := &Init{}
+			sm := newInitStateMachine(proc)
+			sm.currentState = tt.state
+
+			status, err := sm.Status(context.Background())
 			if err != nil {
 				t.Fatalf("Status() returned error: %v", err)
 			}
@@ -216,23 +240,26 @@ func TestStatusMethod(t *testing.T) {
 	}
 }
 
-// TestKillAllowedInAllStates tests that Kill is allowed in any state
-func TestKillAllowedInAllStates(t *testing.T) {
+// TestKillAllowedInMostStates tests that Kill is allowed in most states
+func TestKillAllowedInMostStates(t *testing.T) {
 	states := []struct {
 		name  string
-		state initState
+		state State
 	}{
-		{"created", &createdState{p: &Init{}}},
-		{"running", &runningState{p: &Init{}}},
-		{"stopped", &stoppedState{p: &Init{}}},
-		// Note: deleted state returns specific error
+		{"created", StateCreated},
+		{"running", StateRunning},
+		{"stopped", StateStopped},
 	}
 
 	for _, tt := range states {
 		t.Run(tt.name, func(t *testing.T) {
+			proc := &Init{}
+			sm := newInitStateMachine(proc)
+			sm.currentState = tt.state
+
 			// Kill should not return "invalid state" errors for these states
 			// It may fail for other reasons (no process, etc.) but not state
-			err := tt.state.Kill(context.Background(), 9, false)
+			err := sm.Kill(context.Background(), 9, false)
 
 			// We expect errors (no actual process), but not state-related errors
 			if err != nil && strings.Contains(err.Error(), "invalid state") {
@@ -244,16 +271,18 @@ func TestKillAllowedInAllStates(t *testing.T) {
 
 // TestDeletedStateAllOperationsFail tests that deleted state rejects all operations
 func TestDeletedStateAllOperationsFail(t *testing.T) {
-	state := &deletedState{}
+	proc := &Init{}
+	sm := newInitStateMachine(proc)
+	sm.currentState = StateDeleted
 
 	operations := []struct {
 		name      string
 		operation func() error
 	}{
-		{"Start", func() error { return state.Start(context.Background()) }},
-		{"Delete", func() error { return state.Delete(context.Background()) }},
-		{"Kill", func() error { return state.Kill(context.Background(), 9, false) }},
-		{"Update", func() error { return state.Update(context.Background(), nil) }},
+		{"Start", func() error { return sm.Start(context.Background()) }},
+		{"Delete", func() error { return sm.Delete(context.Background()) }},
+		{"Kill", func() error { return sm.Kill(context.Background(), 9, false) }},
+		{"Update", func() error { return sm.Update(context.Background(), nil) }},
 	}
 
 	for _, op := range operations {
@@ -273,18 +302,22 @@ func TestDeletedStateAllOperationsFail(t *testing.T) {
 func TestExecStatusMethod(t *testing.T) {
 	tests := []struct {
 		name           string
-		state          execState
+		state          State
 		expectedStatus string
 	}{
-		{"execCreated", &execCreatedState{p: &execProcess{}}, stateCreated},
-		{"execRunning", &execRunningState{p: &execProcess{}}, stateRunning},
-		{"execStopped", &execStoppedState{p: &execProcess{}}, stateStopped},
-		{"deleted", &deletedState{}, stateDeleted},
+		{"created", StateCreated, "created"},
+		{"running", StateRunning, "running"},
+		{"stopped", StateStopped, "stopped"},
+		{"deleted", StateDeleted, "deleted"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			status, err := tt.state.Status(context.Background())
+			proc := &execProcess{}
+			sm := newExecStateMachine(proc)
+			sm.currentState = tt.state
+
+			status, err := sm.Status(context.Background())
 			if err != nil {
 				t.Fatalf("Status() returned error: %v", err)
 			}
@@ -295,53 +328,46 @@ func TestExecStatusMethod(t *testing.T) {
 	}
 }
 
-// TestTransitionValidation tests the transition() method validation
+// TestTransitionValidation tests the canTransition function
 func TestTransitionValidation(t *testing.T) {
 	tests := []struct {
 		name          string
-		fromState     initState
-		toState       string
+		from          State
+		to            State
 		shouldSucceed bool
 	}{
 		// Valid transitions from created
-		{"created→running", &createdState{p: &Init{}}, stateRunning, true},
-		{"created→stopped", &createdState{p: &Init{}}, stateStopped, true},
-		{"created→deleted", &createdState{p: &Init{}}, stateDeleted, true},
+		{"created→running", StateCreated, StateRunning, true},
+		{"created→stopped", StateCreated, StateStopped, true},
+		{"created→deleted", StateCreated, StateDeleted, true},
 
 		// Valid transitions from running
-		{"running→stopped", &runningState{p: &Init{}}, stateStopped, true},
+		{"running→stopped", StateRunning, StateStopped, true},
 		// Invalid transitions from running
-		{"running→created", &runningState{p: &Init{}}, stateCreated, false},
-		{"running→deleted", &runningState{p: &Init{}}, stateDeleted, false},
+		{"running→created", StateRunning, StateCreated, false},
+		{"running→deleted", StateRunning, StateDeleted, false},
 
 		// Valid transitions from stopped
-		{"stopped→deleted", &stoppedState{p: &Init{}}, stateDeleted, true},
+		{"stopped→deleted", StateStopped, StateDeleted, true},
 		// Invalid transitions from stopped
-		{"stopped→created", &stoppedState{p: &Init{}}, stateCreated, false},
-		{"stopped→running", &stoppedState{p: &Init{}}, stateRunning, false},
+		{"stopped→created", StateStopped, StateCreated, false},
+		{"stopped→running", StateStopped, StateRunning, false},
+
+		// No transitions from deleted
+		{"deleted→created", StateDeleted, StateCreated, false},
+		{"deleted→running", StateDeleted, StateRunning, false},
+		{"deleted→stopped", StateDeleted, StateStopped, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var err error
+			result := canTransition(tt.from, tt.to)
 
-			switch s := tt.fromState.(type) {
-			case *createdState:
-				err = s.transition(tt.toState)
-			case *runningState:
-				err = s.transition(tt.toState)
-			case *stoppedState:
-				err = s.transition(tt.toState)
+			if tt.shouldSucceed && !result {
+				t.Errorf("Expected transition %s → %s to be valid", tt.from, tt.to)
 			}
-
-			if tt.shouldSucceed && err != nil {
-				t.Errorf("Expected transition to succeed, got error: %v", err)
-			}
-			if !tt.shouldSucceed && err == nil {
-				t.Error("Expected transition to fail, but it succeeded")
-			}
-			if !tt.shouldSucceed && err != nil && !strings.Contains(err.Error(), "invalid state transition") {
-				t.Errorf("Expected 'invalid state transition' error, got: %v", err)
+			if !tt.shouldSucceed && result {
+				t.Errorf("Expected transition %s → %s to be invalid", tt.from, tt.to)
 			}
 		})
 	}
@@ -349,36 +375,36 @@ func TestTransitionValidation(t *testing.T) {
 
 // TestSetExitedIdempotent tests that SetExited can be called multiple times safely
 func TestSetExitedIdempotent(t *testing.T) {
-	proc := &Init{}
-	proc.initState = &createdState{p: proc}
+	proc := &Init{waitBlock: make(chan struct{})}
+	sm := newInitStateMachine(proc)
+	proc.initState = sm
 
 	// First SetExited should transition to stopped
-	proc.initState.SetExited(0)
+	sm.SetExited(0)
 
-	status, _ := proc.initState.Status(context.Background())
-	if status != stateStopped {
+	status, _ := sm.Status(context.Background())
+	if status != StateStopped.String() {
 		t.Errorf("Expected stopped state after first SetExited, got %s", status)
 	}
 
 	// Second SetExited should not panic (already in stopped state)
-	// Note: This calls SetExited on stoppedState which is a no-op
-	proc.initState.SetExited(1)
+	sm.SetExited(1)
 
 	// Should still be stopped
-	status, _ = proc.initState.Status(context.Background())
-	if status != stateStopped {
+	status, _ = sm.Status(context.Background())
+	if status != StateStopped.String() {
 		t.Errorf("Expected stopped state after second SetExited, got %s", status)
 	}
 }
 
-// TestStateTransitionThreadSafety tests concurrent status checks
-// Note: Full thread-safety requires the parent process's mutex
+// TestStateTransitionStatusCheck tests concurrent status checks
 func TestStateTransitionStatusCheck(t *testing.T) {
 	proc := &Init{}
-	proc.initState = &runningState{p: proc}
+	sm := newInitStateMachine(proc)
+	sm.currentState = StateRunning
+	proc.initState = sm
 
 	// Status should be callable concurrently
-	// Collect errors instead of calling t.Errorf from goroutines (not goroutine-safe)
 	type result struct {
 		status string
 		err    error
@@ -387,7 +413,7 @@ func TestStateTransitionStatusCheck(t *testing.T) {
 
 	for range 10 {
 		go func() {
-			status, err := proc.initState.Status(context.Background())
+			status, err := sm.Status(context.Background())
 			results <- result{status: status, err: err}
 		}()
 	}
@@ -398,8 +424,18 @@ func TestStateTransitionStatusCheck(t *testing.T) {
 		if r.err != nil {
 			t.Errorf("Status() error: %v", r.err)
 		}
-		if r.status != stateRunning {
+		if r.status != StateRunning.String() {
 			t.Errorf("Expected running, got %s", r.status)
 		}
 	}
+}
+
+// TestInitStateMachineInterface verifies initStateMachine implements initState
+func TestInitStateMachineInterface(t *testing.T) {
+	var _ initState = (*initStateMachine)(nil)
+}
+
+// TestExecStateMachineInterface verifies execStateMachine implements execState
+func TestExecStateMachineInterface(t *testing.T) {
+	var _ execState = (*execStateMachine)(nil)
 }

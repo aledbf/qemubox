@@ -5,9 +5,11 @@ package system
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/log"
@@ -18,39 +20,63 @@ import (
 
 // Initialize performs all system initialization tasks for the VM guest.
 // This includes mounting filesystems, configuring cgroups, and setting up DNS.
+// Mounts are parallelized where possible for faster boot times.
 func Initialize(ctx context.Context) error {
-	if err := mountFilesystems(); err != nil {
+	if err := mountFilesystems(ctx); err != nil {
 		return err
 	}
 
-	if err := setupDevNodes(ctx); err != nil {
-		return err
+	// Run independent operations in parallel after base mounts are ready
+	var wg sync.WaitGroup
+	errCh := make(chan error, 4)
+
+	// Setup device nodes (depends on /dev being mounted)
+	wg.Go(func() {
+		if err := setupDevNodes(ctx); err != nil {
+			errCh <- err
+		}
+	})
+
+	// Configure CTRL+ALT+DELETE (depends on /proc being mounted)
+	wg.Go(func() {
+		if err := os.WriteFile("/proc/sys/kernel/ctrl-alt-del", []byte("0"), 0644); err != nil {
+			log.G(ctx).WithError(err).Error("failed to configure ctrl-alt-del behavior - VM may reboot unexpectedly on CTRL+ALT+DEL")
+		}
+	})
+
+	// Setup cgroup controllers (depends on /sys/fs/cgroup being mounted)
+	wg.Go(func() {
+		if err := setupCgroupControl(); err != nil {
+			errCh <- fmt.Errorf("cgroup setup failed: %w", err)
+		}
+	})
+
+	// Create /etc directory
+	wg.Go(func() {
+		// #nosec G301 -- /etc must be world-readable inside the VM.
+		if err := os.Mkdir("/etc", 0755); err != nil && !os.IsExist(err) {
+			errCh <- fmt.Errorf("failed to create /etc: %w", err)
+		}
+	})
+
+	wg.Wait()
+	close(errCh)
+
+	// Collect any errors from parallel operations
+	var errs []error
+	for err := range errCh {
+		errs = append(errs, err)
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 
-	// Configure CTRL+ALT+DELETE to send SIGINT to init instead of immediately rebooting
-	// This allows vminitd to catch the signal and perform a clean shutdown
-	// Default behavior (1) causes immediate kernel reboot without notifying init
-	if err := os.WriteFile("/proc/sys/kernel/ctrl-alt-del", []byte("0"), 0644); err != nil {
-		// In production, unexpected reboots could be a security concern
-		// Log at error level but continue - the setting may not be available in all kernels
-		log.G(ctx).WithError(err).Error("failed to configure ctrl-alt-del behavior - VM may reboot unexpectedly on CTRL+ALT+DEL")
-	}
-
-	// Wait for virtio block devices to appear
+	// Wait for virtio block devices to appear (can run after base setup)
 	// This is necessary because the kernel may not have probed all virtio devices yet
 	// Not fatal if devices don't appear - they might appear later or not be needed
 	devices.WaitForBlockDevices(ctx)
 
-	if err := setupCgroupControl(); err != nil {
-		return err
-	}
-
-	// #nosec G301 -- /etc must be world-readable inside the VM.
-	if err := os.Mkdir("/etc", 0755); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("failed to create /etc: %w", err)
-	}
-
-	// Configure DNS from kernel command line
+	// Configure DNS from kernel command line (depends on /etc existing)
 	if err := configureDNS(ctx); err != nil {
 		log.G(ctx).WithError(err).Warn("failed to configure DNS, continuing anyway")
 	}
@@ -59,15 +85,19 @@ func Initialize(ctx context.Context) error {
 }
 
 // mountFilesystems mounts all required filesystems for the VM guest.
-func mountFilesystems() error {
+// Mounts are organized into phases based on dependencies:
+//   - Phase 1: Independent base mounts (proc, sysfs, devtmpfs) - parallel
+//   - Phase 2: Dependent mounts (cgroup2 needs /sys, tmpfs for /run, /tmp) - parallel
+//   - Phase 3: /dev subdirectories (need /dev) - parallel
+func mountFilesystems(ctx context.Context) error {
 	// Create /lib if it doesn't exist (needed for modules)
 	// #nosec G301 -- /lib must be world-readable inside the VM.
 	if err := os.MkdirAll("/lib", 0755); err != nil && !os.IsExist(err) {
 		return fmt.Errorf("failed to create /lib: %w", err)
 	}
 
-	// Mount base filesystems first
-	if err := mount.All([]mount.Mount{
+	// Phase 1: Mount independent base filesystems in parallel
+	phase1Mounts := []mount.Mount{
 		{
 			Type:    "proc",
 			Source:  "proc",
@@ -80,6 +110,20 @@ func mountFilesystems() error {
 			Target:  "/sys",
 			Options: []string{"nosuid", "noexec", "nodev"},
 		},
+		{
+			Type:    "devtmpfs",
+			Source:  "devtmpfs",
+			Target:  "/dev",
+			Options: []string{"nosuid", "noexec"},
+		},
+	}
+
+	if err := mountParallel(ctx, phase1Mounts); err != nil {
+		return fmt.Errorf("phase 1 mounts failed: %w", err)
+	}
+
+	// Phase 2: Mount filesystems that depend on phase 1 (parallel)
+	phase2Mounts := []mount.Mount{
 		{
 			Type:   "cgroup2",
 			Source: "none",
@@ -97,17 +141,13 @@ func mountFilesystems() error {
 			Target:  "/tmp",
 			Options: []string{"nosuid", "noexec", "nodev"},
 		},
-		{
-			Type:    "devtmpfs",
-			Source:  "devtmpfs",
-			Target:  "/dev",
-			Options: []string{"nosuid", "noexec"},
-		},
-	}, "/"); err != nil {
-		return err
 	}
 
-	// Create /run/lock with sticky bit (replaces run-lock.mount)
+	if err := mountParallel(ctx, phase2Mounts); err != nil {
+		return fmt.Errorf("phase 2 mounts failed: %w", err)
+	}
+
+	// Create directories needed before phase 3
 	// #nosec G301 -- /run/lock needs sticky bit like /tmp for lock files.
 	if err := os.MkdirAll("/run/lock", 0o1777); err != nil && !os.IsExist(err) {
 		return fmt.Errorf("failed to create /run/lock: %w", err)
@@ -121,8 +161,8 @@ func mountFilesystems() error {
 		}
 	}
 
-	// Mount /dev subdirectories
-	return mount.All([]mount.Mount{
+	// Phase 3: Mount /dev subdirectories (parallel)
+	phase3Mounts := []mount.Mount{
 		{
 			Type:    "devpts",
 			Source:  "devpts",
@@ -135,7 +175,48 @@ func mountFilesystems() error {
 			Target:  "/dev/shm",
 			Options: []string{"nosuid", "noexec", "nodev", "mode=1777", "size=64m"},
 		},
-	}, "/")
+	}
+
+	if err := mountParallel(ctx, phase3Mounts); err != nil {
+		return fmt.Errorf("phase 3 mounts failed: %w", err)
+	}
+
+	return nil
+}
+
+// mountParallel mounts multiple filesystems in parallel.
+// Returns an error if any mount fails.
+func mountParallel(ctx context.Context, mounts []mount.Mount) error {
+	if len(mounts) == 0 {
+		return nil
+	}
+
+	// For single mount, just do it directly
+	if len(mounts) == 1 {
+		return mount.All(mounts, "/")
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(mounts))
+
+	for _, m := range mounts {
+		wg.Go(func() {
+			if err := mount.All([]mount.Mount{m}, "/"); err != nil {
+				log.G(ctx).WithError(err).WithField("target", m.Target).Error("mount failed")
+				errCh <- fmt.Errorf("mount %s failed: %w", m.Target, err)
+			}
+		})
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	var errs []error
+	for err := range errCh {
+		errs = append(errs, err)
+	}
+
+	return errors.Join(errs...)
 }
 
 // setupDevNodes creates device nodes and symlinks that may not be created by devtmpfs.

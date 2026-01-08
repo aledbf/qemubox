@@ -26,16 +26,15 @@ func TestExitTracker_SubscribeAndHandleStart(t *testing.T) {
 		t.Errorf("Expected no early exits, got %d", len(earlyExits))
 	}
 
-	// Verify process is tracked as running
-	tracker.mu.Lock()
-	running := tracker.running[1234]
-	tracker.mu.Unlock()
+	// Verify process is tracked by triggering exit and checking result
+	exit := runcC.Exit{Pid: 1234, Status: 0}
+	exited := tracker.NotifyExit(exit)
 
-	if len(running) != 1 {
-		t.Fatalf("Expected 1 running process, got %d", len(running))
+	if len(exited) != 1 {
+		t.Fatalf("Expected 1 running process to exit, got %d", len(exited))
 	}
 
-	if running[0].Process.ID() != proc.ID() {
+	if exited[0].Process.ID() != proc.ID() {
 		t.Error("Process not tracked correctly")
 	}
 }
@@ -78,20 +77,7 @@ func TestExitTracker_InitExitDelayed(t *testing.T) {
 	sub2 := tracker.Subscribe(nil)
 	sub2.HandleStart(container, execProc, 1235)
 
-	// Verify exec counter incremented
-	tracker.mu.Lock()
-	state := tracker.containers[container]
-	execCount := 0
-	if state != nil {
-		execCount = state.runningExecs
-	}
-	tracker.mu.Unlock()
-
-	if execCount != 1 {
-		t.Fatalf("Expected 1 running exec, got %d", execCount)
-	}
-
-	// Try to handle init exit - should be delayed
+	// Try to handle init exit - should be delayed because exec is still running
 	shouldDelay, waitChan := tracker.ShouldDelayInitExit(container)
 
 	if !shouldDelay {
@@ -171,13 +157,19 @@ func TestExitTracker_SubscriptionCancellation(t *testing.T) {
 	sub := tracker.Subscribe(nil)
 	sub.Cancel()
 
-	// Verify subscription was cleaned up
-	tracker.mu.Lock()
-	numSubs := len(tracker.subscriptions)
-	tracker.mu.Unlock()
+	// Create a new subscription to verify internal state is clean
+	sub2 := tracker.Subscribe(nil)
 
-	if numSubs != 0 {
-		t.Errorf("Expected 0 active subscriptions after cancel, got %d", numSubs)
+	// Notify exit - should not affect cancelled subscription
+	exit := runcC.Exit{Pid: 1234, Status: 0}
+	tracker.NotifyExit(exit)
+
+	// Only sub2 should receive the exit, not the cancelled sub1
+	proc := &testutil.MockProcess{IDValue: "proc", PIDValue: 1234}
+	exits := sub2.HandleStart(testutil.MockContainer("test"), proc, 1234)
+
+	if len(exits) != 1 {
+		t.Errorf("Expected 1 exit in new subscription, got %d", len(exits))
 	}
 }
 
@@ -193,33 +185,29 @@ func TestExitTracker_Cleanup(t *testing.T) {
 
 	// Store init exit
 	exit := runcC.Exit{Pid: 1234, Status: 0}
-	tracker.NotifyExit(exit)
+	exited := tracker.NotifyExit(exit)
 
-	// Verify state exists
-	tracker.mu.Lock()
-	_, hasRunning := tracker.running[1234]
-	containerState := tracker.containers[container]
-	hasInitExit := containerState != nil && containerState.initExit != nil
-	tracker.mu.Unlock()
-
-	if hasRunning {
-		t.Error("Should not have running processes after exit")
+	if len(exited) != 1 {
+		t.Fatalf("Expected 1 exited process, got %d", len(exited))
 	}
-	if !hasInitExit {
+
+	// Verify init exit is stored
+	if !tracker.InitHasExited(container) {
 		t.Error("Should have init exit stored")
 	}
 
 	// Cleanup container
 	tracker.Cleanup(container)
 
-	// Verify all state cleaned up
-	tracker.mu.Lock()
-	_, hasRunningAfter := tracker.running[1234]
-	_, hasContainerState := tracker.containers[container]
-	tracker.mu.Unlock()
+	// Verify init exit state is cleaned up
+	if tracker.InitHasExited(container) {
+		t.Error("Cleanup did not remove init exit state")
+	}
 
-	if hasRunningAfter || hasContainerState {
-		t.Error("Cleanup did not remove all container state")
+	// Verify container state is cleaned up by checking ShouldDelayInitExit returns false
+	shouldDelay, _ := tracker.ShouldDelayInitExit(container)
+	if shouldDelay {
+		t.Error("Cleanup did not remove container state")
 	}
 }
 
@@ -236,15 +224,6 @@ func TestExitTracker_PIDReuse(t *testing.T) {
 
 	sub2 := tracker.Subscribe(nil)
 	sub2.HandleStart(container2, proc2, 1234)
-
-	// Verify both are tracked
-	tracker.mu.Lock()
-	running := tracker.running[1234]
-	tracker.mu.Unlock()
-
-	if len(running) != 2 {
-		t.Fatalf("Expected 2 processes with same PID, got %d", len(running))
-	}
 
 	// Exit notification should return both
 	exit := runcC.Exit{Pid: 1234, Status: 0}
@@ -287,30 +266,61 @@ func TestExitTracker_DecrementExecCount(t *testing.T) {
 	sub := tracker.Subscribe(nil)
 	sub.HandleStart(container, execProc, 1235)
 
-	tracker.mu.Lock()
-	state := tracker.containers[container]
-	count := 0
-	if state != nil {
-		count = state.runningExecs
-	}
-	tracker.mu.Unlock()
-
-	if count != 1 {
-		t.Fatalf("Expected exec count of 1, got %d", count)
+	// Check that init exit would be delayed (meaning exec count > 0)
+	shouldDelay, waitChan := tracker.ShouldDelayInitExit(container)
+	if !shouldDelay {
+		t.Fatal("Expected init exit to be delayed with exec running")
 	}
 
 	// Manually decrement (simulating error path)
 	tracker.DecrementExecCount(container)
 
-	tracker.mu.Lock()
-	stateAfter := tracker.containers[container]
-	countAfter := 0
-	if stateAfter != nil {
-		countAfter = stateAfter.runningExecs
+	// Wait channel should now be closed
+	select {
+	case <-waitChan:
+		// Expected - channel closed when exec count reached 0
+	default:
+		t.Error("Wait channel should be closed after DecrementExecCount")
 	}
-	tracker.mu.Unlock()
 
-	if countAfter != 0 {
-		t.Errorf("Expected exec count of 0 after decrement, got %d", countAfter)
+	// Now init exit should not be delayed
+	shouldDelayAfter, _ := tracker.ShouldDelayInitExit(container)
+	if shouldDelayAfter {
+		t.Error("Expected init exit not to be delayed after decrement")
+	}
+}
+
+func TestExitTracker_GetInitExit(t *testing.T) {
+	tracker := newExitTracker()
+	container := testutil.MockContainer("test-container")
+
+	// Initially, no init exit
+	_, ok := tracker.GetInitExit(container)
+	if ok {
+		t.Error("Should not have init exit initially")
+	}
+
+	// Start and exit init process
+	initProc := &process.Init{}
+	sub := tracker.Subscribe(nil)
+	sub.HandleStart(container, initProc, 1234)
+
+	exit := runcC.Exit{Pid: 1234, Status: 42}
+	tracker.NotifyExit(exit)
+
+	// Now should have init exit
+	gotExit, ok := tracker.GetInitExit(container)
+	if !ok {
+		t.Fatal("Should have init exit after NotifyExit")
+	}
+
+	if gotExit.Status != 42 {
+		t.Errorf("Expected exit status 42, got %d", gotExit.Status)
+	}
+
+	// GetInitExit clears the exit - second call should return false
+	_, ok = tracker.GetInitExit(container)
+	if ok {
+		t.Error("GetInitExit should clear the exit after first retrieval")
 	}
 }

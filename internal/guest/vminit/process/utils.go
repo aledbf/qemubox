@@ -163,22 +163,6 @@ func (s State) String() string {
 	}
 }
 
-// String constants for backward compatibility with existing code
-const (
-	stateRunning = "running"
-	stateCreated = "created"
-	stateDeleted = "deleted"
-	stateStopped = "stopped"
-)
-
-func stateName(v interface{}) string {
-	// Try to use the state() method if available
-	if s, ok := v.(interface{ state() State }); ok {
-		return s.state().String()
-	}
-	panic(fmt.Errorf("invalid state %v", v))
-}
-
 func getStreams(stdio stdio.Stdio, sm stream.Manager) ([3]io.ReadWriteCloser, error) {
 	var streams [3]io.ReadWriteCloser
 	var err error
