@@ -39,7 +39,7 @@ Modes:
     qemubox shim, kernel, QEMU, and systemd services.
 
   Shim-only install (--shim-only):
-    Installs only: qemubox shim, vminitd, kernel, initrd, QEMU binaries/firmware.
+    Installs only: qemubox shim, kernel, initrd, QEMU binaries/firmware.
     Requires: containerd already installed, CNI plugins available, KVM access.
 EOF
 }
@@ -410,7 +410,7 @@ echo "Installing files..."
 if [ "$SHIM_ONLY" = true ]; then
     echo "  → Installing shim binaries to /usr/share/qemubox/bin..."
     mkdir -p /usr/share/qemubox/bin
-    for bin in containerd-shim-qemubox-v1 vminitd qemu-system-x86_64; do
+    for bin in containerd-shim-qemubox-v1 qemu-system-x86_64; do
         src="${SCRIPT_DIR}/usr/share/qemubox/bin/${bin}"
         [ -f "$src" ] && cp "$src" /usr/share/qemubox/bin/ && chmod +x "/usr/share/qemubox/bin/${bin}"
     done
@@ -501,7 +501,6 @@ check_file() {
 # Core files (both modes)
 CORE_FILES=(
     "/usr/share/qemubox/bin/containerd-shim-qemubox-v1"
-    "/usr/share/qemubox/bin/vminitd"
     "/usr/share/qemubox/bin/qemu-system-x86_64"
     "/usr/share/qemubox/qemu/bios-256k.bin"
     "/usr/share/qemubox/qemu/kvmvapic.bin"
