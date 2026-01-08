@@ -65,9 +65,10 @@ tasks:
         echo "✓ {{.NAME}} built: {{.OUTPUT_DIR}}/{{.OUT}} (static)"
 
   build:
-    desc: Build all components (shim, kernel, initrd, QEMU)
+    desc: Build all components (shim, vminitd, kernel, initrd, QEMU)
     deps:
       - build:shim
+      - build:vminitd
       - build:kernel
       - build:initrd
       - build:qemu
