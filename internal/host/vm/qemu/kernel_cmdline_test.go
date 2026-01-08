@@ -354,5 +354,5 @@ func TestKernelCmdlineFormat(t *testing.T) {
 	assert.NotContains(t, cmdline, "  ")
 
 	// Should end with init command
-	assert.True(t, strings.Contains(cmdline, "init=/sbin/vminitd"))
+	assert.Contains(t, cmdline, "init=/sbin/vminitd")
 }

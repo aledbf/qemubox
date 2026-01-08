@@ -42,6 +42,77 @@ const (
 	cidCooldownPeriod = 2 * time.Second
 )
 
+// instancePaths groups all filesystem paths used by an Instance.
+// This is a helper struct used during instance construction.
+type instancePaths struct {
+	stateDir        string // Ephemeral state (sockets, FIFOs) - deleted on shutdown
+	logDir          string // Persistent logs (console, QEMU stderr)
+	qmpSocketPath   string // QMP control socket
+	vsockPath       string // Vsock socket for guest RPC
+	consolePath     string // Persistent console log file
+	consoleFifoPath string // Ephemeral FIFO for console streaming
+	qemuLogPath     string // QEMU stderr log
+}
+
+// newInstancePaths creates paths for a new instance.
+// Returns an error if any socket path exceeds the Unix socket path limit.
+func newInstancePaths(stateDir, logDir string) (*instancePaths, error) {
+	p := &instancePaths{
+		stateDir:        stateDir,
+		logDir:          logDir,
+		qmpSocketPath:   filepath.Join(stateDir, "qmp.sock"),
+		vsockPath:       filepath.Join(stateDir, "vsock.sock"),
+		consolePath:     filepath.Join(logDir, "console.log"),
+		consoleFifoPath: filepath.Join(stateDir, "console.fifo"),
+		qemuLogPath:     filepath.Join(logDir, "qemu.log"),
+	}
+
+	// Unix domain sockets have a 108-character path limit on Linux
+	if len(p.qmpSocketPath) > maxUnixSocketPath {
+		return nil, fmt.Errorf("QMP socket path too long (%d > %d): %s",
+			len(p.qmpSocketPath), maxUnixSocketPath, p.qmpSocketPath)
+	}
+	if len(p.vsockPath) > maxUnixSocketPath {
+		return nil, fmt.Errorf("vsock socket path too long (%d > %d): %s",
+			len(p.vsockPath), maxUnixSocketPath, p.vsockPath)
+	}
+
+	return p, nil
+}
+
+// validateResourceConfig validates and applies defaults to resource configuration.
+func validateResourceConfig(cfg *vm.VMResourceConfig) *vm.VMResourceConfig {
+	if cfg == nil {
+		return &vm.VMResourceConfig{
+			BootCPUs:          defaultBootCPUs,
+			MaxCPUs:           defaultMaxCPUs,
+			MemorySize:        defaultMemorySize,
+			MemoryHotplugSize: defaultMemoryMax,
+			MemorySlots:       defaultMemorySlots,
+		}
+	}
+
+	// Apply defaults for invalid values
+	result := *cfg
+	if result.BootCPUs < 1 {
+		result.BootCPUs = defaultBootCPUs
+	}
+	if result.MaxCPUs < result.BootCPUs {
+		result.MaxCPUs = result.BootCPUs
+	}
+	if result.MemorySize < 1 {
+		result.MemorySize = defaultMemorySize
+	}
+	if result.MemoryHotplugSize < result.MemorySize {
+		result.MemoryHotplugSize = result.MemorySize
+	}
+	if result.MemorySlots < 1 {
+		result.MemorySlots = defaultMemorySlots
+	}
+
+	return &result
+}
+
 func findQemu() (string, error) {
 	cfg, err := config.Get()
 	if err != nil {
@@ -109,54 +180,25 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 		return nil, err
 	}
 
-	// Provide default resource configuration if none specified
-	if resourceCfg == nil {
-		resourceCfg = &vm.VMResourceConfig{
-			BootCPUs:          defaultBootCPUs,
-			MaxCPUs:           defaultMaxCPUs,
-			MemorySize:        defaultMemorySize,
-			MemoryHotplugSize: defaultMemoryMax,
-			MemorySlots:       defaultMemorySlots,
-		}
-	}
+	// Validate and apply defaults to resource configuration
+	resourceCfg = validateResourceConfig(resourceCfg)
 
-	// Validate resource configuration
-	if resourceCfg.BootCPUs < 1 {
-		resourceCfg.BootCPUs = defaultBootCPUs
-	}
-	if resourceCfg.MaxCPUs < resourceCfg.BootCPUs {
-		resourceCfg.MaxCPUs = resourceCfg.BootCPUs
-	}
-	if resourceCfg.MemorySize < 1 {
-		resourceCfg.MemorySize = defaultMemorySize
-	}
-	if resourceCfg.MemoryHotplugSize < resourceCfg.MemorySize {
-		resourceCfg.MemoryHotplugSize = resourceCfg.MemorySize
-	}
-	if resourceCfg.MemorySlots < 1 {
-		resourceCfg.MemorySlots = defaultMemorySlots
-	}
-
-	// Use dedicated log directory per container from config
+	// Get config for log directory
 	cfg, err := config.Get()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get config for log directory: %w", err)
 	}
+
+	// Create log directory
 	logDir := filepath.Join(cfg.Paths.LogDir, containerID)
 	if err := os.MkdirAll(logDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}
 
-	qmpSocketPath := filepath.Join(stateDir, "qmp.sock")
-	vsockPath := filepath.Join(stateDir, "vsock.sock")
-
-	// Unix domain sockets have a 108-character path limit on Linux (including null terminator)
-	// Validate socket paths to prevent runtime errors
-	if len(qmpSocketPath) > maxUnixSocketPath {
-		return nil, fmt.Errorf("QMP socket path too long (%d > %d): %s", len(qmpSocketPath), maxUnixSocketPath, qmpSocketPath)
-	}
-	if len(vsockPath) > maxUnixSocketPath {
-		return nil, fmt.Errorf("vsock socket path too long (%d > %d): %s", len(vsockPath), maxUnixSocketPath, vsockPath)
+	// Create and validate paths
+	p, err := newInstancePaths(stateDir, logDir)
+	if err != nil {
+		return nil, err
 	}
 
 	// Allocate unique vsock CID for this VM
@@ -166,29 +208,28 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate vsock CID: %w", err)
 	}
-	guestCID := lease.CID
 
 	inst := &Instance{
 		binaryPath:      binaryPath,
-		stateDir:        stateDir,
-		logDir:          logDir,
+		stateDir:        p.stateDir,
+		logDir:          p.logDir,
 		kernelPath:      kernelPath,
 		initrdPath:      initrdPath,
-		qmpSocketPath:   qmpSocketPath,
-		vsockPath:       vsockPath,
-		consolePath:     filepath.Join(logDir, "console.log"),
-		consoleFifoPath: filepath.Join(stateDir, "console.fifo"),
-		qemuLogPath:     filepath.Join(logDir, "qemu.log"),
+		qmpSocketPath:   p.qmpSocketPath,
+		vsockPath:       p.vsockPath,
+		consolePath:     p.consolePath,
+		consoleFifoPath: p.consoleFifoPath,
+		qemuLogPath:     p.qemuLogPath,
 		disks:           []*DiskConfig{},
 		nets:            []*NetConfig{},
 		resourceCfg:     resourceCfg,
-		guestCID:        guestCID,
+		guestCID:        lease.CID,
 		cidLease:        lease,
 	}
 
 	log.G(ctx).WithFields(log.Fields{
 		"containerID":   containerID,
-		"guestCID":      guestCID,
+		"guestCID":      lease.CID,
 		"bootCPUs":      resourceCfg.BootCPUs,
 		"maxCPUs":       resourceCfg.MaxCPUs,
 		"memorySize":    resourceCfg.MemorySize,

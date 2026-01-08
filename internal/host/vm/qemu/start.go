@@ -17,7 +17,6 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/config"
 	"github.com/aledbf/qemubox/containerd/internal/host/vm"
 	"github.com/aledbf/qemubox/containerd/internal/paths"
-	"github.com/aledbf/qemubox/containerd/internal/vsock"
 )
 
 func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
@@ -436,58 +435,11 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 
 // buildKernelCommandLine constructs the kernel command line
 func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
-	// Prepare init arguments for vminitd
-	initArgs := []string{
-		fmt.Sprintf("-vsock-rpc-port=%d", vsock.DefaultRPCPort),
-		fmt.Sprintf("-vsock-stream-port=%d", vsock.DefaultStreamPort),
-		fmt.Sprintf("-vsock-cid=%d", q.guestCID),
-	}
-	initArgs = append(initArgs, startOpts.InitArgs...)
-
-	// Build network configuration
-	var netConfigs []string
-	if startOpts.NetworkConfig != nil && startOpts.NetworkConfig.IP != "" {
-		cfg := startOpts.NetworkConfig
-		// IPv4 configuration using kernel ip= parameter format:
-		// ip=<client-ip>:<server-ip>:<gw-ip>:<netmask>:<hostname>:<device>:<autoconf>:<dns0-ip>:<dns1-ip>
-		var ipParamBuilder strings.Builder
-		fmt.Fprintf(&ipParamBuilder, "ip=%s::%s:%s::eth0:none",
-			cfg.IP,
-			cfg.Gateway,
-			cfg.Netmask)
-
-		// Append DNS servers to ip= parameter (kernel supports up to 2 DNS servers)
-		for i, dns := range cfg.DNS {
-			if i < 2 {
-				ipParamBuilder.WriteString(":")
-				ipParamBuilder.WriteString(dns)
-			}
-		}
-
-		netConfigs = append(netConfigs, ipParamBuilder.String())
-	}
-
-	// Build kernel command line
-	cmdlineParts := []string{
-		"console=ttyS0",
-		"quiet",                          // Reduce boot messages for faster boot
-		"loglevel=3",                     // Minimal kernel logging (errors only)
-		"systemd.show_status=0",          // Disable systemd status messages
-		"systemd.log_level=warning",      // Reduce systemd logging
-		"panic=1",                        // Reboot 1 second after kernel panic
-		"net.ifnames=0", "biosdevname=0", // Predictable network naming
-		"systemd.unified_cgroup_hierarchy=1", // Force cgroup v2
-		"cgroup_no_v1=all",                   // Disable cgroup v1
-		"nohz=off",                           // Disable tickless kernel (reduces overhead for short-lived VMs)
-	}
-
-	if len(netConfigs) > 0 {
-		cmdlineParts = append(cmdlineParts, netConfigs...)
-	}
-
-	cmdlineParts = append(cmdlineParts, fmt.Sprintf("init=/sbin/vminitd -- %s", formatInitArgs(initArgs)))
-
-	return strings.Join(cmdlineParts, " ")
+	cfg := DefaultKernelCmdlineConfig()
+	cfg.VsockCID = q.guestCID
+	cfg.Network = startOpts.NetworkConfig
+	cfg.InitArgs = startOpts.InitArgs
+	return BuildKernelCmdline(cfg)
 }
 
 // buildQemuCommandLine constructs the QEMU command line arguments
