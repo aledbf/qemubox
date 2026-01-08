@@ -1,50 +1,54 @@
 #!/bin/bash
 set -euo pipefail
 
-# Colors for output
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Parse command line arguments
+# =============================================================================
+# Logging helpers
+# =============================================================================
+log_ok()   { echo -e "  ${GREEN}✓${NC} $1"; }
+log_err()  { echo -e "  ${RED}✗${NC} $1"; }
+log_warn() { echo -e "  ${YELLOW}⚠${NC}  $1"; }
+log_skip() { echo -e "  ${YELLOW}→${NC} $1"; }
+section()  { echo -e "\n$1"; }
+
+# =============================================================================
+# Parse arguments
+# =============================================================================
 SHIM_ONLY=false
 SKIP_CHECKS=false
 
 print_usage() {
-    echo "Usage: $0 [OPTIONS]"
-    echo ""
-    echo "Options:"
-    echo "  --shim-only     Install only the qemubox shim, kernel, and QEMU binaries."
-    echo "                  Assumes containerd and CNI plugins are already installed."
-    echo "  --skip-checks   Skip prerequisite checks in shim-only mode"
-    echo "  -h, --help      Show this help message"
-    echo ""
-    echo "Modes:"
-    echo "  Full install (default):"
-    echo "    Installs everything: containerd, runc, nerdctl, CNI plugins,"
-    echo "    qemubox shim, kernel, QEMU, and systemd services."
-    echo ""
-    echo "  Shim-only install (--shim-only):"
-    echo "    Installs only: qemubox shim, vminitd, kernel, initrd, QEMU binaries/firmware."
-    echo "    Requires: containerd already installed, CNI plugins available, KVM access."
+    cat <<EOF
+Usage: $0 [OPTIONS]
+
+Options:
+  --shim-only     Install only the qemubox shim, kernel, and QEMU binaries.
+                  Assumes containerd and CNI plugins are already installed.
+  --skip-checks   Skip prerequisite checks in shim-only mode
+  -h, --help      Show this help message
+
+Modes:
+  Full install (default):
+    Installs everything: containerd, runc, nerdctl, CNI plugins,
+    qemubox shim, kernel, QEMU, and systemd services.
+
+  Shim-only install (--shim-only):
+    Installs only: qemubox shim, kernel, initrd, QEMU binaries/firmware.
+    Requires: containerd already installed, CNI plugins available, KVM access.
+EOF
 }
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --shim-only)
-            SHIM_ONLY=true
-            shift
-            ;;
-        --skip-checks)
-            SKIP_CHECKS=true
-            shift
-            ;;
-        -h|--help)
-            print_usage
-            exit 0
-            ;;
+        --shim-only)   SHIM_ONLY=true; shift ;;
+        --skip-checks) SKIP_CHECKS=true; shift ;;
+        -h|--help)     print_usage; exit 0 ;;
         *)
             echo -e "${RED}Error: Unknown option: $1${NC}"
             print_usage
@@ -62,417 +66,281 @@ fi
 echo "================================================"
 echo ""
 
-# Check if running as root
+# Check root
 if [[ $EUID -ne 0 ]]; then
-   echo -e "${RED}Error: This script must be run as root${NC}"
-   echo "Please run: sudo $0"
-   exit 1
+    echo -e "${RED}Error: This script must be run as root${NC}"
+    echo "Please run: sudo $0"
+    exit 1
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # =============================================================================
-# Prerequisite checks for shim-only mode
+# Check helpers
 # =============================================================================
-
-check_command_exists() {
-    local cmd="$1"
-    local name="${2:-$cmd}"
-    if command -v "$cmd" &> /dev/null; then
-        echo -e "  ${GREEN}✓${NC} $name found: $(command -v "$cmd")"
+check_command() {
+    local cmd="$1" name="${2:-$1}"
+    if command -v "$cmd" &>/dev/null; then
+        log_ok "$name found: $(command -v "$cmd")"
         return 0
-    else
-        echo -e "  ${RED}✗${NC} $name not found in PATH"
-        return 1
     fi
+    log_err "$name not found in PATH"
+    return 1
 }
 
-check_containerd_installed() {
-    echo "Checking containerd installation..."
-    if ! check_command_exists "containerd" "containerd"; then
-        return 1
-    fi
+find_in_paths() {
+    local -n result=$1
+    shift
+    for path in "$@"; do
+        if [ -e "$path" ]; then
+            # shellcheck disable=SC2034  # result is a nameref
+            result="$path"
+            return 0
+        fi
+    done
+    return 1
+}
 
-    # Check version
+check_package() {
+    local pkg="$1"
+    if dpkg -s "$pkg" &>/dev/null; then
+        log_ok "$pkg"
+        return 0
+    fi
+    # Try t64 variants (Ubuntu 24.04+ time_t transition)
+    local alt=""
+    if [[ "$pkg" == *t64 ]]; then
+        alt="${pkg%t64}"
+    else
+        alt="${pkg}t64"
+    fi
+    if dpkg -s "$alt" &>/dev/null; then
+        log_ok "$alt (provides $pkg)"
+        return 0
+    fi
+    return 1
+}
+
+# =============================================================================
+# Prerequisite checks
+# =============================================================================
+check_containerd_installed() {
+    section "Checking containerd installation..."
+    if ! check_command "containerd"; then return 1; fi
     local version
     version=$(containerd --version 2>/dev/null | head -1) || true
-    if [ -n "$version" ]; then
-        echo -e "  ${GREEN}✓${NC} Version: $version"
-    fi
+    [ -n "$version" ] && log_ok "Version: $version"
     return 0
 }
 
 check_containerd_running() {
-    echo "Checking containerd status..."
-
-    # Check for common socket locations
-    local sockets=(
-        "/run/containerd/containerd.sock"
-        "/var/run/containerd/containerd.sock"
-    )
-
-    local found=false
-    for sock in "${sockets[@]}"; do
-        if [ -S "$sock" ]; then
-            echo -e "  ${GREEN}✓${NC} Socket found: $sock"
-            found=true
-            break
-        fi
-    done
-
-    if [ "$found" = false ]; then
-        echo -e "  ${YELLOW}⚠${NC}  No containerd socket found (service may not be running)"
-        echo "      Expected locations: ${sockets[*]}"
+    section "Checking containerd status..."
+    local sock=""
+    if find_in_paths sock "/run/containerd/containerd.sock" "/var/run/containerd/containerd.sock"; then
+        log_ok "Socket found: $sock"
+    else
+        log_warn "No containerd socket found (service may not be running)"
         return 1
     fi
-
-    # Check if service is active (if systemd is available)
-    if command -v systemctl &> /dev/null; then
+    if command -v systemctl &>/dev/null; then
         if systemctl is-active --quiet containerd 2>/dev/null; then
-            echo -e "  ${GREEN}✓${NC} containerd service is active"
+            log_ok "containerd service is active"
         else
-            echo -e "  ${YELLOW}⚠${NC}  containerd service is not active (may be managed differently)"
+            log_warn "containerd service is not active (may be managed differently)"
         fi
     fi
-
     return 0
 }
 
 check_containerd_config() {
-    echo "Checking containerd configuration for qemubox runtime..."
-
-    local config_paths=(
-        "/etc/containerd/config.toml"
-    )
-
-    local config_found=false
-    local runtime_configured=false
-
-    for cfg in "${config_paths[@]}"; do
-        if [ -f "$cfg" ]; then
-            config_found=true
-            echo -e "  ${GREEN}✓${NC} Config found: $cfg"
-
-            # Check if qemubox runtime is configured
-            if grep -q "qemubox" "$cfg" 2>/dev/null; then
-                runtime_configured=true
-                echo -e "  ${GREEN}✓${NC} qemubox runtime found in config"
-            fi
-            break
-        fi
-    done
-
-    if [ "$config_found" = false ]; then
-        echo -e "  ${YELLOW}⚠${NC}  No containerd config.toml found"
+    section "Checking containerd configuration for qemubox runtime..."
+    local cfg="/etc/containerd/config.toml"
+    if [ ! -f "$cfg" ]; then
+        log_warn "No containerd config.toml found"
         echo "      You may need to create one at /etc/containerd/config.toml"
-    fi
-
-    if [ "$runtime_configured" = false ]; then
-        echo -e "  ${YELLOW}⚠${NC}  qemubox runtime not found in containerd config"
-        echo ""
-        echo "      Add the following to your containerd config.toml:"
-        echo ""
-        echo -e "      ${BLUE}[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.qemubox]${NC}"
-        echo -e "      ${BLUE}  runtime_type = \"io.containerd.qemubox.v1\"${NC}"
-        echo -e "      ${BLUE}  snapshotter = \"nexus-erofs\"${NC}"
-        echo ""
-        echo "      Note: You also need the nexus-erofs proxy plugin configured."
-        echo "      See /usr/share/qemubox/config/containerd/config.toml for an example."
-        echo ""
         return 1
     fi
+    log_ok "Config found: $cfg"
+    if grep -q "qemubox" "$cfg" 2>/dev/null; then
+        log_ok "qemubox runtime found in config"
+        return 0
+    fi
+    log_warn "qemubox runtime not found in containerd config"
+    cat <<EOF
 
-    return 0
+      Add the following to your containerd config.toml:
+
+      ${BLUE}[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.qemubox]${NC}
+      ${BLUE}  runtime_type = "io.containerd.qemubox.v1"${NC}
+      ${BLUE}  snapshotter = "nexus-erofs"${NC}
+
+      Note: You also need the nexus-erofs proxy plugin configured.
+      See /usr/share/qemubox/config/containerd/config.toml for an example.
+
+EOF
+    return 1
 }
 
 check_kvm_access() {
-    echo "Checking KVM access..."
-
+    section "Checking KVM access..."
     if [ ! -e /dev/kvm ]; then
-        echo -e "  ${RED}✗${NC} /dev/kvm does not exist"
+        log_err "/dev/kvm does not exist"
         echo "      KVM is required for qemubox. Ensure your system supports virtualization."
         return 1
     fi
-
     if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
-        echo -e "  ${YELLOW}⚠${NC}  /dev/kvm exists but may not be accessible"
+        log_warn "/dev/kvm exists but may not be accessible"
         echo "      Ensure the user running containers has access to /dev/kvm"
         echo "      (e.g., add to 'kvm' group: usermod -aG kvm <user>)"
     else
-        echo -e "  ${GREEN}✓${NC} /dev/kvm is accessible"
+        log_ok "/dev/kvm is accessible"
     fi
-
     return 0
 }
 
 check_cni_plugins() {
-    echo "Checking CNI plugins..."
-
-    local cni_paths=(
-        "/opt/cni/bin"
-        "/usr/lib/cni"
-        "/usr/libexec/cni"
-    )
-
+    section "Checking CNI plugins..."
     local cni_dir=""
-    for path in "${cni_paths[@]}"; do
-        if [ -d "$path" ]; then
-            cni_dir="$path"
-            echo -e "  ${GREEN}✓${NC} CNI plugin directory found: $path"
-            break
-        fi
-    done
-
-    if [ -z "$cni_dir" ]; then
-        echo -e "  ${RED}✗${NC} No CNI plugin directory found"
-        echo "      Expected locations: ${cni_paths[*]}"
+    if ! find_in_paths cni_dir "/opt/cni/bin" "/usr/lib/cni" "/usr/libexec/cni"; then
+        log_err "No CNI plugin directory found"
+        echo "      Expected: /opt/cni/bin, /usr/lib/cni, or /usr/libexec/cni"
         return 1
     fi
+    log_ok "CNI plugin directory found: $cni_dir"
 
-    # Check for required plugins
-    local required_plugins=(bridge host-local loopback)
+    local required=(bridge host-local loopback)
+    local optional=(firewall portmap)
     local missing=0
 
-    for plugin in "${required_plugins[@]}"; do
+    for plugin in "${required[@]}"; do
         if [ -x "${cni_dir}/${plugin}" ]; then
-            echo -e "  ${GREEN}✓${NC} Plugin: $plugin"
+            log_ok "Plugin: $plugin"
         else
-            echo -e "  ${RED}✗${NC} Missing plugin: $plugin"
-            missing=$((missing + 1))
+            log_err "Missing plugin: $plugin"
+            ((missing++))
         fi
     done
-
-    # Check for optional but recommended plugins
-    local optional_plugins=(firewall portmap)
-    for plugin in "${optional_plugins[@]}"; do
+    for plugin in "${optional[@]}"; do
         if [ -x "${cni_dir}/${plugin}" ]; then
-            echo -e "  ${GREEN}✓${NC} Plugin (optional): $plugin"
+            log_ok "Plugin (optional): $plugin"
         else
-            echo -e "  ${YELLOW}⚠${NC}  Optional plugin not found: $plugin"
+            log_warn "Optional plugin not found: $plugin"
         fi
     done
-
     if [ $missing -gt 0 ]; then
         echo ""
         echo "      Install CNI plugins from:"
         echo "      https://github.com/containernetworking/plugins/releases"
         return 1
     fi
-
     return 0
 }
 
 check_cni_config() {
-    echo "Checking CNI network configuration..."
-
-    local cni_conf_dirs=(
-        "/etc/cni/net.d"
-    )
-
-    for dir in "${cni_conf_dirs[@]}"; do
-        if [ -d "$dir" ]; then
-            local configs
-            configs=$(find "$dir" -name "*.conflist" -o -name "*.conf" 2>/dev/null | head -5)
-            if [ -n "$configs" ]; then
-                echo -e "  ${GREEN}✓${NC} CNI config directory: $dir"
-                echo "$configs" | while read -r f; do
-                    echo -e "  ${GREEN}✓${NC} Config: $(basename "$f")"
-                done
-                return 0
-            fi
+    section "Checking CNI network configuration..."
+    local dir="/etc/cni/net.d"
+    if [ -d "$dir" ]; then
+        local configs
+        configs=$(find "$dir" \( -name "*.conflist" -o -name "*.conf" \) 2>/dev/null | head -5)
+        if [ -n "$configs" ]; then
+            log_ok "CNI config directory: $dir"
+            echo "$configs" | while read -r f; do
+                log_ok "Config: $(basename "$f")"
+            done
+            return 0
         fi
-    done
-
-    echo -e "  ${YELLOW}⚠${NC}  No CNI configuration found in /etc/cni/net.d/"
+    fi
+    log_warn "No CNI configuration found in /etc/cni/net.d/"
     echo "      You may need to create a CNI network configuration."
-    echo "      Example available at: /usr/share/qemubox/config/cni/net.d/10-qemubox.conflist"
+    echo "      Example: /usr/share/qemubox/config/cni/net.d/10-qemubox.conflist"
     return 1
 }
 
 check_ubuntu_packages() {
-    echo "Checking required Ubuntu packages for QEMU..."
-
-    # Only run on Ubuntu/Debian systems
+    section "Checking required Ubuntu packages for QEMU..."
     if [ ! -f /etc/os-release ]; then
-        echo -e "  ${YELLOW}⚠${NC}  Cannot detect OS, skipping package check"
+        log_warn "Cannot detect OS, skipping package check"
         return 0
     fi
-
     # shellcheck disable=SC1091
     source /etc/os-release
     if [[ "${ID:-}" != "ubuntu" && "${ID:-}" != "debian" ]]; then
-        echo -e "  ${YELLOW}⚠${NC}  Not Ubuntu/Debian (detected: ${ID:-unknown}), skipping package check"
-        echo "      You may need to manually install equivalent packages for your distribution."
+        log_warn "Not Ubuntu/Debian (detected: ${ID:-unknown}), skipping package check"
+        return 0
+    fi
+    log_ok "Detected: ${PRETTY_NAME:-$ID}"
+
+    if ! command -v dpkg &>/dev/null; then
+        log_warn "dpkg not available, skipping package check"
         return 0
     fi
 
-    echo -e "  ${GREEN}✓${NC} Detected: ${PRETTY_NAME:-$ID}"
-
-    # Required packages for QEMU dependencies
-    # These provide the shared libraries listed in ldd output
-    local required_packages=(
-        libpixman-1-0      # libpixman-1.so.0
-        libseccomp2        # libseccomp.so.2
-        zlib1g             # libz.so.1
-        libzstd1           # libzstd.so.1
-        libaio1t64         # libaio.so.1t64 (Ubuntu 24.04+)
-        liburing2          # liburing.so.2
-        libpmem1           # libpmem.so.1 (persistent memory)
-        librdmacm1         # librdmacm.so.1 (RDMA)
-        libibverbs1        # libibverbs.so.1 (InfiniBand)
-        libdw1             # libdw.so.1 (DWARF debugging)
-        libbpf1            # libbpf.so.1 (BPF)
+    local packages=(
+        libpixman-1-0 libseccomp2 zlib1g libzstd1 libaio1t64
+        liburing2 libpmem1 librdmacm1 libibverbs1 libdw1 libbpf1
     )
-
-    # Check if dpkg is available
-    if ! command -v dpkg &> /dev/null; then
-        echo -e "  ${YELLOW}⚠${NC}  dpkg not available, skipping package check"
-        return 0
-    fi
-
-    local missing_required=()
-    local missing_optional=()
-
-    # Check required packages
-    for pkg in "${required_packages[@]}"; do
-        if dpkg -s "$pkg" &> /dev/null; then
-            echo -e "  ${GREEN}✓${NC} $pkg"
-        else
-            # Handle t64 suffix package name changes (Ubuntu 24.04+ time_t transition)
-            # Try both directions: pkg -> pkg + t64, and pkg -> pkg - t64
-            local alt_pkg=""
-            if [[ "$pkg" == *t64 ]]; then
-                # Try without t64 suffix (e.g., libaio1t64 -> libaio1)
-                alt_pkg="${pkg%t64}"
-            else
-                # Try with t64 suffix (e.g., librdmacm1 -> librdmacm1t64)
-                alt_pkg="${pkg}t64"
-            fi
-
-            if [[ -n "$alt_pkg" ]] && dpkg -s "$alt_pkg" &> /dev/null; then
-                echo -e "  ${GREEN}✓${NC} $alt_pkg (provides $pkg)"
-                continue
-            fi
-            missing_required+=("$pkg")
+    local missing=()
+    for pkg in "${packages[@]}"; do
+        if ! check_package "$pkg"; then
+            missing+=("$pkg")
         fi
     done
-
-    # Report missing packages
-    if [ ${#missing_required[@]} -gt 0 ]; then
+    if [ ${#missing[@]} -gt 0 ]; then
         echo ""
-        echo -e "  ${RED}✗${NC} Missing required packages:"
-        for pkg in "${missing_required[@]}"; do
+        log_err "Missing required packages:"
+        for pkg in "${missing[@]}"; do
             echo -e "      ${RED}•${NC} $pkg"
         done
         echo ""
         echo "      Install with:"
-        echo -e "      ${BLUE}sudo apt-get install ${missing_required[*]}${NC}"
-        echo ""
+        echo -e "      ${BLUE}sudo apt-get install ${missing[*]}${NC}"
         return 1
     fi
-
-    if [ ${#missing_optional[@]} -gt 0 ]; then
-        echo ""
-        echo -e "  ${YELLOW}⚠${NC}  Missing optional packages (some features may be unavailable):"
-        for pkg in "${missing_optional[@]}"; do
-            echo -e "      ${YELLOW}•${NC} $pkg"
-        done
-        echo ""
-        echo "      Install with:"
-        echo -e "      ${BLUE}sudo apt-get install ${missing_optional[*]}${NC}"
-    fi
-
     return 0
 }
 
 check_qemu_dependencies() {
-    echo "Checking QEMU binary dependencies..."
-
+    section "Checking QEMU binary dependencies..."
     local qemu_bin="${SCRIPT_DIR}/usr/share/qemubox/bin/qemu-system-x86_64"
-
     if [ ! -f "$qemu_bin" ]; then
-        echo -e "  ${YELLOW}⚠${NC}  QEMU binary not found in release package (will skip dependency check)"
+        log_warn "QEMU binary not found in release package (will skip dependency check)"
         return 0
     fi
-
-    # Check if ldd is available
-    if ! command -v ldd &> /dev/null; then
-        echo -e "  ${YELLOW}⚠${NC}  ldd not available, skipping dependency check"
+    if ! command -v ldd &>/dev/null; then
+        log_warn "ldd not available, skipping dependency check"
         return 0
     fi
-
-    # Run ldd and check for missing libraries
-    local ldd_output
-    ldd_output=$(ldd "$qemu_bin" 2>&1) || true
-
-    if echo "$ldd_output" | grep -q "not found"; then
-        echo -e "  ${RED}✗${NC} Missing QEMU dependencies:"
-        echo "$ldd_output" | grep "not found" | while read -r line; do
+    local output
+    output=$(ldd "$qemu_bin" 2>&1) || true
+    if echo "$output" | grep -q "not found"; then
+        log_err "Missing QEMU dependencies:"
+        echo "$output" | grep "not found" | while read -r line; do
             echo -e "      ${RED}•${NC} $line"
         done
-        echo ""
-        echo "      Install the missing libraries before proceeding."
         return 1
-    elif echo "$ldd_output" | grep -q "not a dynamic executable"; then
-        echo -e "  ${GREEN}✓${NC} QEMU binary is statically linked (no external dependencies)"
-        return 0
+    elif echo "$output" | grep -q "not a dynamic executable"; then
+        log_ok "QEMU binary is statically linked (no external dependencies)"
     else
-        echo -e "  ${GREEN}✓${NC} All QEMU library dependencies are satisfied"
-        return 0
+        log_ok "All QEMU library dependencies are satisfied"
     fi
+    return 0
 }
 
 run_prerequisite_checks() {
     echo ""
-    echo "🔍 Running prerequisite checks for shim-only installation..."
+    echo "Running prerequisite checks for shim-only installation..."
+    local errors=0 warnings=0
+
+    check_containerd_installed || ((errors++))
+    check_kvm_access           || ((errors++))
+    check_cni_plugins          || ((errors++))
+    check_ubuntu_packages      || ((errors++))
+    check_qemu_dependencies    || ((errors++))
+    check_containerd_running   || ((warnings++))
+    check_containerd_config    || ((warnings++))
+    check_cni_config           || ((warnings++))
+
     echo ""
-
-    local errors=0
-    local warnings=0
-
-    # Critical checks (will fail installation)
-    if ! check_containerd_installed; then
-        errors=$((errors + 1))
-    fi
-    echo ""
-
-    if ! check_kvm_access; then
-        errors=$((errors + 1))
-    fi
-    echo ""
-
-    if ! check_cni_plugins; then
-        errors=$((errors + 1))
-    fi
-    echo ""
-
-    if ! check_ubuntu_packages; then
-        errors=$((errors + 1))
-    fi
-    echo ""
-
-    if ! check_qemu_dependencies; then
-        errors=$((errors + 1))
-    fi
-    echo ""
-
-    # Warning checks (installation continues)
-    if ! check_containerd_running; then
-        warnings=$((warnings + 1))
-    fi
-    echo ""
-
-    if ! check_containerd_config; then
-        warnings=$((warnings + 1))
-    fi
-    echo ""
-
-    if ! check_cni_config; then
-        warnings=$((warnings + 1))
-    fi
-    echo ""
-
-    # Summary
     echo "================================================"
     if [ $errors -gt 0 ]; then
         echo -e "${RED}Prerequisite checks failed with $errors error(s)${NC}"
@@ -488,235 +356,193 @@ run_prerequisite_checks() {
         echo -e "${GREEN}All prerequisite checks passed${NC}"
     fi
     echo "================================================"
-    echo ""
-
     return 0
 }
 
-# Run prerequisite checks for shim-only mode
-if [ "$SHIM_ONLY" = true ] && [ "$SKIP_CHECKS" = false ]; then
-    if ! run_prerequisite_checks; then
-        exit 1
-    fi
-fi
-
-# Run basic checks for full installation mode
-if [ "$SHIM_ONLY" = false ] && [ "$SKIP_CHECKS" = false ]; then
+run_basic_checks() {
     echo ""
-    echo "🔍 Running prerequisite checks..."
-    echo ""
-
-    errors=0
-
-    if ! check_kvm_access; then
-        errors=$((errors + 1))
-    fi
-    echo ""
-
-    if ! check_ubuntu_packages; then
-        errors=$((errors + 1))
-    fi
-    echo ""
-
-    if ! check_qemu_dependencies; then
-        errors=$((errors + 1))
-    fi
-    echo ""
-
+    echo "Running prerequisite checks..."
+    local errors=0
+    check_kvm_access        || ((errors++))
+    check_ubuntu_packages   || ((errors++))
+    check_qemu_dependencies || ((errors++))
     if [ $errors -gt 0 ]; then
+        echo ""
         echo "================================================"
         echo -e "${RED}Prerequisite checks failed with $errors error(s)${NC}"
         echo ""
         echo "Please resolve the errors above before installing."
         echo "Use --skip-checks to bypass these checks (not recommended)."
         echo "================================================"
-        exit 1
+        return 1
     fi
+    return 0
+}
+
+# =============================================================================
+# Installation helpers
+# =============================================================================
+install_dir() {
+    local src="$1" dst="$2" desc="$3" executable="${4:-false}"
+    echo "  → Installing ${desc}..."
+    mkdir -p "$dst"
+    cp -r "${src}"/* "$dst"
+    [ "$executable" = true ] && chmod +x "$dst"/*
+    log_ok "${desc} installed"
+}
+
+# =============================================================================
+# Run checks
+# =============================================================================
+if [ "$SHIM_ONLY" = true ] && [ "$SKIP_CHECKS" = false ]; then
+    run_prerequisite_checks || exit 1
+fi
+if [ "$SHIM_ONLY" = false ] && [ "$SKIP_CHECKS" = false ]; then
+    run_basic_checks || exit 1
 fi
 
-echo "📂 Installing files..."
+# =============================================================================
+# Install files
+# =============================================================================
+echo ""
+echo "Installing files..."
 
-# Install binaries
 if [ "$SHIM_ONLY" = true ]; then
     echo "  → Installing shim binaries to /usr/share/qemubox/bin..."
     mkdir -p /usr/share/qemubox/bin
-    # Only install qemubox-specific binaries
-    for bin in containerd-shim-qemubox-v1 vminitd qemu-system-x86_64; do
-        if [ -f "${SCRIPT_DIR}/usr/share/qemubox/bin/${bin}" ]; then
-            cp "${SCRIPT_DIR}/usr/share/qemubox/bin/${bin}" /usr/share/qemubox/bin/
-            chmod +x "/usr/share/qemubox/bin/${bin}"
-        fi
+    for bin in containerd-shim-qemubox-v1 qemu-system-x86_64; do
+        src="${SCRIPT_DIR}/usr/share/qemubox/bin/${bin}"
+        [ -f "$src" ] && cp "$src" /usr/share/qemubox/bin/ && chmod +x "/usr/share/qemubox/bin/${bin}"
     done
-    echo -e "    ${GREEN}✓${NC} Shim binaries installed"
+    log_ok "Shim binaries installed"
 else
-    echo "  → Installing binaries to /usr/share/qemubox/bin..."
-    mkdir -p /usr/share/qemubox/bin
-    cp -r "${SCRIPT_DIR}/usr/share/qemubox/bin/"* /usr/share/qemubox/bin/
-    chmod +x /usr/share/qemubox/bin/*
-    echo -e "    ${GREEN}✓${NC} Binaries installed"
+    install_dir "${SCRIPT_DIR}/usr/share/qemubox/bin" "/usr/share/qemubox/bin" "binaries" true
 fi
 
-# Install kernel and initrd
-echo "  → Installing kernel and initrd to /usr/share/qemubox/kernel..."
-mkdir -p /usr/share/qemubox/kernel
-cp -r "${SCRIPT_DIR}/usr/share/qemubox/kernel/"* /usr/share/qemubox/kernel/
-echo -e "    ${GREEN}✓${NC} Kernel and initrd installed"
+install_dir "${SCRIPT_DIR}/usr/share/qemubox/kernel" "/usr/share/qemubox/kernel" "kernel and initrd"
 
-# Install configuration files (skip in shim-only mode, except qemubox config)
 if [ "$SHIM_ONLY" = false ]; then
-    echo "  → Installing configuration files to /usr/share/qemubox/config..."
-    mkdir -p /usr/share/qemubox/config
-    cp -r "${SCRIPT_DIR}/usr/share/qemubox/config/"* /usr/share/qemubox/config/
-    echo -e "    ${GREEN}✓${NC} Configuration files installed"
+    install_dir "${SCRIPT_DIR}/usr/share/qemubox/config" "/usr/share/qemubox/config" "configuration files"
 else
-    # In shim-only mode, only copy qemubox config as reference
-    echo "  → Installing qemubox config reference to /usr/share/qemubox/config..."
+    echo "  → Installing qemubox config reference..."
     mkdir -p /usr/share/qemubox/config/qemubox
-    if [ -f "${SCRIPT_DIR}/usr/share/qemubox/config/qemubox/config.json" ]; then
+    [ -f "${SCRIPT_DIR}/usr/share/qemubox/config/qemubox/config.json" ] && \
         cp "${SCRIPT_DIR}/usr/share/qemubox/config/qemubox/config.json" /usr/share/qemubox/config/qemubox/
-    fi
-    # Also copy CNI config as reference (user may want to use it)
-    if [ -d "${SCRIPT_DIR}/usr/share/qemubox/config/cni" ]; then
-        mkdir -p /usr/share/qemubox/config/cni
+    [ -d "${SCRIPT_DIR}/usr/share/qemubox/config/cni" ] && \
+        mkdir -p /usr/share/qemubox/config/cni && \
         cp -r "${SCRIPT_DIR}/usr/share/qemubox/config/cni/"* /usr/share/qemubox/config/cni/
-    fi
-    echo -e "    ${GREEN}✓${NC} Reference configuration files installed"
+    log_ok "Reference configuration files installed"
 fi
 
-# Install QEMU firmware files
 if [ -d "${SCRIPT_DIR}/usr/share/qemubox/qemu" ]; then
-    echo "  → Installing QEMU firmware to /usr/share/qemubox/qemu..."
-    mkdir -p /usr/share/qemubox/qemu
-    cp -r "${SCRIPT_DIR}/usr/share/qemubox/qemu/"* /usr/share/qemubox/qemu/
-    echo -e "    ${GREEN}✓${NC} QEMU firmware installed"
+    install_dir "${SCRIPT_DIR}/usr/share/qemubox/qemu" "/usr/share/qemubox/qemu" "QEMU firmware"
 fi
 
-# Install CNI plugins (skip in shim-only mode - assumes system CNI plugins)
 if [ "$SHIM_ONLY" = false ]; then
     if [ -d "${SCRIPT_DIR}/usr/share/qemubox/libexec/cni" ]; then
-        echo "  → Installing CNI plugins to /usr/share/qemubox/libexec/cni..."
-        mkdir -p /usr/share/qemubox/libexec/cni
-        cp -r "${SCRIPT_DIR}/usr/share/qemubox/libexec/cni/"* /usr/share/qemubox/libexec/cni/
-        chmod +x /usr/share/qemubox/libexec/cni/*
-        echo -e "    ${GREEN}✓${NC} CNI plugins installed"
+        install_dir "${SCRIPT_DIR}/usr/share/qemubox/libexec/cni" "/usr/share/qemubox/libexec/cni" "CNI plugins" true
     fi
 else
-    echo -e "  ${YELLOW}→${NC} Skipping CNI plugins (shim-only mode assumes system CNI plugins)"
+    log_skip "Skipping CNI plugins (shim-only mode assumes system CNI plugins)"
 fi
 
-# Install scripts
-echo "  → Installing scripts to /usr/share/qemubox..."
+echo "  → Installing scripts..."
 cp "${SCRIPT_DIR}/install.sh" /usr/share/qemubox/
 cp "${SCRIPT_DIR}/uninstall.sh" /usr/share/qemubox/
-chmod +x /usr/share/qemubox/install.sh
-chmod +x /usr/share/qemubox/uninstall.sh
-echo -e "    ${GREEN}✓${NC} Scripts installed"
+chmod +x /usr/share/qemubox/install.sh /usr/share/qemubox/uninstall.sh
+log_ok "Scripts installed"
 
-# Install state directories
 echo "  → Creating state directories..."
-mkdir -p /var/lib/qemubox
-mkdir -p /var/run/qemubox
-mkdir -p /var/log/qemubox
-mkdir -p /run/qemubox/vm
+mkdir -p /var/lib/qemubox /var/run/qemubox /var/log/qemubox /run/qemubox/vm
 if [ "$SHIM_ONLY" = false ]; then
-    # Full install: create containerd-specific directories
-    mkdir -p /var/lib/qemubox/containerd
-    mkdir -p /run/qemubox/containerd
-    mkdir -p /run/qemubox/containerd/fifo
-    # nexus-erofs snapshotter directories
-    mkdir -p /var/lib/qemubox/nexus-erofs-snapshotter
-    mkdir -p /run/qemubox/nexus-erofs-snapshotter
+    mkdir -p /var/lib/qemubox/containerd /run/qemubox/containerd /run/qemubox/containerd/fifo
+    mkdir -p /var/lib/qemubox/nexus-erofs-snapshotter /run/qemubox/nexus-erofs-snapshotter
 fi
-echo -e "    ${GREEN}✓${NC} State directories created"
+log_ok "State directories created"
 
-# Install qemubox configuration file
 echo "  → Installing qemubox configuration..."
 mkdir -p /etc/qemubox
 if [ ! -f /etc/qemubox/config.json ]; then
-    echo "    → Creating /etc/qemubox/config.json from example..."
     cp "${SCRIPT_DIR}/usr/share/qemubox/config/qemubox/config.json" /etc/qemubox/config.json
-    echo -e "    ${GREEN}✓${NC} Configuration file created at /etc/qemubox/config.json"
+    log_ok "Configuration file created at /etc/qemubox/config.json"
 else
-    echo -e "    ${YELLOW}⚠${NC}  /etc/qemubox/config.json already exists, skipping (preserving existing configuration)"
-    echo "      → Example config available at /usr/share/qemubox/config/qemubox/config.json"
+    log_warn "/etc/qemubox/config.json already exists, skipping"
+    echo "      Example: /usr/share/qemubox/config/qemubox/config.json"
 fi
 
-# Install systemd services (skip in shim-only mode)
 if [ "$SHIM_ONLY" = false ]; then
-    echo "  → Installing systemd services to /usr/share/qemubox/systemd..."
+    echo "  → Installing systemd services..."
     mkdir -p /usr/share/qemubox/systemd
     cp "${SCRIPT_DIR}/usr/share/qemubox/systemd/"*.service /usr/share/qemubox/systemd/
-    echo -e "    ${GREEN}✓${NC} Systemd service files copied"
-
-    echo "  → Creating symlinks in /etc/systemd/system..."
-    ln -sf /usr/share/qemubox/systemd/qemubox-nexus-erofs-snapshotter.service /etc/systemd/system/qemubox-nexus-erofs-snapshotter.service
-    ln -sf /usr/share/qemubox/systemd/qemubox-containerd.service /etc/systemd/system/qemubox-containerd.service
+    ln -sf /usr/share/qemubox/systemd/qemubox-nexus-erofs-snapshotter.service /etc/systemd/system/
+    ln -sf /usr/share/qemubox/systemd/qemubox-containerd.service /etc/systemd/system/
     systemctl daemon-reload
-    echo -e "    ${GREEN}✓${NC} Systemd services installed and linked"
+    log_ok "Systemd services installed"
 else
-    echo -e "  ${YELLOW}→${NC} Skipping systemd services (shim-only mode uses existing containerd)"
+    log_skip "Skipping systemd services (shim-only mode uses existing containerd)"
 fi
 
+# =============================================================================
+# Verification
+# =============================================================================
 echo ""
-echo "🔍 Verifying installation..."
+echo "Verifying installation..."
 
-# Check required files
 ERRORS=0
-
 check_file() {
-    if [ ! -f "$1" ]; then
-        echo -e "  ${RED}✗${NC} Missing: $1"
-        ERRORS=$((ERRORS + 1))
+    if [ -f "$1" ]; then
+        log_ok "Found: $1"
     else
-        echo -e "  ${GREEN}✓${NC} Found: $1"
+        log_err "Missing: $1"
+        ((ERRORS++))
     fi
 }
 
-if [ "$SHIM_ONLY" = true ]; then
-    # Shim-only mode: verify only qemubox-specific components
-    echo "Verifying shim-only installation..."
-    check_file "/usr/share/qemubox/bin/containerd-shim-qemubox-v1"
-    check_file "/usr/share/qemubox/bin/vminitd"
-    check_file "/usr/share/qemubox/bin/qemu-system-x86_64"
-    check_file "/usr/share/qemubox/qemu/bios-256k.bin"
-    check_file "/usr/share/qemubox/qemu/kvmvapic.bin"
-    check_file "/usr/share/qemubox/qemu/vgabios-stdvga.bin"
-    check_file "/usr/share/qemubox/kernel/qemubox-kernel-x86_64"
-    check_file "/usr/share/qemubox/kernel/qemubox-initrd"
-    check_file "/usr/share/qemubox/config/qemubox/config.json"
-    check_file "/etc/qemubox/config.json"
-else
-    # Full installation: verify all components
-    echo "Verifying full installation..."
-    check_file "/usr/share/qemubox/bin/containerd"
-    check_file "/usr/share/qemubox/bin/containerd-shim-runc-v2"
-    check_file "/usr/share/qemubox/bin/containerd-shim-qemubox-v1"
-    check_file "/usr/share/qemubox/bin/nexus-erofs-snapshotter"
-    check_file "/usr/share/qemubox/bin/ctr"
-    check_file "/usr/share/qemubox/bin/runc"
-    check_file "/usr/share/qemubox/bin/nerdctl"
-    check_file "/usr/share/qemubox/bin/qemu-system-x86_64"
-    check_file "/usr/share/qemubox/qemu/bios-256k.bin"
-    check_file "/usr/share/qemubox/qemu/kvmvapic.bin"
-    check_file "/usr/share/qemubox/qemu/vgabios-stdvga.bin"
-    check_file "/usr/share/qemubox/kernel/qemubox-kernel-x86_64"
-    check_file "/usr/share/qemubox/kernel/qemubox-initrd"
-    check_file "/usr/share/qemubox/config/containerd/config.toml"
-    check_file "/usr/share/qemubox/config/cni/net.d/10-qemubox.conflist"
-    check_file "/usr/share/qemubox/config/qemubox/config.json"
-    check_file "/etc/qemubox/config.json"
-    check_file "/usr/share/qemubox/systemd/qemubox-nexus-erofs-snapshotter.service"
-    check_file "/usr/share/qemubox/systemd/qemubox-containerd.service"
-    check_file "/etc/systemd/system/qemubox-nexus-erofs-snapshotter.service"
-    check_file "/etc/systemd/system/qemubox-containerd.service"
+# Core files (both modes)
+CORE_FILES=(
+    "/usr/share/qemubox/bin/containerd-shim-qemubox-v1"
+    "/usr/share/qemubox/bin/qemu-system-x86_64"
+    "/usr/share/qemubox/qemu/bios-256k.bin"
+    "/usr/share/qemubox/qemu/kvmvapic.bin"
+    "/usr/share/qemubox/qemu/vgabios-stdvga.bin"
+    "/usr/share/qemubox/kernel/qemubox-kernel-x86_64"
+    "/usr/share/qemubox/kernel/qemubox-initrd"
+    "/usr/share/qemubox/config/qemubox/config.json"
+    "/etc/qemubox/config.json"
+)
 
-    # Check CNI plugins (full install only)
-    CNI_PLUGINS=(bridge host-local loopback)
+# Full install additional files
+FULL_FILES=(
+    "/usr/share/qemubox/bin/containerd"
+    "/usr/share/qemubox/bin/containerd-shim-runc-v2"
+    "/usr/share/qemubox/bin/nexus-erofs-snapshotter"
+    "/usr/share/qemubox/bin/ctr"
+    "/usr/share/qemubox/bin/runc"
+    "/usr/share/qemubox/bin/nerdctl"
+    "/usr/share/qemubox/config/containerd/config.toml"
+    "/usr/share/qemubox/config/cni/net.d/10-qemubox.conflist"
+    "/usr/share/qemubox/systemd/qemubox-nexus-erofs-snapshotter.service"
+    "/usr/share/qemubox/systemd/qemubox-containerd.service"
+    "/etc/systemd/system/qemubox-nexus-erofs-snapshotter.service"
+    "/etc/systemd/system/qemubox-containerd.service"
+)
+
+CNI_PLUGINS=(bridge host-local loopback)
+
+if [ "$SHIM_ONLY" = true ]; then
+    echo "Verifying shim-only installation..."
+    for f in "${CORE_FILES[@]}"; do check_file "$f"; done
+else
+    echo "Verifying full installation..."
+    for f in "${CORE_FILES[@]}" "${FULL_FILES[@]}"; do check_file "$f"; done
     for plugin in "${CNI_PLUGINS[@]}"; do
         check_file "/usr/share/qemubox/libexec/cni/${plugin}"
     done
 fi
 
+# =============================================================================
+# Summary
+# =============================================================================
 echo ""
 if [ $ERRORS -eq 0 ]; then
     echo -e "${GREEN}✓ Installation verification passed${NC}"
@@ -729,47 +555,52 @@ if [ $ERRORS -eq 0 ]; then
     fi
     echo "================================================"
     echo ""
+
     if [ "$SHIM_ONLY" = true ]; then
-        echo "Next steps:"
-        echo "  1. Review and customize qemubox configuration (if needed):"
-        echo "     vi /etc/qemubox/config.json"
-        echo ""
-        echo "  2. Configure the qemubox runtime in your containerd config:"
-        echo "     Add to /etc/containerd/config.toml:"
-        echo ""
-        echo -e "     ${BLUE}[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.qemubox]${NC}"
-        echo -e "     ${BLUE}  runtime_type = \"io.containerd.qemubox.v1\"${NC}"
-        echo -e "     ${BLUE}  snapshotter = \"nexus-erofs\"${NC}"
-        echo ""
-        echo "     Note: You also need to configure the nexus-erofs proxy plugin."
-        echo "     See /usr/share/qemubox/config/containerd/config.toml for an example."
-        echo ""
-        echo "  3. Ensure the shim is in containerd's PATH or use absolute path:"
-        echo "     Shim location: /usr/share/qemubox/bin/containerd-shim-qemubox-v1"
-        echo ""
-        echo "  4. Restart containerd to pick up the new runtime:"
-        echo "     systemctl restart containerd"
-        echo ""
-        echo "  5. Test the runtime:"
-        echo "     ctr run --rm --runtime io.containerd.qemubox.v1 docker.io/library/alpine:latest test echo hello"
-        echo ""
+        cat <<EOF
+Next steps:
+  1. Review and customize qemubox configuration (if needed):
+     vi /etc/qemubox/config.json
+
+  2. Configure the qemubox runtime in your containerd config:
+     Add to /etc/containerd/config.toml:
+
+     ${BLUE}[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.qemubox]${NC}
+     ${BLUE}  runtime_type = "io.containerd.qemubox.v1"${NC}
+     ${BLUE}  snapshotter = "nexus-erofs"${NC}
+
+     Note: You also need to configure the nexus-erofs proxy plugin.
+     See /usr/share/qemubox/config/containerd/config.toml for an example.
+
+  3. Ensure the shim is in containerd's PATH or use absolute path:
+     Shim location: /usr/share/qemubox/bin/containerd-shim-qemubox-v1
+
+  4. Restart containerd to pick up the new runtime:
+     systemctl restart containerd
+
+  5. Test the runtime:
+     ctr run --rm --runtime io.containerd.qemubox.v1 docker.io/library/alpine:latest test echo hello
+
+EOF
     else
-        echo "Next steps:"
-        echo "  1. Review and customize configuration (if needed):"
-        echo "     vi /etc/qemubox/config.json"
-        echo "     (See /usr/share/qemubox/config/qemubox/config.json for defaults)"
-        echo ""
-        echo "  2. Enable and start services (snapshotter starts automatically with containerd):"
-        echo "     systemctl enable qemubox-containerd"
-        echo "     systemctl start qemubox-containerd"
-        echo ""
-        echo "  3. Check service status:"
-        echo "     systemctl status qemubox-nexus-erofs-snapshotter"
-        echo "     systemctl status qemubox-containerd"
-        echo ""
-        echo "  4. Add /usr/share/qemubox/bin to PATH:"
-        echo "     export PATH=/usr/share/qemubox/bin:\$PATH"
-        echo ""
+        cat <<EOF
+Next steps:
+  1. Review and customize configuration (if needed):
+     vi /etc/qemubox/config.json
+     (See /usr/share/qemubox/config/qemubox/config.json for defaults)
+
+  2. Enable and start services (snapshotter starts automatically with containerd):
+     systemctl enable qemubox-containerd
+     systemctl start qemubox-containerd
+
+  3. Check service status:
+     systemctl status qemubox-nexus-erofs-snapshotter
+     systemctl status qemubox-containerd
+
+  4. Add /usr/share/qemubox/bin to PATH:
+     export PATH=/usr/share/qemubox/bin:\$PATH
+
+EOF
     fi
 else
     echo -e "${RED}✗ Installation verification failed with $ERRORS error(s)${NC}"
