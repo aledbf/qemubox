@@ -80,9 +80,8 @@ func (t *exitTracker) Subscribe(c *runc.Container) *subscription {
 	}
 
 	return &subscription{
-		sub:       sub,
-		tracker:   t,
-		container: c,
+		sub:     sub,
+		tracker: t,
 	}
 }
 
@@ -148,9 +147,8 @@ func (t *exitTracker) Cleanup(c *runc.Container) {
 // subscription represents an active wait for a process to start.
 // It collects any exit events that occur during the start window.
 type subscription struct {
-	sub       *earlyExitSubscription
-	tracker   *exitTracker
-	container *runc.Container
+	sub     *earlyExitSubscription
+	tracker *exitTracker
 }
 
 // HandleStart completes the subscription, checking for early exits.
