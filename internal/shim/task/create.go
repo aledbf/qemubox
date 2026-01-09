@@ -23,6 +23,7 @@ import (
 	"github.com/aledbf/qemubox/containerd/internal/shim/bundle"
 	"github.com/aledbf/qemubox/containerd/internal/shim/lifecycle"
 	"github.com/aledbf/qemubox/containerd/internal/shim/resources"
+	"github.com/aledbf/qemubox/containerd/internal/shim/supervisor"
 	"github.com/aledbf/qemubox/containerd/internal/shim/transform"
 )
 
@@ -54,18 +55,19 @@ func (c *createCleanup) rollback(ctx context.Context) {
 // createState holds intermediate state during container creation.
 // This avoids passing many parameters between helper functions.
 type createState struct {
-	request      *taskAPI.CreateTaskRequest
-	bundle       *bundle.Bundle
-	resourceCfg  *vm.VMResourceConfig
-	vmInstance   vm.Instance
-	mountCleanup func(context.Context) error
-	mounts       []*types.Mount
-	netConfig    *vm.NetworkConfig
-	netnsPath    string
-	ioForwarder  IOForwarder
-	containerIO  stdio.Stdio
-	guestIO      stdio.Stdio
-	cleanup      createCleanup
+	request       *taskAPI.CreateTaskRequest
+	bundle        *bundle.Bundle
+	resourceCfg   *vm.VMResourceConfig
+	vmInstance    vm.Instance
+	mountCleanup  func(context.Context) error
+	mounts        []*types.Mount
+	netConfig     *vm.NetworkConfig
+	netnsPath     string
+	ioForwarder   IOForwarder
+	containerIO   stdio.Stdio
+	guestIO       stdio.Stdio
+	cleanup       createCleanup
+	supervisorCfg *supervisor.Config
 }
 
 // validateCreateRequest performs all pre-creation validation.
@@ -134,6 +136,25 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 		"hotplug_mb": resourceCfg.MemoryHotplugSize / (1024 * 1024),
 	}).Debug("VM resource configuration")
 
+	// Extract supervisor configuration from annotations
+	if supervisorCfg := supervisor.FromAnnotations(&b.Spec); supervisorCfg != nil {
+		if err := supervisorCfg.Validate(); err != nil {
+			return err
+		}
+
+		// Load supervisor binary from host
+		if err := supervisorCfg.LoadBinary(); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to load supervisor binary, continuing without supervisor")
+		} else {
+			state.supervisorCfg = supervisorCfg
+			log.G(ctx).WithFields(log.Fields{
+				"workspace_id":  supervisorCfg.WorkspaceID,
+				"metadata_addr": supervisorCfg.MetadataAddr,
+				"control_plane": supervisorCfg.ControlPlane,
+			}).Info("supervisor configuration extracted from annotations")
+		}
+	}
+
 	// Create VM instance
 	vmi, err := s.vmLifecycle.CreateVM(ctx, r.ID, r.Bundle, resourceCfg)
 	if err != nil {
@@ -181,6 +202,12 @@ func (s *service) startVM(ctx context.Context, state *createState) error {
 		vm.WithNetworkNamespace(state.netnsPath),
 	}
 
+	// Add supervisor init args if supervisor is configured
+	if state.supervisorCfg != nil {
+		startOpts = append(startOpts, vm.WithInitArgs(state.supervisorCfg.InitArgs()...))
+		log.G(ctx).WithField("init_args", state.supervisorCfg.InitArgs()).Debug("adding supervisor init args to kernel cmdline")
+	}
+
 	prestart := time.Now()
 	if err := state.vmInstance.Start(ctx, startOpts...); err != nil {
 		return err
@@ -209,6 +236,15 @@ func (s *service) startVM(ctx context.Context, state *createState) error {
 // createTaskInVM creates the bundle and task inside the VM.
 func (s *service) createTaskInVM(ctx context.Context, state *createState) (*taskAPI.CreateTaskResponse, error) {
 	r := state.request
+
+	// Inject supervisor binary into bundle if configured
+	if state.supervisorCfg != nil && len(state.supervisorCfg.BinaryContent) > 0 {
+		if err := state.bundle.AddExtraFile(supervisor.BundleFileName, state.supervisorCfg.BinaryContent); err != nil {
+			log.G(ctx).WithError(err).Error("failed to add supervisor binary to bundle")
+			return nil, err
+		}
+		log.G(ctx).WithField("size", len(state.supervisorCfg.BinaryContent)).Debug("added supervisor binary to bundle")
+	}
 
 	// Dial TTRPC client for Create RPCs.
 	// NOTE: We intentionally do NOT cache this connection because vsock connections

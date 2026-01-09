@@ -18,6 +18,7 @@ import (
 
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/config"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/service"
+	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/supervisor"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/system"
 	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/systools"
 
@@ -99,6 +100,26 @@ func run(ctx context.Context, cfg *config.ServiceConfig) error {
 	}
 
 	log.G(ctx).WithField("t", time.Since(t1)).Debug("initialized vminitd")
+
+	// Start supervisor agent in background (if configured via kernel cmdline)
+	// The supervisor binary will be available after the container bundle is created,
+	// so we start a goroutine that waits and retries until it finds the binary.
+	go func() {
+		// Wait a bit for the first container bundle to be created
+		// The shim will send the bundle which includes the supervisor binary
+		time.Sleep(2 * time.Second)
+
+		// Retry a few times as the bundle may not be ready yet
+		for i := 0; i < 10; i++ {
+			if err := supervisor.StartSupervisor(ctx); err != nil {
+				log.G(ctx).WithError(err).Warn("failed to start supervisor, will retry")
+				time.Sleep(time.Duration(i+1) * time.Second)
+				continue
+			}
+			// Success or supervisor not needed
+			break
+		}
+	}()
 
 	// Limit GOMAXPROCS for VM environment to prevent scheduler overhead
 	// Cap at maxGOMAXPROCS to improve cache locality, but respect available CPUs

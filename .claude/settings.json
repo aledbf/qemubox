@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "for file in $CLAUDE_FILE_PATHS; do if [[ \"$file\" =~ \\.(pb\\.go|_ttrpc\\.pb\\.go)$ ]]; then echo 'BLOCKED: Cannot edit generated protobuf file: '$file; echo 'To modify, edit the .proto file and run: task protos'; exit 2; fi; done"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "for file in $CLAUDE_FILE_PATHS; do if [[ \"$file\" =~ \\.go$ ]] && [[ ! \"$file\" =~ \\.pb\\.go$ ]]; then gofmt -w \"$file\" 2>/dev/null || true; goimports -w \"$file\" 2>/dev/null || true; fi; done"
+          }
+        ]
+      }
+    ]
+  }
+}
