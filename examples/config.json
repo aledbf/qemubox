@@ -1,8 +1,8 @@
 {
   "paths": {
-    "share_dir": "/usr/share/qemubox",
-    "state_dir": "/var/lib/qemubox",
-    "log_dir": "/var/log/qemubox",
+    "share_dir": "/usr/share/spinbox",
+    "state_dir": "/var/lib/spinbox",
+    "log_dir": "/var/log/spinbox",
     "qemu_path": "",
     "qemu_share_path": ""
   },

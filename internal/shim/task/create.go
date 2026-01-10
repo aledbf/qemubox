@@ -1,6 +1,6 @@
 //go:build linux
 
-// Package task implements the containerd task service for qemubox runtime.
+// Package task implements the containerd task service for spinbox runtime.
 package task
 
 import (
@@ -17,14 +17,14 @@ import (
 	"github.com/containerd/errdefs/pkg/errgrpc"
 	"github.com/containerd/log"
 
-	bundleAPI "github.com/aledbf/qemubox/containerd/api/services/bundle/v1"
-	"github.com/aledbf/qemubox/containerd/internal/host/network"
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
-	"github.com/aledbf/qemubox/containerd/internal/shim/bundle"
-	"github.com/aledbf/qemubox/containerd/internal/shim/lifecycle"
-	"github.com/aledbf/qemubox/containerd/internal/shim/resources"
-	"github.com/aledbf/qemubox/containerd/internal/shim/supervisor"
-	"github.com/aledbf/qemubox/containerd/internal/shim/transform"
+	bundleAPI "github.com/spin-stack/spinbox/api/services/bundle/v1"
+	"github.com/spin-stack/spinbox/internal/host/network"
+	"github.com/spin-stack/spinbox/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/shim/bundle"
+	"github.com/spin-stack/spinbox/internal/shim/lifecycle"
+	"github.com/spin-stack/spinbox/internal/shim/resources"
+	"github.com/spin-stack/spinbox/internal/shim/supervisor"
+	"github.com/spin-stack/spinbox/internal/shim/transform"
 )
 
 // createCleanup tracks resources that need cleanup on failure.

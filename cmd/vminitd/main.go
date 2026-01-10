@@ -16,15 +16,15 @@ import (
 	"github.com/containerd/log"
 	"golang.org/x/sys/unix"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/config"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/service"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/supervisor"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/system"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/systools"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/config"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/service"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/supervisor"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/system"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/systools"
 
-	_ "github.com/aledbf/qemubox/containerd/internal/guest/services"
-	_ "github.com/aledbf/qemubox/containerd/internal/guest/vminit/events"
-	_ "github.com/aledbf/qemubox/containerd/internal/guest/vminit/streaming"
+	_ "github.com/spin-stack/spinbox/internal/guest/services"
+	_ "github.com/spin-stack/spinbox/internal/guest/vminit/events"
+	_ "github.com/spin-stack/spinbox/internal/guest/vminit/streaming"
 )
 
 const (

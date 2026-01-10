@@ -1,6 +1,6 @@
-// Package config provides centralized configuration management for qemubox.
-// All configuration is loaded from a JSON file at /etc/qemubox/config.json
-// (overridable via QEMUBOX_CONFIG environment variable).
+// Package config provides centralized configuration management for spinbox.
+// All configuration is loaded from a JSON file at /etc/spinbox/config.json
+// (overridable via SPINBOX_CONFIG environment variable).
 package config
 
 import (
@@ -13,10 +13,10 @@ import (
 
 const (
 	// DefaultConfigPath is the default location for the config file
-	DefaultConfigPath = "/etc/qemubox/config.json"
+	DefaultConfigPath = "/etc/spinbox/config.json"
 
 	// ConfigEnvVar is the environment variable to override config file location
-	ConfigEnvVar = "QEMUBOX_CONFIG"
+	ConfigEnvVar = "SPINBOX_CONFIG"
 )
 
 // Config is the root configuration structure
@@ -28,7 +28,7 @@ type Config struct {
 	MemHotplug MemHotplugConfig `json:"memory_hotplug"`
 }
 
-// PathsConfig defines filesystem paths for qemubox components
+// PathsConfig defines filesystem paths for spinbox components
 type PathsConfig struct {
 	ShareDir      string `json:"share_dir"`       // Binaries and config directory
 	StateDir      string `json:"state_dir"`       // State files directory
@@ -118,9 +118,9 @@ var (
 // defaults
 var defaultConfig = Config{
 	Paths: PathsConfig{
-		ShareDir: "/usr/share/qemubox",
-		StateDir: "/var/lib/qemubox",
-		LogDir:   "/var/log/qemubox",
+		ShareDir: "/usr/share/spinbox",
+		StateDir: "/var/lib/spinbox",
+		LogDir:   "/var/log/spinbox",
 	},
 	Runtime: RuntimeConfig{
 		VMM: "qemu",
@@ -181,7 +181,7 @@ func Get() (*Config, error) {
 	return globalConfig, errConfig
 }
 
-// Load loads configuration from QEMUBOX_CONFIG env var or /etc/qemubox/config.json.
+// Load loads configuration from SPINBOX_CONFIG env var or /etc/spinbox/config.json.
 func Load() (*Config, error) {
 	configPath := os.Getenv(ConfigEnvVar)
 	if configPath == "" {

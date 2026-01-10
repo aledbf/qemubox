@@ -28,7 +28,7 @@ print_usage() {
 Usage: $0 [OPTIONS]
 
 Options:
-  --shim-only     Install only the qemubox shim, kernel, and QEMU binaries.
+  --shim-only     Install only the spinbox shim, kernel, and QEMU binaries.
                   Assumes containerd and CNI plugins are already installed.
   --skip-checks   Skip prerequisite checks in shim-only mode
   -h, --help      Show this help message
@@ -36,10 +36,10 @@ Options:
 Modes:
   Full install (default):
     Installs everything: containerd, runc, nerdctl, CNI plugins,
-    qemubox shim, kernel, QEMU, and systemd services.
+    spinbox shim, kernel, QEMU, and systemd services.
 
   Shim-only install (--shim-only):
-    Installs only: qemubox shim, kernel, initrd, QEMU binaries/firmware.
+    Installs only: spinbox shim, kernel, initrd, QEMU binaries/firmware.
     Requires: containerd already installed, CNI plugins available, KVM access.
 EOF
 }
@@ -59,9 +59,9 @@ done
 
 echo "================================================"
 if [ "$SHIM_ONLY" = true ]; then
-    echo "  Qemubox Installation Script (Shim-Only Mode)"
+    echo "  Spinbox Installation Script (Shim-Only Mode)"
 else
-    echo "  Qemubox Installation Script"
+    echo "  Spinbox Installation Script"
 fi
 echo "================================================"
 echo ""
@@ -153,7 +153,7 @@ check_containerd_running() {
 }
 
 check_containerd_config() {
-    section "Checking containerd configuration for qemubox runtime..."
+    section "Checking containerd configuration for spinbox runtime..."
     local cfg="/etc/containerd/config.toml"
     if [ ! -f "$cfg" ]; then
         log_warn "No containerd config.toml found"
@@ -161,21 +161,21 @@ check_containerd_config() {
         return 1
     fi
     log_ok "Config found: $cfg"
-    if grep -q "qemubox" "$cfg" 2>/dev/null; then
-        log_ok "qemubox runtime found in config"
+    if grep -q "spinbox" "$cfg" 2>/dev/null; then
+        log_ok "spinbox runtime found in config"
         return 0
     fi
-    log_warn "qemubox runtime not found in containerd config"
+    log_warn "spinbox runtime not found in containerd config"
     cat <<EOF
 
       Add the following to your containerd config.toml:
 
-      ${BLUE}[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.qemubox]${NC}
-      ${BLUE}  runtime_type = "io.containerd.qemubox.v1"${NC}
-      ${BLUE}  snapshotter = "nexus-erofs"${NC}
+      ${BLUE}[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.spinbox]${NC}
+      ${BLUE}  runtime_type = "io.containerd.spinbox.v1"${NC}
+      ${BLUE}  snapshotter = "spin-erofs"${NC}
 
-      Note: You also need the nexus-erofs proxy plugin configured.
-      See /usr/share/qemubox/config/containerd/config.toml for an example.
+      Note: You also need the spin-erofs proxy plugin configured.
+      See /usr/share/spinbox/config/containerd/config.toml for an example.
 
 EOF
     return 1
@@ -185,7 +185,7 @@ check_kvm_access() {
     section "Checking KVM access..."
     if [ ! -e /dev/kvm ]; then
         log_err "/dev/kvm does not exist"
-        echo "      KVM is required for qemubox. Ensure your system supports virtualization."
+        echo "      KVM is required for spinbox. Ensure your system supports virtualization."
         return 1
     fi
     if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
@@ -252,7 +252,7 @@ check_cni_config() {
     fi
     log_warn "No CNI configuration found in /etc/cni/net.d/"
     echo "      You may need to create a CNI network configuration."
-    echo "      Example: /usr/share/qemubox/config/cni/net.d/10-qemubox.conflist"
+    echo "      Example: /usr/share/spinbox/config/cni/net.d/10-spinbox.conflist"
     return 1
 }
 
@@ -301,7 +301,7 @@ check_ubuntu_packages() {
 
 check_qemu_dependencies() {
     section "Checking QEMU binary dependencies..."
-    local qemu_bin="${SCRIPT_DIR}/usr/share/qemubox/bin/qemu-system-x86_64"
+    local qemu_bin="${SCRIPT_DIR}/usr/share/spinbox/bin/qemu-system-x86_64"
     if [ ! -f "$qemu_bin" ]; then
         log_warn "QEMU binary not found in release package (will skip dependency check)"
         return 0
@@ -408,74 +408,74 @@ echo ""
 echo "Installing files..."
 
 if [ "$SHIM_ONLY" = true ]; then
-    echo "  → Installing shim binaries to /usr/share/qemubox/bin..."
-    mkdir -p /usr/share/qemubox/bin
-    for bin in containerd-shim-qemubox-v1 qemu-system-x86_64; do
-        src="${SCRIPT_DIR}/usr/share/qemubox/bin/${bin}"
-        [ -f "$src" ] && cp "$src" /usr/share/qemubox/bin/ && chmod +x "/usr/share/qemubox/bin/${bin}"
+    echo "  → Installing shim binaries to /usr/share/spinbox/bin..."
+    mkdir -p /usr/share/spinbox/bin
+    for bin in containerd-shim-spinbox-v1 qemu-system-x86_64; do
+        src="${SCRIPT_DIR}/usr/share/spinbox/bin/${bin}"
+        [ -f "$src" ] && cp "$src" /usr/share/spinbox/bin/ && chmod +x "/usr/share/spinbox/bin/${bin}"
     done
     log_ok "Shim binaries installed"
 else
-    install_dir "${SCRIPT_DIR}/usr/share/qemubox/bin" "/usr/share/qemubox/bin" "binaries" true
+    install_dir "${SCRIPT_DIR}/usr/share/spinbox/bin" "/usr/share/spinbox/bin" "binaries" true
 fi
 
-install_dir "${SCRIPT_DIR}/usr/share/qemubox/kernel" "/usr/share/qemubox/kernel" "kernel and initrd"
+install_dir "${SCRIPT_DIR}/usr/share/spinbox/kernel" "/usr/share/spinbox/kernel" "kernel and initrd"
 
 if [ "$SHIM_ONLY" = false ]; then
-    install_dir "${SCRIPT_DIR}/usr/share/qemubox/config" "/usr/share/qemubox/config" "configuration files"
+    install_dir "${SCRIPT_DIR}/usr/share/spinbox/config" "/usr/share/spinbox/config" "configuration files"
 else
-    echo "  → Installing qemubox config reference..."
-    mkdir -p /usr/share/qemubox/config/qemubox
-    [ -f "${SCRIPT_DIR}/usr/share/qemubox/config/qemubox/config.json" ] && \
-        cp "${SCRIPT_DIR}/usr/share/qemubox/config/qemubox/config.json" /usr/share/qemubox/config/qemubox/
-    [ -d "${SCRIPT_DIR}/usr/share/qemubox/config/cni" ] && \
-        mkdir -p /usr/share/qemubox/config/cni && \
-        cp -r "${SCRIPT_DIR}/usr/share/qemubox/config/cni/"* /usr/share/qemubox/config/cni/
+    echo "  → Installing spinbox config reference..."
+    mkdir -p /usr/share/spinbox/config/spinbox
+    [ -f "${SCRIPT_DIR}/usr/share/spinbox/config/spinbox/config.json" ] && \
+        cp "${SCRIPT_DIR}/usr/share/spinbox/config/spinbox/config.json" /usr/share/spinbox/config/spinbox/
+    [ -d "${SCRIPT_DIR}/usr/share/spinbox/config/cni" ] && \
+        mkdir -p /usr/share/spinbox/config/cni && \
+        cp -r "${SCRIPT_DIR}/usr/share/spinbox/config/cni/"* /usr/share/spinbox/config/cni/
     log_ok "Reference configuration files installed"
 fi
 
-if [ -d "${SCRIPT_DIR}/usr/share/qemubox/qemu" ]; then
-    install_dir "${SCRIPT_DIR}/usr/share/qemubox/qemu" "/usr/share/qemubox/qemu" "QEMU firmware"
+if [ -d "${SCRIPT_DIR}/usr/share/spinbox/qemu" ]; then
+    install_dir "${SCRIPT_DIR}/usr/share/spinbox/qemu" "/usr/share/spinbox/qemu" "QEMU firmware"
 fi
 
 if [ "$SHIM_ONLY" = false ]; then
-    if [ -d "${SCRIPT_DIR}/usr/share/qemubox/libexec/cni" ]; then
-        install_dir "${SCRIPT_DIR}/usr/share/qemubox/libexec/cni" "/usr/share/qemubox/libexec/cni" "CNI plugins" true
+    if [ -d "${SCRIPT_DIR}/usr/share/spinbox/libexec/cni" ]; then
+        install_dir "${SCRIPT_DIR}/usr/share/spinbox/libexec/cni" "/usr/share/spinbox/libexec/cni" "CNI plugins" true
     fi
 else
     log_skip "Skipping CNI plugins (shim-only mode assumes system CNI plugins)"
 fi
 
 echo "  → Installing scripts..."
-cp "${SCRIPT_DIR}/install.sh" /usr/share/qemubox/
-cp "${SCRIPT_DIR}/uninstall.sh" /usr/share/qemubox/
-chmod +x /usr/share/qemubox/install.sh /usr/share/qemubox/uninstall.sh
+cp "${SCRIPT_DIR}/install.sh" /usr/share/spinbox/
+cp "${SCRIPT_DIR}/uninstall.sh" /usr/share/spinbox/
+chmod +x /usr/share/spinbox/install.sh /usr/share/spinbox/uninstall.sh
 log_ok "Scripts installed"
 
 echo "  → Creating state directories..."
-mkdir -p /var/lib/qemubox /var/run/qemubox /var/log/qemubox /run/qemubox/vm
+mkdir -p /var/lib/spinbox /var/run/spinbox /var/log/spinbox /run/spinbox/vm
 if [ "$SHIM_ONLY" = false ]; then
-    mkdir -p /var/lib/qemubox/containerd /run/qemubox/containerd /run/qemubox/containerd/fifo
-    mkdir -p /var/lib/qemubox/nexus-erofs-snapshotter /run/qemubox/nexus-erofs-snapshotter
+    mkdir -p /var/lib/spinbox/containerd /run/spinbox/containerd /run/spinbox/containerd/fifo
+    mkdir -p /var/lib/spin-stack/erofs-snapshotter /run/spin-stack/erofs-snapshotter
 fi
 log_ok "State directories created"
 
-echo "  → Installing qemubox configuration..."
-mkdir -p /etc/qemubox
-if [ ! -f /etc/qemubox/config.json ]; then
-    cp "${SCRIPT_DIR}/usr/share/qemubox/config/qemubox/config.json" /etc/qemubox/config.json
-    log_ok "Configuration file created at /etc/qemubox/config.json"
+echo "  → Installing spinbox configuration..."
+mkdir -p /etc/spinbox
+if [ ! -f /etc/spinbox/config.json ]; then
+    cp "${SCRIPT_DIR}/usr/share/spinbox/config/spinbox/config.json" /etc/spinbox/config.json
+    log_ok "Configuration file created at /etc/spinbox/config.json"
 else
-    log_warn "/etc/qemubox/config.json already exists, skipping"
-    echo "      Example: /usr/share/qemubox/config/qemubox/config.json"
+    log_warn "/etc/spinbox/config.json already exists, skipping"
+    echo "      Example: /usr/share/spinbox/config/spinbox/config.json"
 fi
 
 if [ "$SHIM_ONLY" = false ]; then
     echo "  → Installing systemd services..."
-    mkdir -p /usr/share/qemubox/systemd
-    cp "${SCRIPT_DIR}/usr/share/qemubox/systemd/"*.service /usr/share/qemubox/systemd/
-    ln -sf /usr/share/qemubox/systemd/qemubox-nexus-erofs-snapshotter.service /etc/systemd/system/
-    ln -sf /usr/share/qemubox/systemd/qemubox-containerd.service /etc/systemd/system/
+    mkdir -p /usr/share/spinbox/systemd
+    cp "${SCRIPT_DIR}/usr/share/spinbox/systemd/"*.service /usr/share/spinbox/systemd/
+    ln -sf /usr/share/spinbox/systemd/spinbox-spin-erofs-snapshotter.service /etc/systemd/system/
+    ln -sf /usr/share/spinbox/systemd/spinbox-containerd.service /etc/systemd/system/
     systemctl daemon-reload
     log_ok "Systemd services installed"
 else
@@ -500,31 +500,31 @@ check_file() {
 
 # Core files (both modes)
 CORE_FILES=(
-    "/usr/share/qemubox/bin/containerd-shim-qemubox-v1"
-    "/usr/share/qemubox/bin/qemu-system-x86_64"
-    "/usr/share/qemubox/qemu/bios-256k.bin"
-    "/usr/share/qemubox/qemu/kvmvapic.bin"
-    "/usr/share/qemubox/qemu/vgabios-stdvga.bin"
-    "/usr/share/qemubox/kernel/qemubox-kernel-x86_64"
-    "/usr/share/qemubox/kernel/qemubox-initrd"
-    "/usr/share/qemubox/config/qemubox/config.json"
-    "/etc/qemubox/config.json"
+    "/usr/share/spinbox/bin/containerd-shim-spinbox-v1"
+    "/usr/share/spinbox/bin/qemu-system-x86_64"
+    "/usr/share/spinbox/qemu/bios-256k.bin"
+    "/usr/share/spinbox/qemu/kvmvapic.bin"
+    "/usr/share/spinbox/qemu/vgabios-stdvga.bin"
+    "/usr/share/spinbox/kernel/spinbox-kernel-x86_64"
+    "/usr/share/spinbox/kernel/spinbox-initrd"
+    "/usr/share/spinbox/config/spinbox/config.json"
+    "/etc/spinbox/config.json"
 )
 
 # Full install additional files
 FULL_FILES=(
-    "/usr/share/qemubox/bin/containerd"
-    "/usr/share/qemubox/bin/containerd-shim-runc-v2"
-    "/usr/share/qemubox/bin/nexus-erofs-snapshotter"
-    "/usr/share/qemubox/bin/ctr"
-    "/usr/share/qemubox/bin/runc"
-    "/usr/share/qemubox/bin/nerdctl"
-    "/usr/share/qemubox/config/containerd/config.toml"
-    "/usr/share/qemubox/config/cni/net.d/10-qemubox.conflist"
-    "/usr/share/qemubox/systemd/qemubox-nexus-erofs-snapshotter.service"
-    "/usr/share/qemubox/systemd/qemubox-containerd.service"
-    "/etc/systemd/system/qemubox-nexus-erofs-snapshotter.service"
-    "/etc/systemd/system/qemubox-containerd.service"
+    "/usr/share/spinbox/bin/containerd"
+    "/usr/share/spinbox/bin/containerd-shim-runc-v2"
+    "/usr/share/spinbox/bin/spin-erofs-snapshotter"
+    "/usr/share/spinbox/bin/ctr"
+    "/usr/share/spinbox/bin/runc"
+    "/usr/share/spinbox/bin/nerdctl"
+    "/usr/share/spinbox/config/containerd/config.toml"
+    "/usr/share/spinbox/config/cni/net.d/10-spinbox.conflist"
+    "/usr/share/spinbox/systemd/spinbox-spin-erofs-snapshotter.service"
+    "/usr/share/spinbox/systemd/spinbox-containerd.service"
+    "/etc/systemd/system/spinbox-spin-erofs-snapshotter.service"
+    "/etc/systemd/system/spinbox-containerd.service"
 )
 
 CNI_PLUGINS=(bridge host-local loopback)
@@ -536,7 +536,7 @@ else
     echo "Verifying full installation..."
     for f in "${CORE_FILES[@]}" "${FULL_FILES[@]}"; do check_file "$f"; done
     for plugin in "${CNI_PLUGINS[@]}"; do
-        check_file "/usr/share/qemubox/libexec/cni/${plugin}"
+        check_file "/usr/share/spinbox/libexec/cni/${plugin}"
     done
 fi
 
@@ -559,46 +559,46 @@ if [ $ERRORS -eq 0 ]; then
     if [ "$SHIM_ONLY" = true ]; then
         cat <<EOF
 Next steps:
-  1. Review and customize qemubox configuration (if needed):
-     vi /etc/qemubox/config.json
+  1. Review and customize spinbox configuration (if needed):
+     vi /etc/spinbox/config.json
 
-  2. Configure the qemubox runtime in your containerd config:
+  2. Configure the spinbox runtime in your containerd config:
      Add to /etc/containerd/config.toml:
 
-     ${BLUE}[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.qemubox]${NC}
-     ${BLUE}  runtime_type = "io.containerd.qemubox.v1"${NC}
-     ${BLUE}  snapshotter = "nexus-erofs"${NC}
+     ${BLUE}[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.spinbox]${NC}
+     ${BLUE}  runtime_type = "io.containerd.spinbox.v1"${NC}
+     ${BLUE}  snapshotter = "spin-erofs"${NC}
 
-     Note: You also need to configure the nexus-erofs proxy plugin.
-     See /usr/share/qemubox/config/containerd/config.toml for an example.
+     Note: You also need to configure the spin-erofs proxy plugin.
+     See /usr/share/spinbox/config/containerd/config.toml for an example.
 
   3. Ensure the shim is in containerd's PATH or use absolute path:
-     Shim location: /usr/share/qemubox/bin/containerd-shim-qemubox-v1
+     Shim location: /usr/share/spinbox/bin/containerd-shim-spinbox-v1
 
   4. Restart containerd to pick up the new runtime:
      systemctl restart containerd
 
   5. Test the runtime:
-     ctr run --rm --runtime io.containerd.qemubox.v1 docker.io/library/alpine:latest test echo hello
+     ctr run --rm --runtime io.containerd.spinbox.v1 docker.io/library/alpine:latest test echo hello
 
 EOF
     else
         cat <<EOF
 Next steps:
   1. Review and customize configuration (if needed):
-     vi /etc/qemubox/config.json
-     (See /usr/share/qemubox/config/qemubox/config.json for defaults)
+     vi /etc/spinbox/config.json
+     (See /usr/share/spinbox/config/spinbox/config.json for defaults)
 
   2. Enable and start services (snapshotter starts automatically with containerd):
-     systemctl enable qemubox-containerd
-     systemctl start qemubox-containerd
+     systemctl enable spinbox-containerd
+     systemctl start spinbox-containerd
 
   3. Check service status:
-     systemctl status qemubox-nexus-erofs-snapshotter
-     systemctl status qemubox-containerd
+     systemctl status spinbox-spin-erofs-snapshotter
+     systemctl status spinbox-containerd
 
-  4. Add /usr/share/qemubox/bin to PATH:
-     export PATH=/usr/share/qemubox/bin:\$PATH
+  4. Add /usr/share/spinbox/bin to PATH:
+     export PATH=/usr/share/spinbox/bin:\$PATH
 
 EOF
     fi

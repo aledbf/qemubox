@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
 func TestBuildKernelCmdline(t *testing.T) {

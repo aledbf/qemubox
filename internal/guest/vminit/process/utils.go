@@ -20,7 +20,7 @@ import (
 	runc "github.com/containerd/go-runc"
 	"golang.org/x/sys/unix"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/stream"
 )
 
 const (

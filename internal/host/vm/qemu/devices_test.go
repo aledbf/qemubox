@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
 func TestGenerateStableDiskID(t *testing.T) {

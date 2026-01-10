@@ -23,7 +23,7 @@ prefix = "TTRPC"
 
 # Aggregrate the API descriptors to lock down API changes.
 [[descriptors]]
-prefix = "github.com/aledbf/qemubox/containerd/api"
+prefix = "github.com/spin-stack/spinbox/api"
 target = "next.pb.txt"
 ignore_files = [
 	"google/protobuf/descriptor.proto",

@@ -9,9 +9,9 @@ import (
 	"github.com/containerd/plugin"
 	"github.com/containerd/plugin/registry"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/bundle"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/task"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/bundle"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/stream"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/task"
 )
 
 func init() {

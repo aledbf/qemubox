@@ -8,8 +8,8 @@ import (
 
 	runcC "github.com/containerd/go-runc"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/runc"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/process"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/runc"
 )
 
 // exitTracker manages process lifecycle coordination, specifically handling the race

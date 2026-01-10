@@ -16,8 +16,8 @@ import (
 	"github.com/containerd/errdefs/pkg/errgrpc"
 	"github.com/containerd/typeurl/v2"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/runc"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/process"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/runc"
 )
 
 // Exec an additional process inside the container

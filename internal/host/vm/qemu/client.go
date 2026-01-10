@@ -11,8 +11,8 @@ import (
 	"github.com/containerd/ttrpc"
 	"github.com/mdlayher/vsock"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
-	vsockports "github.com/aledbf/qemubox/containerd/internal/vsock"
+	"github.com/spin-stack/spinbox/internal/host/vm"
+	vsockports "github.com/spin-stack/spinbox/internal/vsock"
 )
 
 func (q *Instance) Client() (*ttrpc.Client, error) {

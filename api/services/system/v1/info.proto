@@ -6,7 +6,7 @@ package containerd.vminitd.services.system.v1;
 
 import "google/protobuf/empty.proto";
 
-option go_package = "github.com/aledbf/qemubox/containerd/api/services/system/v1;system";
+option go_package = "github.com/spin-stack/spinbox/api/services/system/v1;system";
 
 // System service provides VM system information and CPU/memory hotplug operations.
 // This service is exposed by vminitd over vsock to the host shim for dynamic
@@ -54,7 +54,7 @@ service System {
 }
 
 message InfoResponse {
-	// version is the qemubox vminitd version (e.g., "1.0.0").
+	// version is the spinbox vminitd version (e.g., "1.0.0").
 	string version = 1;
 
 	// kernel_version is the Linux kernel version running in the VM (e.g., "6.1.0").

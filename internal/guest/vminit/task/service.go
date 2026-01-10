@@ -24,9 +24,9 @@ import (
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/ttrpc"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/runc"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/process"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/runc"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/stream"
 )
 
 var (

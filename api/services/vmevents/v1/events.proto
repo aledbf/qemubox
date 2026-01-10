@@ -2,12 +2,12 @@
 
 syntax = "proto3";
 
-package qemubox.services.vmevents.v1;
+package spinbox.services.vmevents.v1;
 
 import "github.com/containerd/containerd/api/types/event.proto";
 import "google/protobuf/empty.proto";
 
-option go_package = "github.com/aledbf/qemubox/containerd/api/services/vmevents/v1;vmevents";
+option go_package = "github.com/spin-stack/spinbox/api/services/vmevents/v1;vmevents";
 
 service Events {
 	// Stream events

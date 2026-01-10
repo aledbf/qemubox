@@ -172,7 +172,7 @@ RUN --mount=type=cache,sharing=locked,id=qemu-runtime-aptlib,target=/var/lib/apt
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64
 
 # Copy BIOS/firmware files needed for boot
-COPY --from=builder /opt/qemu/share/qemu/ /usr/share/qemubox/qemu/
+COPY --from=builder /opt/qemu/share/qemu/ /usr/share/spinbox/qemu/
 
 ENTRYPOINT ["/usr/local/bin/qemu-system-x86_64"]
 
@@ -185,8 +185,8 @@ FROM scratch AS extract
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
 
 # Copy BIOS/firmware files needed for boot
-COPY --from=builder /opt/qemu/share/qemu/bios.bin /share/qemubox/qemu/bios.bin
-COPY --from=builder /opt/qemu/share/qemu/bios-256k.bin /share/qemubox/qemu/bios-256k.bin
-COPY --from=builder /opt/qemu/share/qemu/pvh.bin /share/qemubox/qemu/pvh.bin
-COPY --from=builder /build/pc-bios/kvmvapic.bin /share/qemubox/qemu/kvmvapic.bin
-COPY --from=builder /build/pc-bios/vgabios-stdvga.bin /share/qemubox/qemu/vgabios-stdvga.bin
+COPY --from=builder /opt/qemu/share/qemu/bios.bin /share/spinbox/qemu/bios.bin
+COPY --from=builder /opt/qemu/share/qemu/bios-256k.bin /share/spinbox/qemu/bios-256k.bin
+COPY --from=builder /opt/qemu/share/qemu/pvh.bin /share/spinbox/qemu/pvh.bin
+COPY --from=builder /build/pc-bios/kvmvapic.bin /share/spinbox/qemu/kvmvapic.bin
+COPY --from=builder /build/pc-bios/vgabios-stdvga.bin /share/spinbox/qemu/vgabios-stdvga.bin

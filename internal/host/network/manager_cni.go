@@ -13,7 +13,7 @@ import (
 
 	"github.com/containerd/log"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/network/cni"
+	"github.com/spin-stack/spinbox/internal/host/network/cni"
 )
 
 // CleanupResult reports what succeeded and what failed during network teardown.

@@ -13,8 +13,8 @@ import (
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/runc"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/process"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/runc"
 )
 
 // preStart prepares for starting a container process and handling its exit.

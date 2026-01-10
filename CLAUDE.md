@@ -1,4 +1,4 @@
-# qemubox
+# spinbox
 
 **CLAUDE.md Version**: 1.0.0
 **Last Updated**: 2025-01-09
@@ -119,7 +119,7 @@ All checks must pass before committing.
 ```
 .
 ├── cmd/                           # Application entry points
-│   ├── containerd-shim-qemubox-v1/  # Host: containerd shim
+│   ├── containerd-shim-spinbox-v1/  # Host: containerd shim
 │   └── vminitd/                     # Guest: PID 1 inside VM
 ├── internal/                      # Private application code
 │   ├── shim/                        # Shim-side implementation
@@ -143,8 +143,8 @@ All checks must pass before committing.
 ### Key Directories
 
 **Applications** (`cmd/`):
-- **`cmd/containerd-shim-qemubox-v1/`** - Shim entry point
-  - Loads config from `/etc/qemubox/config.json` or `QEMUBOX_CONFIG` env var
+- **`cmd/containerd-shim-spinbox-v1/`** - Shim entry point
+  - Loads config from `/etc/spinbox/config.json` or `SPINBOX_CONFIG` env var
   - Registers with containerd's shim manager
 
 - **`cmd/vminitd/`** - Guest init daemon
@@ -250,7 +250,7 @@ find api/ -name "*.pb.go"
 
 ### VM Isolation [CRITICAL]
 
-VM isolation is the **primary security boundary** in qemubox:
+VM isolation is the **primary security boundary** in spinbox:
 - Containers run inside QEMU/KVM VMs
 - Network namespaces are NOT used for container isolation
 - Each container gets its own VM
@@ -447,7 +447,7 @@ This root CLAUDE.md provides universal rules. For work in specific directories, 
 
 ### Required Configuration
 
-Config file: `/etc/qemubox/config.json` (or `QEMUBOX_CONFIG` env var)
+Config file: `/etc/spinbox/config.json` (or `SPINBOX_CONFIG` env var)
 
 See `examples/config.json` for reference configuration.
 

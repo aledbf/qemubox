@@ -1,4 +1,4 @@
-# Qemubox Containerd Runtime - Task Runner
+# Spinbox Containerd Runtime - Task Runner
 #
 # Quick Start:
 #   task build           # Build everything (shim, kernel, initrd)
@@ -33,7 +33,7 @@ vars:
   OUTPUT_DIR: _output
   BIN_DIR: bin
   SCRIPTS_DIR: hack
-  BUILDKIT_CACHE_DIR: '{{.BUILDKIT_CACHE_DIR | default "/var/lib/qemubox-buildkit-cache"}}'
+  BUILDKIT_CACHE_DIR: '{{.BUILDKIT_CACHE_DIR | default "/var/lib/spinbox-buildkit-cache"}}'
   BUILDKIT_CACHE_KERNEL: '{{.BUILDKIT_CACHE_DIR}}/kernel'
   BUILDKIT_CACHE_INITRD: '{{.BUILDKIT_CACHE_DIR}}/initrd'
   BUILDKIT_CACHE_QEMU: '{{.BUILDKIT_CACHE_DIR}}/qemu'
@@ -77,19 +77,19 @@ tasks:
   build:shim:
     desc: Build containerd shim binary (static, Linux x86_64)
     sources:
-      - cmd/containerd-shim-qemubox-v1/**
+      - cmd/containerd-shim-spinbox-v1/**
       - internal/**
       - pkg/**
       - go.mod
       - go.sum
     generates:
-      - "{{.OUTPUT_DIR}}/containerd-shim-qemubox-v1"
+      - "{{.OUTPUT_DIR}}/containerd-shim-spinbox-v1"
     cmds:
       - task: build:go
         vars:
-          NAME: containerd-shim-qemubox-v1
-          OUT: containerd-shim-qemubox-v1
-          PKG: ./cmd/containerd-shim-qemubox-v1
+          NAME: containerd-shim-spinbox-v1
+          OUT: containerd-shim-spinbox-v1
+          PKG: ./cmd/containerd-shim-spinbox-v1
           GO_STATIC_TAGS: '-tags "osusergo netgo static_build"'
 
   build:vminitd:
@@ -127,7 +127,7 @@ tasks:
           --build-arg KERNEL_NPROC=8 \
           --output type=local,dest={{.OUTPUT_DIR}} \
           .
-        echo "✓ Initrd built: _output/qemubox-initrd"
+        echo "✓ Initrd built: _output/spinbox-initrd"
 
   build:kernel:
     desc: Build kernel
@@ -146,7 +146,7 @@ tasks:
           --build-arg KERNEL_NPROC=8 \
           --output type=local,dest={{.OUTPUT_DIR}} \
           .
-        echo "✓ Kernel built: _output/qemubox-kernel-x86_64"
+        echo "✓ Kernel built: _output/spinbox-kernel-x86_64"
 
   build:qemu:
     desc: Build QEMU binaries and firmware (qemu-system-x86_64, BIOS files)
@@ -165,7 +165,7 @@ tasks:
           --output type=local,dest={{.OUTPUT_DIR}} \
           .
         echo "✓ QEMU built: _output/bin/qemu-system-x86_64"
-        echo "✓ QEMU firmware: _output/share/qemubox/qemu/"
+        echo "✓ QEMU firmware: _output/share/spinbox/qemu/"
 
   # ==========================================================================
   # Development Tasks
@@ -192,7 +192,7 @@ tasks:
           --build-arg KERNEL_VERSION=${KERNEL_VERSION} \
           --build-arg KERNEL_ARCH=${KERNEL_ARCH} \
           --build-arg KERNEL_NPROC=${KERNEL_NPROC:-8} \
-          --output type=docker,name=qemubox-menuconfig \
+          --output type=docker,name=spinbox-menuconfig \
           .
         echo "🐳 Starting kernel menuconfig..."
         echo "   Use arrow keys to navigate, Space to select, Enter to confirm"
@@ -204,7 +204,7 @@ tasks:
           -w /usr/src/linux \
           -e KCONFIG_CONFIG=/config/config-${KERNEL_VERSION}-${KERNEL_ARCH} \
           -e TERM=${TERM:-xterm-256color} \
-          qemubox-menuconfig \
+          spinbox-menuconfig \
           bash -c "make ARCH=${KERNEL_ARCH} menuconfig && cp .config /config/config-${KERNEL_VERSION}-${KERNEL_ARCH}"
 
   # ==========================================================================
@@ -230,9 +230,9 @@ tasks:
     desc: Build release tarball and run containerd integration test
     vars:
       VERSION: '{{.VERSION | default "ci"}}'
-      INTEGRATION_IMAGE: '{{.INTEGRATION_IMAGE | default "ghcr.io/aledbf/qemubox/sandbox:latest"}}'
-      INTEGRATION_RUNTIME: '{{.INTEGRATION_RUNTIME | default "io.containerd.qemubox.v1"}}'
-      INTEGRATION_SNAPSHOTTER: '{{.INTEGRATION_SNAPSHOTTER | default "nexus-erofs"}}'
+      INTEGRATION_IMAGE: '{{.INTEGRATION_IMAGE | default "ghcr.io/spin-stack/spinbox/sandbox:latest"}}'
+      INTEGRATION_RUNTIME: '{{.INTEGRATION_RUNTIME | default "io.containerd.spinbox.v1"}}'
+      INTEGRATION_SNAPSHOTTER: '{{.INTEGRATION_SNAPSHOTTER | default "spin-erofs"}}'
     cmds:
       - task: release
         vars:
@@ -240,7 +240,7 @@ tasks:
       - |
         set -eou pipefail
         VERSION="{{.VERSION}}"
-        RELEASE_NAME="qemubox-${VERSION}-linux-x86_64"
+        RELEASE_NAME="spinbox-${VERSION}-linux-x86_64"
         TARBALL="{{.OUTPUT_DIR}}/release/${RELEASE_NAME}.tar.gz"
 
         if [ ! -f "${TARBALL}" ]; then
@@ -252,10 +252,10 @@ tasks:
         trap 'rm -rf "${WORKDIR}"' EXIT
 
         echo "📦 Verifying QEMU firmware in build output..."
-        if [ -d "{{.OUTPUT_DIR}}/share/qemubox/qemu" ]; then
-          ls -la "{{.OUTPUT_DIR}}/share/qemubox/qemu"
+        if [ -d "{{.OUTPUT_DIR}}/share/spinbox/qemu" ]; then
+          ls -la "{{.OUTPUT_DIR}}/share/spinbox/qemu"
         else
-          echo "👹 Error: {{.OUTPUT_DIR}}/share/qemubox/qemu not found"
+          echo "👹 Error: {{.OUTPUT_DIR}}/share/spinbox/qemu not found"
           exit 1
         fi
 
@@ -265,23 +265,23 @@ tasks:
           exit 1
         fi
 
-        if ! grep -q "usr/share/qemubox/qemu/bios-256k.bin" "${TARBALL_LIST}"; then
+        if ! grep -q "usr/share/spinbox/qemu/bios-256k.bin" "${TARBALL_LIST}"; then
           echo "👹 Error: bios-256k.bin missing from release tarball"
-          grep "usr/share/qemubox/qemu" "${TARBALL_LIST}" || true
+          grep "usr/share/spinbox/qemu" "${TARBALL_LIST}" || true
           exit 1
         fi
 
         tar -xzf "${TARBALL}" -C "${WORKDIR}"
 
         SUDO="${SUDO:-sudo}"
-        ${SUDO} systemctl stop qemubox-containerd || true
-        ${SUDO} systemctl stop qemubox-buildkit || true
-        ${SUDO} systemctl stop qemubox-nexus-erofs-snapshotter.service || true
+        ${SUDO} systemctl stop spinbox-containerd || true
+        ${SUDO} systemctl stop spinbox-buildkit || true
+        ${SUDO} systemctl stop spinbox-spin-erofs-snapshotter.service || true
         ${SUDO} "${WORKDIR}/${RELEASE_NAME}/install.sh"
-        ${SUDO} systemctl enable --now qemubox-containerd
-        ${SUDO} systemctl reset-failed qemubox-containerd || true
-        ${SUDO} systemctl enable --now qemubox-nexus-erofs-snapshotter.service
-        ${SUDO} systemctl reset-failed qemubox-nexus-erofs-snapshotter.service || true
+        ${SUDO} systemctl enable --now spinbox-containerd
+        ${SUDO} systemctl reset-failed spinbox-containerd || true
+        ${SUDO} systemctl enable --now spinbox-spin-erofs-snapshotter.service
+        ${SUDO} systemctl reset-failed spinbox-spin-erofs-snapshotter.service || true
 
         if [ ! -e /dev/vsock ]; then
           echo "👹 Error: /dev/vsock not found"
@@ -292,7 +292,7 @@ tasks:
         echo "✓ /dev/vsock present"
         ${SUDO} lsmod | grep vhost_vsock || true
 
-        SOCKET="/var/run/qemubox/containerd.sock"
+        SOCKET="/var/run/spinbox/containerd.sock"
 
         for _ in $(seq 1 30); do
           if [ -S "${SOCKET}" ]; then
@@ -303,12 +303,12 @@ tasks:
 
         if [ ! -S "${SOCKET}" ]; then
           echo "👹 Error: containerd socket not ready"
-          ${SUDO} systemctl status qemubox-containerd || true
+          ${SUDO} systemctl status spinbox-containerd || true
           exit 1
         fi
 
-        CTR_BIN="/usr/share/qemubox/bin/ctr"
-        CTR_NAMESPACE="qemubox-ci"
+        CTR_BIN="/usr/share/spinbox/bin/ctr"
+        CTR_NAMESPACE="spinbox-ci"
         CTR_ID="qbx-ci-$(date +%s)"
 
         ${SUDO} "${CTR_BIN}" \
@@ -363,21 +363,21 @@ tasks:
           echo "👹 Error: task did not reach RUNNING state (status=${STATUS:-unknown})"
           ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks info "${CTR_ID}" || true
           ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks list || true
-          echo "---- qemubox-containerd logs ----"
-          ${SUDO} journalctl -u qemubox-containerd --no-pager -n 200 || true
-          echo "---- qemubox qemu.log (latest) ----"
-          QEMU_LOG=$(ls -1t /var/log/qemubox/*/qemu.log 2>/dev/null | head -n 1 || true)
+          echo "---- spinbox-containerd logs ----"
+          ${SUDO} journalctl -u spinbox-containerd --no-pager -n 200 || true
+          echo "---- spinbox qemu.log (latest) ----"
+          QEMU_LOG=$(ls -1t /var/log/spinbox/*/qemu.log 2>/dev/null | head -n 1 || true)
           if [ -n "${QEMU_LOG:-}" ]; then
             ${SUDO} tail -n 200 "${QEMU_LOG}" || true
           else
-            echo "No qemu.log found under /var/log/qemubox/"
+            echo "No qemu.log found under /var/log/spinbox/"
           fi
-          echo "---- qemubox console.log (latest) ----"
-          CONSOLE_LOG=$(ls -1t /var/log/qemubox/*/console.log 2>/dev/null | head -n 1 || true)
+          echo "---- spinbox console.log (latest) ----"
+          CONSOLE_LOG=$(ls -1t /var/log/spinbox/*/console.log 2>/dev/null | head -n 1 || true)
           if [ -n "${CONSOLE_LOG:-}" ]; then
             ${SUDO} tail -n 200 "${CONSOLE_LOG}" || true
           else
-            echo "No console.log found under /var/log/qemubox/"
+            echo "No console.log found under /var/log/spinbox/"
           fi
           exit 1
         fi
@@ -388,37 +388,37 @@ tasks:
         TEST_ID="qbx-ci-$(date +%s)"
         ${SUDO} env \
           PATH="${PATH}" \
-          QEMUBOX_CONTAINERD_SOCKET="${SOCKET}" \
-          QEMUBOX_IMAGE="{{.INTEGRATION_IMAGE}}" \
-          QEMUBOX_RUNTIME="{{.INTEGRATION_RUNTIME}}" \
-          QEMUBOX_SNAPSHOTTER="{{.INTEGRATION_SNAPSHOTTER}}" \
-          QEMUBOX_FIFO_DIR="/run/qemubox/containerd/fifo" \
-          QEMUBOX_TEST_ID="${TEST_ID}" \
+          SPINBOX_CONTAINERD_SOCKET="${SOCKET}" \
+          SPINBOX_IMAGE="{{.INTEGRATION_IMAGE}}" \
+          SPINBOX_RUNTIME="{{.INTEGRATION_RUNTIME}}" \
+          SPINBOX_SNAPSHOTTER="{{.INTEGRATION_SNAPSHOTTER}}" \
+          SPINBOX_FIFO_DIR="/run/spinbox/containerd/fifo" \
+          SPINBOX_TEST_ID="${TEST_ID}" \
           go test -v -tags=integration -count=1 ./integration -test.v || {
-            echo "---- qemubox-containerd logs for ${TEST_ID} ----"
-            ${SUDO} journalctl -u qemubox-containerd --no-pager -n 200 | grep "${TEST_ID}" || true
-            echo "---- qemubox-containerd logs ----"
-            ${SUDO} journalctl -u qemubox-containerd --no-pager -n 200 || true
-            echo "---- qemubox qemu.log (latest) ----"
-            QEMU_LOG=$(ls -1t /var/log/qemubox/*/qemu.log 2>/dev/null | head -n 1 || true)
+            echo "---- spinbox-containerd logs for ${TEST_ID} ----"
+            ${SUDO} journalctl -u spinbox-containerd --no-pager -n 200 | grep "${TEST_ID}" || true
+            echo "---- spinbox-containerd logs ----"
+            ${SUDO} journalctl -u spinbox-containerd --no-pager -n 200 || true
+            echo "---- spinbox qemu.log (latest) ----"
+            QEMU_LOG=$(ls -1t /var/log/spinbox/*/qemu.log 2>/dev/null | head -n 1 || true)
             if [ -n "${QEMU_LOG:-}" ]; then
               ${SUDO} tail -n 200 "${QEMU_LOG}" || true
             else
-              echo "No qemu.log found under /var/log/qemubox/"
+              echo "No qemu.log found under /var/log/spinbox/"
             fi
-            echo "---- qemubox console.log (latest) ----"
-            CONSOLE_LOG=$(ls -1t /var/log/qemubox/*/console.log 2>/dev/null | head -n 1 || true)
+            echo "---- spinbox console.log (latest) ----"
+            CONSOLE_LOG=$(ls -1t /var/log/spinbox/*/console.log 2>/dev/null | head -n 1 || true)
             if [ -n "${CONSOLE_LOG:-}" ]; then
               ${SUDO} tail -n 200 "${CONSOLE_LOG}" || true
             else
-              echo "No console.log found under /var/log/qemubox/"
+              echo "No console.log found under /var/log/spinbox/"
             fi
             exit 1
           }
 
         if [ "${CLEANUP:-0}" = "1" ]; then
-          ${SUDO} systemctl stop qemubox-containerd || true
-          ${SUDO} systemctl stop qemubox-nexus-erofs-snapshotter.service || true
+          ${SUDO} systemctl stop spinbox-containerd || true
+          ${SUDO} systemctl stop spinbox-spin-erofs-snapshotter.service || true
           ${SUDO} "${WORKDIR}/${RELEASE_NAME}/uninstall.sh" || true
         fi
 
@@ -530,11 +530,11 @@ tasks:
   # ==========================================================================
 
   setup:buildx:
-    desc: Setup Docker Buildx builder for qemubox
+    desc: Setup Docker Buildx builder for spinbox
     cmds:
       - |
         set -eou pipefail
-        BUILDER_NAME="qemubox-builder"
+        BUILDER_NAME="spinbox-builder"
 
         if docker buildx inspect "${BUILDER_NAME}" &>/dev/null; then
           echo "✓ Builder '${BUILDER_NAME}' already exists"
@@ -561,8 +561,8 @@ tasks:
         TMPDIR=$(mktemp -d)
         trap "rm -rf $TMPDIR" EXIT
 
-        cp -R . $TMPDIR/qemubox
-        cd $TMPDIR/qemubox
+        cp -R . $TMPDIR/spinbox
+        cd $TMPDIR/spinbox
         {{.GO}} mod tidy
         {{.GO}} mod verify
 
@@ -616,7 +616,7 @@ tasks:
     vars:
       VERSION:
         sh: echo "${VERSION:-$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)}"
-      GITHUB_REPOSITORY: '{{.GITHUB_REPOSITORY | default "aledbf/qemubox"}}'
+      GITHUB_REPOSITORY: '{{.GITHUB_REPOSITORY | default "spin-stack/spinbox"}}'
       IMAGE: 'ghcr.io/{{.GITHUB_REPOSITORY}}/sandbox'
     cmds:
       - |
@@ -625,7 +625,7 @@ tasks:
         {{.DOCKER}} build --platform linux/amd64 \
           --label "org.opencontainers.image.version={{.VERSION}}" \
           --label "org.opencontainers.image.source=https://github.com/{{.GITHUB_REPOSITORY}}" \
-          --label "org.opencontainers.image.description=Sandbox image for qemubox" \
+          --label "org.opencontainers.image.description=Sandbox image for spinbox" \
           -t {{.IMAGE}}:{{.VERSION}} \
           images/sandbox
       - |

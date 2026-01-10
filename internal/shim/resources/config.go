@@ -14,7 +14,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/opencontainers/runtime-spec/specs-go"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
 // ConfigInfo provides additional context about resource configuration decisions.

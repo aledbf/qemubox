@@ -38,8 +38,8 @@ func (c *Config) validatePaths() error {
 	}
 
 	// Check kernel and initrd exist
-	kernelPath := filepath.Join(c.Paths.ShareDir, "kernel", "qemubox-kernel-x86_64")
-	initrdPath := filepath.Join(c.Paths.ShareDir, "kernel", "qemubox-initrd")
+	kernelPath := filepath.Join(c.Paths.ShareDir, "kernel", "spinbox-kernel-x86_64")
+	initrdPath := filepath.Join(c.Paths.ShareDir, "kernel", "spinbox-initrd")
 
 	if _, err := os.Stat(kernelPath); err != nil {
 		if os.IsNotExist(err) {

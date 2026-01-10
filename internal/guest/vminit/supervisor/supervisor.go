@@ -30,7 +30,7 @@ const (
 	DefaultMetadataAddr = "169.254.169.254:80"
 
 	// BundleBasePath is where bundle files are placed by the bundle service.
-	BundleBasePath = "/run/qemubox"
+	BundleBasePath = "/run/spinbox"
 
 	// BinaryName is the supervisor binary filename in the bundle.
 	BinaryName = "spin-supervisor"
@@ -111,7 +111,7 @@ func (c *Config) Validate() error {
 }
 
 // FindBinary searches for the supervisor binary in bundle directories.
-// Bundle files are placed at /run/qemubox/{namespace}/{id}/
+// Bundle files are placed at /run/spinbox/{namespace}/{id}/
 func (c *Config) FindBinary(ctx context.Context) error {
 	// Search for supervisor binary in bundle directories
 	entries, err := os.ReadDir(BundleBasePath)

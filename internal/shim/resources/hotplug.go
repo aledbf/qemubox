@@ -10,11 +10,11 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 
-	"github.com/aledbf/qemubox/containerd/internal/config"
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
-	"github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
-	"github.com/aledbf/qemubox/containerd/internal/shim/cpuhotplug"
-	"github.com/aledbf/qemubox/containerd/internal/shim/memhotplug"
+	"github.com/spin-stack/spinbox/internal/config"
+	"github.com/spin-stack/spinbox/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/host/vm/qemu"
+	"github.com/spin-stack/spinbox/internal/shim/cpuhotplug"
+	"github.com/spin-stack/spinbox/internal/shim/memhotplug"
 )
 
 // HotplugCallbacks provides callbacks for hotplug controllers to interact with the VM.

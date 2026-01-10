@@ -2,7 +2,7 @@
 
 ## Overview
 
-Qemubox uses semantic versioning for its gRPC/TTRPC APIs to ensure compatibility and smooth upgrades for users.
+Spinbox uses semantic versioning for its gRPC/TTRPC APIs to ensure compatibility and smooth upgrades for users.
 
 ## Version Format
 

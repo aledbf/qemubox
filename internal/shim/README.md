@@ -1,6 +1,6 @@
-# containerd-shim-qemubox-v1
+# containerd-shim-spinbox-v1
 
-This directory contains the source code for the `qemubox` containerd shim.
+This directory contains the source code for the `spinbox` containerd shim.
 
 ## Overview
 

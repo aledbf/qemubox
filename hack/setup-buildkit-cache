@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Setup BuildKit cache directory for qemubox builds
+# Setup BuildKit cache directory for spinbox builds
 # This script ensures the cache directory exists with proper permissions
 
 set -euo pipefail
 
-CACHE_DIR="${BUILDKIT_CACHE_DIR:-/var/lib/qemubox-buildkit-cache}"
+CACHE_DIR="${BUILDKIT_CACHE_DIR:-/var/lib/spinbox-buildkit-cache}"
 
 echo "Setting up BuildKit cache directory: ${CACHE_DIR}"
 

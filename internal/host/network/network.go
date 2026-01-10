@@ -46,12 +46,12 @@ import (
 
 	"github.com/containerd/log"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/network/cni"
+	"github.com/spin-stack/spinbox/internal/host/network/cni"
 )
 
 // LoadNetworkConfig loads CNI network configuration using a three-tier fallback:
-//  1. Environment variables (QEMUBOX_CNI_CONF_DIR, QEMUBOX_CNI_BIN_DIR)
-//  2. Qemubox-bundled CNI config (if exists)
+//  1. Environment variables (SPINBOX_CNI_CONF_DIR, SPINBOX_CNI_BIN_DIR)
+//  2. Spinbox-bundled CNI config (if exists)
 //  3. Standard system CNI paths (/etc/cni/net.d, /opt/cni/bin)
 //
 // Network configuration is auto-discovered from the first .conflist file
@@ -59,8 +59,8 @@ import (
 func LoadNetworkConfig() NetworkConfig {
 	// Priority 1: Environment variable override (user-specified paths)
 	// Allows users to override CNI config location without changing code
-	if confDir := os.Getenv("QEMUBOX_CNI_CONF_DIR"); confDir != "" {
-		binDir := os.Getenv("QEMUBOX_CNI_BIN_DIR")
+	if confDir := os.Getenv("SPINBOX_CNI_CONF_DIR"); confDir != "" {
+		binDir := os.Getenv("SPINBOX_CNI_BIN_DIR")
 		if binDir == "" {
 			// If only config dir is overridden, use standard bin dir
 			binDir = "/opt/cni/bin"
@@ -71,19 +71,19 @@ func LoadNetworkConfig() NetworkConfig {
 		}
 	}
 
-	// Priority 2: Qemubox-bundled CNI paths (if they exist)
-	// Used when qemubox is installed with its own CNI plugins
-	qemuboxConfDir := filepath.Join("/usr/share/qemubox", "config", "cni", "net.d")
-	qemuboxBinDir := filepath.Join("/usr/share/qemubox", "libexec", "cni")
-	if _, err := os.Stat(qemuboxConfDir); err == nil {
+	// Priority 2: Spinbox-bundled CNI paths (if they exist)
+	// Used when spinbox is installed with its own CNI plugins
+	spinboxConfDir := filepath.Join("/usr/share/spinbox", "config", "cni", "net.d")
+	spinboxBinDir := filepath.Join("/usr/share/spinbox", "libexec", "cni")
+	if _, err := os.Stat(spinboxConfDir); err == nil {
 		return NetworkConfig{
-			CNIConfDir: qemuboxConfDir,
-			CNIBinDir:  qemuboxBinDir,
+			CNIConfDir: spinboxConfDir,
+			CNIBinDir:  spinboxBinDir,
 		}
 	}
 
 	// Priority 3: Standard system CNI paths (fallback)
-	// Used when neither env vars nor qemubox paths are available
+	// Used when neither env vars nor spinbox paths are available
 	return NetworkConfig{
 		CNIConfDir: "/etc/cni/net.d",
 		CNIBinDir:  "/opt/cni/bin",

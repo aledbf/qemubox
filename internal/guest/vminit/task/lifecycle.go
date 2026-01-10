@@ -16,8 +16,8 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/typeurl/v2"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/runc"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/systools"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/runc"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/systools"
 )
 
 // Create a new initial process and container with the underlying OCI runtime.

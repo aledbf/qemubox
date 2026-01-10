@@ -10,8 +10,8 @@ import (
 	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/resolvconf"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/network"
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/host/network"
+	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
 type linuxManager struct{}
@@ -21,7 +21,7 @@ func newManager() Manager {
 }
 
 // InitNetworkManager creates and initializes a new NetworkManager instance.
-// Qemubox uses CNI (Container Network Interface) for all network management.
+// Spinbox uses CNI (Container Network Interface) for all network management.
 // Network state is managed in-memory (cniResults map) and by CNI IPAM plugins
 // (state stored in /var/lib/cni/networks/).
 func (m *linuxManager) InitNetworkManager(ctx context.Context) (network.NetworkManager, error) {

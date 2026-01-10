@@ -9,7 +9,7 @@ import (
 	"github.com/containerd/ttrpc"
 	"github.com/containerd/typeurl/v2"
 
-	systemAPI "github.com/aledbf/qemubox/containerd/api/services/system/v1"
+	systemAPI "github.com/spin-stack/spinbox/api/services/system/v1"
 )
 
 // getCPUStats retrieves CPU usage statistics from the container via TTRPC.

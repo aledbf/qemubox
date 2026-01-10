@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/network/cni"
+	"github.com/spin-stack/spinbox/internal/host/network/cni"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -79,7 +79,7 @@ jobs:
         with:
           driver: docker-container
           use: true
-          name: qemubox-builder
+          name: spinbox-builder
           driver-opts: |
             image=moby/buildkit:latest
             network=host
@@ -122,5 +122,5 @@ jobs:
       - name: Cleanup BuildKit cache
         if: always()
         run: |
-          find /var/lib/qemubox-buildkit-cache -type f -mtime +60 -delete || true
+          find /var/lib/spinbox-buildkit-cache -type f -mtime +60 -delete || true
           echo "BuildKit cache cleanup complete"

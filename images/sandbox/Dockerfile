@@ -1,6 +1,6 @@
-# Qemubox Workspace Image
+# Spinbox Workspace Image
 # Uses systemd as PID 1
-# Designed to run inside qemubox VM-isolated containers
+# Designed to run inside spinbox VM-isolated containers
 #
 # Build: task build
 FROM ubuntu:25.10

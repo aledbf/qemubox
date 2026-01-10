@@ -1,5 +1,5 @@
 #!/usr/bin/expect -f
-# QemuBox Snapshot Demo - Persist disk state between runs
+# SpinBox Snapshot Demo - Persist disk state between runs
 
 set timeout 120
 
@@ -46,18 +46,18 @@ after 100
 set SHELL_PROMPT {\n\$ $}
 
 # Define ctr command
-set CTR "ctr --address /var/run/qemubox/containerd.sock"
+set CTR "ctr --address /var/run/spinbox/containerd.sock"
 
 # ============================================
 # PHASE 1: Run container and make changes
 # ============================================
 
-comment "=== QEMUBOX SNAPSHOT DEMO ==="
+comment "=== SPINBOX SNAPSHOT DEMO ==="
 comment "Demonstrating persistent disk state between VM runs"
 after 1500
 
 comment "Step 1: Pull the sandbox image"
-type_cmd "$CTR image pull --snapshotter nexus-erofs ghcr.io/aledbf/qemubox/sandbox:latest"
+type_cmd "$CTR image pull --snapshotter spin-erofs ghcr.io/spin-stack/spinbox/sandbox:latest"
 
 expect {
     -re {not found|failed|error|Error|denied} {
@@ -76,7 +76,7 @@ expect {
 after [expr {$LONG_DELAY * 500}]
 
 comment "Step 2: Run VM in background"
-type_cmd "$CTR run -d -t --snapshotter nexus-erofs --runtime io.containerd.qemubox.v1 ghcr.io/aledbf/qemubox/sandbox:latest snapshot-demo"
+type_cmd "$CTR run -d -t --snapshotter spin-erofs --runtime io.containerd.spinbox.v1 ghcr.io/spin-stack/spinbox/sandbox:latest snapshot-demo"
 expect -re $SHELL_PROMPT
 after 1000
 
@@ -95,7 +95,7 @@ after 500
 
 # Save the bash spawn id and spawn attach for better terminal handling
 set bash_spawn $spawn_id
-spawn ctr --address /var/run/qemubox/containerd.sock task attach snapshot-demo
+spawn ctr --address /var/run/spinbox/containerd.sock task attach snapshot-demo
 set vm_spawn $spawn_id
 
 log_user 1
@@ -116,7 +116,7 @@ expect {
 expect {
     -re {Password:} {
         after 500
-        send "qemubox\r"
+        send "spinbox\r"
     }
     timeout {
         send_user "\nERROR: Password timeout\n"
@@ -175,7 +175,7 @@ set spawn_id $bash_spawn
 
 comment "=== HOST: Create image from VM ==="
 
-set NERDCTL "nerdctl --address /var/run/qemubox/containerd.sock"
+set NERDCTL "nerdctl --address /var/run/spinbox/containerd.sock"
 
 comment "Stop VM before creating snapshot"
 type_cmd "$CTR task kill snapshot-demo"
@@ -188,7 +188,7 @@ expect -re $SHELL_PROMPT
 after 1000
 
 comment "Create new image using nerdctl commit"
-type_cmd "$NERDCTL commit --snapshotter nexus-erofs snapshot-demo docker.io/aledbf/sandbox:with-changes"
+type_cmd "$NERDCTL commit --snapshotter spin-erofs snapshot-demo docker.io/spin-stack/sandbox:with-changes"
 # Wait for sha256 output indicating commit completed
 expect {
     -re {sha256:[a-f0-9]+} {
@@ -208,12 +208,12 @@ expect -re $SHELL_PROMPT
 after 1000
 
 comment "Compare original image layers"
-type_cmd "$CTR images inspect ghcr.io/aledbf/qemubox/sandbox:latest | head -12"
+type_cmd "$CTR images inspect ghcr.io/spin-stack/spinbox/sandbox:latest | head -12"
 expect -re $SHELL_PROMPT
 after 2000
 
 comment "New image has additional layer with our changes"
-type_cmd "$CTR images inspect docker.io/aledbf/sandbox:with-changes | head -13"
+type_cmd "$CTR images inspect docker.io/spin-stack/sandbox:with-changes | head -13"
 expect -re $SHELL_PROMPT
 after 2000
 
@@ -232,7 +232,7 @@ after 1000
 comment "=== Run VM from our custom image ==="
 
 comment "Run new container from the image with our changes"
-type_cmd "$CTR run -d -t --snapshotter nexus-erofs --runtime io.containerd.qemubox.v1 docker.io/aledbf/sandbox:with-changes snapshot-new"
+type_cmd "$CTR run -d -t --snapshotter spin-erofs --runtime io.containerd.spinbox.v1 docker.io/spin-stack/sandbox:with-changes snapshot-new"
 expect -re $SHELL_PROMPT
 after 2000
 
@@ -246,7 +246,7 @@ after 500
 
 # Save bash spawn id for cleanup later
 set bash_spawn $spawn_id
-spawn ctr --address /var/run/qemubox/containerd.sock task attach snapshot-new
+spawn ctr --address /var/run/spinbox/containerd.sock task attach snapshot-new
 
 # Wait for login
 expect {
@@ -259,7 +259,7 @@ expect {
         type_cmd "root"
         expect -re {Password:}
         after 500
-        type_cmd "qemubox"
+        type_cmd "spinbox"
         expect -re {root@localhost.*#|~#}
     }
     -re {root@localhost.*#|~#} {}
@@ -325,7 +325,7 @@ expect -re $SHELL_PROMPT
 after 500
 
 comment "Remove the committed image"
-type_cmd "$CTR images rm docker.io/aledbf/sandbox:with-changes 2>/dev/null || true"
+type_cmd "$CTR images rm docker.io/spin-stack/sandbox:with-changes 2>/dev/null || true"
 expect -re $SHELL_PROMPT
 after 500
 

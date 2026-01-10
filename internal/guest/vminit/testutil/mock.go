@@ -11,8 +11,8 @@ import (
 	"github.com/containerd/console"
 	"github.com/containerd/containerd/v2/pkg/stdio"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/runc"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/process"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/runc"
 )
 
 // MockProcess implements process.Process for testing.

@@ -1,14 +1,14 @@
 [Unit]
 Description=containerd container runtime
 Documentation=https://containerd.io
-After=network.target dbus.service qemubox-nexus-erofs-snapshotter.service
-Requires=qemubox-nexus-erofs-snapshotter.service
+After=network.target dbus.service spinbox-spin-erofs-snapshotter.service
+Requires=spinbox-spin-erofs-snapshotter.service
 
 [Service]
-Environment=QEMUBOX_VM_STATE_DIR=/run/qemubox/vm
-Environment=QEMUBOX_CNI_CONF_DIR=/usr/share/qemubox/config/cni/net.d
-Environment=QEMUBOX_CNI_BIN_DIR=/usr/share/qemubox/libexec/cni
-ExecSearchPath=/usr/share/qemubox/bin
+Environment=SPINBOX_VM_STATE_DIR=/run/spinbox/vm
+Environment=SPINBOX_CNI_CONF_DIR=/usr/share/spinbox/config/cni/net.d
+Environment=SPINBOX_CNI_BIN_DIR=/usr/share/spinbox/libexec/cni
+ExecSearchPath=/usr/share/spinbox/bin
 ExecSearchPath=/usr/local/sbin
 ExecSearchPath=/usr/local/bin
 ExecSearchPath=/usr/sbin
@@ -18,7 +18,7 @@ ExecSearchPath=/bin
 ExecStartPre=-/sbin/modprobe overlay
 ExecStartPre=-/sbin/modprobe erofs
 ExecStartPre=-/sbin/modprobe vhost_vsock
-ExecStart=/usr/share/qemubox/bin/containerd --config /usr/share/qemubox/config/containerd/config.toml
+ExecStart=/usr/share/spinbox/bin/containerd --config /usr/share/spinbox/config/containerd/config.toml
 
 Type=notify
 Delegate=yes

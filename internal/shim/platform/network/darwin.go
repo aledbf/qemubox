@@ -6,8 +6,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/network"
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/host/network"
+	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
 type darwinManager struct{}

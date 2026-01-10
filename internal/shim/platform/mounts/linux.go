@@ -14,7 +14,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
 const mountTypeOverlay = "overlay"
@@ -79,7 +79,7 @@ func (m *linuxManager) transformMounts(ctx context.Context, vmi vm.Instance, id 
 	}
 
 	// Check if we need to generate an overlay mount.
-	// When nexus-erofs provides multiple EROFS layers + ext4 (no overlay mount provided),
+	// When spin-erofs provides multiple EROFS layers + ext4 (no overlay mount provided),
 	// we need to generate one to combine them into a usable rootfs.
 	am = m.generateOverlayIfNeeded(ctx, am)
 
@@ -89,9 +89,9 @@ func (m *linuxManager) transformMounts(ctx context.Context, vmi vm.Instance, id 
 func (m *linuxManager) transformMount(ctx context.Context, id string, disks *byte, mnt *types.Mount) ([]*types.Mount, []diskOptions, error) {
 	switch mnt.Type {
 	case "erofs", "format/erofs":
-		// format/erofs is used by nexus-erofs for multi-device EROFS mounts (fsmeta with device= options).
+		// format/erofs is used by spin-erofs for multi-device EROFS mounts (fsmeta with device= options).
 		// The format/ prefix signals that containerd's standard mount manager cannot handle this type,
-		// but qemubox can - it extracts file paths and converts them to virtio-blk devices.
+		// but spinbox can - it extracts file paths and converts them to virtio-blk devices.
 		return m.handleEROFS(ctx, id, disks, mnt)
 	case "ext4":
 		return m.handleExt4(id, disks, mnt)
@@ -114,7 +114,7 @@ func (m *linuxManager) handleEROFS(_ context.Context, id string, disks *byte, mn
 	source := mnt.Source
 	isVMDK := false
 
-	// Check if this is an fsmeta.erofs with device= options (from nexus-erofs).
+	// Check if this is an fsmeta.erofs with device= options (from spin-erofs).
 	// If so, look for merged.vmdk which allows using a single QEMU device.
 	if strings.HasSuffix(source, "fsmeta.erofs") {
 		// Check for merged.vmdk in same directory
@@ -336,7 +336,7 @@ func filterOptions(options []string) []string {
 }
 
 // generateOverlayIfNeeded detects when mounts contain multiple EROFS layers followed by
-// an ext4 layer (from nexus-erofs snapshotter) and generates an overlay mount to combine them.
+// an ext4 layer (from spin-erofs snapshotter) and generates an overlay mount to combine them.
 //
 // Pattern detected:
 //   - 1+ erofs mounts (read-only lower layers)
@@ -378,7 +378,7 @@ func (m *linuxManager) generateOverlayIfNeeded(ctx context.Context, mounts []*ty
 	log.G(ctx).WithFields(log.Fields{
 		"erofs_count": erofsCount,
 		"ext4_index":  ext4Index,
-	}).Debug("generating overlay mount for nexus-erofs layers")
+	}).Debug("generating overlay mount for spin-erofs layers")
 
 	// The EROFS layers are mounted at indices 0 to erofsCount-1
 	// The ext4 layer is mounted at index ext4Index (= erofsCount)
@@ -386,10 +386,10 @@ func (m *linuxManager) generateOverlayIfNeeded(ctx context.Context, mounts []*ty
 	erofsEndIndex := erofsCount - 1
 
 	// Build overlay options using templates:
-	// - lowerdir references EROFS mount points in order (newest first, as provided by nexus-erofs)
+	// - lowerdir references EROFS mount points in order (newest first, as provided by spin-erofs)
 	// - upperdir/workdir reference directories inside the ext4 mount (persistent)
 	// Note: {{ overlay 0 N }} expands ascending: mounts/0:mounts/1:...:mounts/N
-	// nexus-erofs provides layers newest-first, which matches overlay's expected lowerdir order
+	// spin-erofs provides layers newest-first, which matches overlay's expected lowerdir order
 	overlayOpts := []string{
 		fmt.Sprintf("lowerdir={{ overlay 0 %d }}", erofsEndIndex), // ascending: newest first
 		fmt.Sprintf("upperdir={{ mount %d }}/upper", ext4Index),

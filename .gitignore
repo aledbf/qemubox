@@ -1,5 +1,5 @@
 bin
-containerd-shim-qemubox-v1
+containerd-shim-spinbox-v1
 _output
 .task
 .claude/settings.local.json

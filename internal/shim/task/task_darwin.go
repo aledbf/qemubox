@@ -1,6 +1,6 @@
 //go:build darwin
 
-// Package task implements the containerd task service for qemubox runtime.
+// Package task implements the containerd task service for spinbox runtime.
 // This file provides stub definitions for Darwin.
 // The actual implementation is only available on Linux.
 package task

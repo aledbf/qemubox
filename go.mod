@@ -1,4 +1,4 @@
-module github.com/aledbf/qemubox/containerd
+module github.com/spin-stack/spinbox
 
 go 1.25
 

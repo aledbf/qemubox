@@ -48,8 +48,8 @@ const (
 	BundleFileName = "spin-supervisor"
 
 	// GuestBinaryPath is where the supervisor binary will be available in the VM.
-	// The bundle service places files at /run/qemubox/{namespace}/{id}/
-	GuestBinaryPath = "/run/qemubox/spin-supervisor"
+	// The bundle service places files at /run/spinbox/{namespace}/{id}/
+	GuestBinaryPath = "/run/spinbox/spin-supervisor"
 )
 
 // Config holds the supervisor configuration extracted from annotations.

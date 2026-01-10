@@ -14,9 +14,9 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 
-	"github.com/aledbf/qemubox/containerd/internal/config"
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
-	"github.com/aledbf/qemubox/containerd/internal/paths"
+	"github.com/spin-stack/spinbox/internal/config"
+	"github.com/spin-stack/spinbox/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/paths"
 )
 
 func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
@@ -121,7 +121,7 @@ func (q *Instance) validateConfiguration() error {
 	}
 
 	// Require at least one network interface from CNI.
-	// qemubox currently assumes a configured NIC during guest initialization.
+	// spinbox currently assumes a configured NIC during guest initialization.
 	if len(q.nets) == 0 {
 		return fmt.Errorf("no network interface configured: call AddNetwork() before Start()")
 	}

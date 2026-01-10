@@ -44,8 +44,8 @@ func createTestConfigEnv(t *testing.T, baseDir string) testConfigEnv {
 	}
 
 	// Create dummy kernel and initrd files
-	kernelPath := filepath.Join(env.shareDir, "kernel", "qemubox-kernel-x86_64")
-	initrdPath := filepath.Join(env.shareDir, "kernel", "qemubox-initrd")
+	kernelPath := filepath.Join(env.shareDir, "kernel", "spinbox-kernel-x86_64")
+	initrdPath := filepath.Join(env.shareDir, "kernel", "spinbox-initrd")
 	if err := os.WriteFile(kernelPath, []byte("dummy"), 0644); err != nil {
 		t.Fatalf("failed to create dummy kernel: %v", err)
 	}
@@ -74,14 +74,14 @@ func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
 	// Verify paths
-	if cfg.Paths.ShareDir != "/usr/share/qemubox" {
-		t.Errorf("expected ShareDir /usr/share/qemubox, got %s", cfg.Paths.ShareDir)
+	if cfg.Paths.ShareDir != "/usr/share/spinbox" {
+		t.Errorf("expected ShareDir /usr/share/spinbox, got %s", cfg.Paths.ShareDir)
 	}
-	if cfg.Paths.StateDir != "/var/lib/qemubox" {
-		t.Errorf("expected StateDir /var/lib/qemubox, got %s", cfg.Paths.StateDir)
+	if cfg.Paths.StateDir != "/var/lib/spinbox" {
+		t.Errorf("expected StateDir /var/lib/spinbox, got %s", cfg.Paths.StateDir)
 	}
-	if cfg.Paths.LogDir != "/var/log/qemubox" {
-		t.Errorf("expected LogDir /var/log/qemubox, got %s", cfg.Paths.LogDir)
+	if cfg.Paths.LogDir != "/var/log/spinbox" {
+		t.Errorf("expected LogDir /var/log/spinbox, got %s", cfg.Paths.LogDir)
 	}
 
 	// Verify runtime
@@ -160,8 +160,8 @@ func TestLoadFrom_ValidConfig(t *testing.T) {
 	}
 
 	// Create dummy kernel and initrd
-	kernelPath := filepath.Join(kernelDir, "qemubox-kernel-x86_64")
-	initrdPath := filepath.Join(kernelDir, "qemubox-initrd")
+	kernelPath := filepath.Join(kernelDir, "spinbox-kernel-x86_64")
+	initrdPath := filepath.Join(kernelDir, "spinbox-initrd")
 	if err := os.WriteFile(kernelPath, []byte("dummy"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -244,11 +244,11 @@ func TestApplyDefaults(t *testing.T) {
 		t.Errorf("expected custom ShareDir to be preserved, got %s", cfg.Paths.ShareDir)
 	}
 
-	if cfg.Paths.StateDir != "/var/lib/qemubox" {
+	if cfg.Paths.StateDir != "/var/lib/spinbox" {
 		t.Errorf("expected default StateDir, got %s", cfg.Paths.StateDir)
 	}
 
-	if cfg.Paths.LogDir != "/var/log/qemubox" {
+	if cfg.Paths.LogDir != "/var/log/spinbox" {
 		t.Errorf("expected default LogDir, got %s", cfg.Paths.LogDir)
 	}
 
@@ -334,8 +334,8 @@ func TestValidate_Comprehensive(t *testing.T) {
 		}
 
 		// Create dummy kernel and initrd
-		kernelPath := filepath.Join(kernelDir, "qemubox-kernel-x86_64")
-		initrdPath := filepath.Join(kernelDir, "qemubox-initrd")
+		kernelPath := filepath.Join(kernelDir, "spinbox-kernel-x86_64")
+		initrdPath := filepath.Join(kernelDir, "spinbox-initrd")
 		if err := os.WriteFile(kernelPath, []byte("dummy"), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -638,7 +638,7 @@ func TestReset(t *testing.T) {
 	env1 := createTestConfigEnv(t, t.TempDir())
 
 	// Load first config
-	t.Setenv("QEMUBOX_CONFIG", env1.configFile)
+	t.Setenv("SPINBOX_CONFIG", env1.configFile)
 	loadedCfg1, err := Get()
 	if err != nil {
 		t.Fatalf("failed to load first config: %v", err)
@@ -652,8 +652,8 @@ func TestReset(t *testing.T) {
 	}
 
 	// Without Reset, Get() would return the cached first config
-	// even after changing QEMUBOX_CONFIG. Verify this:
-	t.Setenv("QEMUBOX_CONFIG", "/this/does/not/exist")
+	// even after changing SPINBOX_CONFIG. Verify this:
+	t.Setenv("SPINBOX_CONFIG", "/this/does/not/exist")
 	cachedCfg, _ := Get()
 	if cachedCfg.Paths.ShareDir != env1.shareDir {
 		t.Error("expected Get() to return cached config without Reset")
@@ -665,7 +665,7 @@ func TestReset(t *testing.T) {
 	// Create second config environment
 	env2 := createTestConfigEnv(t, t.TempDir())
 
-	t.Setenv("QEMUBOX_CONFIG", env2.configFile)
+	t.Setenv("SPINBOX_CONFIG", env2.configFile)
 	loadedCfg2, err := Get()
 	if err != nil {
 		t.Fatalf("failed to load second config: %v", err)

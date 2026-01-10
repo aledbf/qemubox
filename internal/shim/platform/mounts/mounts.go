@@ -7,7 +7,7 @@ import (
 
 	"github.com/containerd/containerd/api/types"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
 // Manager handles platform-specific mount operations.

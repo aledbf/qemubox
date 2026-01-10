@@ -18,9 +18,9 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/typeurl/v2"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
-	"github.com/aledbf/qemubox/containerd/internal/host/mountutil"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/process"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/stream"
+	"github.com/spin-stack/spinbox/internal/host/mountutil"
 )
 
 // defaultRuntimePath is the fallback OCI runtime path.
@@ -33,12 +33,12 @@ var (
 )
 
 // getRuntimePath returns the OCI runtime path to use.
-// It checks the QEMUBOX_OCI_RUNTIME environment variable first,
+// It checks the SPINBOX_OCI_RUNTIME environment variable first,
 // then tries common locations, falling back to /sbin/crun.
 func getRuntimePath() string {
 	runtimePathOnce.Do(func() {
 		// Check environment variable first
-		if path := os.Getenv("QEMUBOX_OCI_RUNTIME"); path != "" {
+		if path := os.Getenv("SPINBOX_OCI_RUNTIME"); path != "" {
 			resolvedRuntimePath = path
 			return
 		}

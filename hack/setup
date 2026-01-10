@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #
-# Install development tools for qemubox
+# Install development tools for spinbox
 #
 set -eu -o pipefail
 

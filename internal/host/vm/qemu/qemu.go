@@ -57,9 +57,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
-	vsockalloc "github.com/aledbf/qemubox/containerd/internal/vsock"
 	"github.com/containerd/ttrpc"
+	"github.com/spin-stack/spinbox/internal/host/vm"
+	vsockalloc "github.com/spin-stack/spinbox/internal/vsock"
 )
 
 // vmState represents the lifecycle state of a VM instance.

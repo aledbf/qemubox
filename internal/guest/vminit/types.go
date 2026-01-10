@@ -5,5 +5,5 @@ import "github.com/containerd/plugin"
 
 const (
 	// StreamingPlugin implements a stream manager
-	StreamingPlugin plugin.Type = "qemubox.streaming.v1"
+	StreamingPlugin plugin.Type = "spinbox.streaming.v1"
 )

@@ -13,7 +13,7 @@ import (
 	"github.com/containerd/log"
 	"golang.org/x/sys/unix"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/devices"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/devices"
 )
 
 // Initialize performs all system initialization tasks for the VM guest.

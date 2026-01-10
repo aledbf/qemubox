@@ -16,8 +16,8 @@ import (
 	"github.com/containerd/ttrpc"
 	"github.com/mdlayher/vsock"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/config"
+	"github.com/spin-stack/spinbox/internal/guest/vminit"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/config"
 )
 
 // ttrpcService allows TTRPC services to be registered with the underlying server.

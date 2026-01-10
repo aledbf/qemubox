@@ -18,8 +18,8 @@ import (
 	"github.com/containerd/ttrpc"
 	"golang.org/x/sys/unix"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
-	"github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
+	"github.com/spin-stack/spinbox/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/host/vm/qemu"
 )
 
 const (
@@ -56,7 +56,7 @@ func (m *Manager) CreateVM(ctx context.Context, containerID, bundlePath string, 
 	}
 
 	// Determine VM state directory
-	vmStateRoot := os.Getenv("QEMUBOX_VM_STATE_DIR")
+	vmStateRoot := os.Getenv("SPINBOX_VM_STATE_DIR")
 	vmState := filepath.Join(bundlePath, "vm")
 	if vmStateRoot != "" {
 		namespace, ok := namespaces.Namespace(ctx)

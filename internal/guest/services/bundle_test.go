@@ -9,7 +9,7 @@ import (
 
 	"github.com/containerd/errdefs"
 
-	api "github.com/aledbf/qemubox/containerd/api/services/bundle/v1"
+	api "github.com/spin-stack/spinbox/api/services/bundle/v1"
 )
 
 //nolint:cyclop // Table-driven test with many cases - clarity over complexity metrics.

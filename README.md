@@ -1,11 +1,11 @@
 <div align="center">
 
-# qemubox
+# spinbox
 
 **Lightweight VM isolation for containers**
 
-[![CI](https://github.com/aledbf/qemubox/actions/workflows/ci.yml/badge.svg)](https://github.com/aledbf/qemubox/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/aledbf/qemubox/branch/main/graph/badge.svg)](https://codecov.io/gh/aledbf/qemubox)
+[![CI](https://github.com/spin-stack/spinbox/actions/workflows/ci.yml/badge.svg)](https://github.com/spin-stack/spinbox/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/spin-stack/spinbox/branch/main/graph/badge.svg)](https://codecov.io/gh/spin-stack/spinbox)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 *Run each container in its own lightweight QEMU/KVM virtual machine*
@@ -57,11 +57,11 @@ Persist disk state between VM runs: install packages, create files, then commit 
 
 ## Design Choices
 
-qemubox is inspired by [nerdbox](https://github.com/containerd/nerdbox), which pioneered the "shim-level VM isolation" approach for containerd using [libkrun](https://github.com/containers/libkrun).
+spinbox is inspired by [nerdbox](https://github.com/containerd/nerdbox), which pioneered the "shim-level VM isolation" approach for containerd using [libkrun](https://github.com/containers/libkrun).
 
-**qemubox** takes a different path, optimized for Linux server workloads:
+**spinbox** takes a different path, optimized for Linux server workloads:
 
-| | nerdbox | qemubox |
+| | nerdbox | spinbox |
 |---|---------|---------|
 | **VMM** | libkrun (Rust) | QEMU/KVM |
 | **Platforms** | Linux, macOS, Windows | Linux only |
@@ -92,8 +92,8 @@ VM isolation provides a stronger security boundary than namespace-based containe
 Download the latest release and run the installer:
 
 ```bash
-tar xzf qemubox-VERSION-linux-x86_64.tar.gz
-cd qemubox-VERSION-linux-x86_64
+tar xzf spinbox-VERSION-linux-x86_64.tar.gz
+cd spinbox-VERSION-linux-x86_64
 sudo ./install.sh
 ```
 
@@ -110,27 +110,27 @@ See `./install.sh --help` for all options.
 ### Start
 
 ```bash
-sudo systemctl enable --now qemubox-containerd
-sudo systemctl start --now qemubox-containerd
+sudo systemctl enable --now spinbox-containerd
+sudo systemctl start --now spinbox-containerd
 ```
 
 ### Run a Container
 
 ```bash
-# Add qemubox binaries to PATH
-export PATH=/usr/share/qemubox/bin:$PATH
+# Add spinbox binaries to PATH
+export PATH=/usr/share/spinbox/bin:$PATH
 
 # Pull an image
-ctr --address /var/run/qemubox/containerd.sock image pull \
-  --snapshotter nexus-erofs ghcr.io/aledbf/qemubox/sandbox:v0.0.11
+ctr --address /var/run/spinbox/containerd.sock image pull \
+  --snapshotter spin-erofs ghcr.io/spin-stack/spinbox/sandbox:v0.0.11
 
-# Run with qemubox runtime
-ctr --address /var/run/qemubox/containerd.sock run -t --rm \
-  --snapshotter nexus-erofs \
-  --runtime io.containerd.qemubox.v1 \
-  ghcr.io/aledbf/qemubox/sandbox:v0.0.11 test-qemu-shim
+# Run with spinbox runtime
+ctr --address /var/run/spinbox/containerd.sock run -t --rm \
+  --snapshotter spin-erofs \
+  --runtime io.containerd.spinbox.v1 \
+  ghcr.io/spin-stack/spinbox/sandbox:v0.0.11 test-qemu-shim
 ```
-(use root:qemubox to log in)
+(use root:spinbox to log in)
 
 ## Architecture
 
@@ -149,7 +149,7 @@ graph LR
     subgraph host ["**Host (Linux)**"]
         direction TB
         containerd:::hostproc
-        shim[containerd-shim-qemubox-v1]:::hostproc
+        shim[containerd-shim-spinbox-v1]:::hostproc
         cni[CNI Plugins<br/>bridge, firewall, IPAM]:::netdev
         tap[TAP device]:::netdev
         store[EROFS snapshots]:::block
@@ -217,7 +217,7 @@ graph LR
 
 ## How It Works
 
-1. **containerd** calls the qemubox shim to create a container
+1. **containerd** calls the spinbox shim to create a container
 2. **CNI** allocates an IP and creates a TAP device
 3. **QEMU** boots a microVM with kernel, network, and storage
 4. **vminitd** (PID 1 in VM) connects to shim via vsock
@@ -376,7 +376,7 @@ images/        - Container/VM image builds
 
 | Project | Approach | Trade-offs |
 |---------|----------|------------|
-| **qemubox** | VM per container (QEMU/KVM) | Strong isolation, Linux-only, cold start overhead |
+| **spinbox** | VM per container (QEMU/KVM) | Strong isolation, Linux-only, cold start overhead |
 | **[nerdbox](https://github.com/containerd/nerdbox)** | VM per container (libkrun) | Cross-platform, rootless, newer VMM |
 | **[Kata Containers](https://katacontainers.io/)** | VM per container (multiple VMMs) | Production-ready, more complex |
 | **[gVisor](https://gvisor.dev/)** | User-space kernel | No VM overhead, different syscall compatibility |

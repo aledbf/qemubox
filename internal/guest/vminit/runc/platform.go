@@ -21,9 +21,9 @@ import (
 	"github.com/containerd/fifo"
 	"github.com/containerd/log"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
-	"github.com/aledbf/qemubox/containerd/internal/iobuf"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/process"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/stream"
+	"github.com/spin-stack/spinbox/internal/iobuf"
 )
 
 // NewPlatform returns a linux platform for use with I/O operations

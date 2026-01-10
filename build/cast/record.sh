@@ -1,23 +1,23 @@
 #!/bin/bash
-# Unified asciinema recorder for qemubox demos
+# Unified asciinema recorder for spinbox demos
 # Usage: ./record.sh [demo|snapshot] [output-name]
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODE="${1:-demo}"
-CTR="ctr --address /var/run/qemubox/containerd.sock"
-NERDCTL="nerdctl --address /var/run/qemubox/containerd.sock"
+CTR="ctr --address /var/run/spinbox/containerd.sock"
+NERDCTL="nerdctl --address /var/run/spinbox/containerd.sock"
 
 # Validate mode and set defaults
 case "$MODE" in
     demo)
-        OUTPUT="${2:-qemubox-demo}"
-        EXPECT_SCRIPT="$SCRIPT_DIR/qemubox.exp"
+        OUTPUT="${2:-spinbox-demo}"
+        EXPECT_SCRIPT="$SCRIPT_DIR/spinbox.exp"
         CONTAINERS="demo-vm"
         ;;
     snapshot)
-        OUTPUT="${2:-qemubox-snapshot-demo}"
+        OUTPUT="${2:-spinbox-snapshot-demo}"
         EXPECT_SCRIPT="$SCRIPT_DIR/snapshot.exp"
         CONTAINERS="snapshot-demo snapshot-new"
         ;;
@@ -35,10 +35,10 @@ cleanup() {
         $CTR task kill "$name" 2>/dev/null || true
         $CTR task delete "$name" 2>/dev/null || true
         $CTR container rm "$name" 2>/dev/null || true
-        $CTR snapshots --snapshotter nexus-erofs rm "${name}-snapshot" 2>/dev/null || true
+        $CTR snapshots --snapshotter spin-erofs rm "${name}-snapshot" 2>/dev/null || true
     done
     if [ "$MODE" = "snapshot" ]; then
-        $NERDCTL rmi docker.io/aledbf/sandbox:with-changes 2>/dev/null || true
+        $NERDCTL rmi docker.io/spin-stack/sandbox:with-changes 2>/dev/null || true
     fi
 }
 trap cleanup EXIT
@@ -54,7 +54,7 @@ done
 # Check expect script exists
 [ -f "$EXPECT_SCRIPT" ] || { echo "Error: $(basename "$EXPECT_SCRIPT") not found"; exit 1; }
 
-echo "QemuBox ${MODE^} Demo - Recording to ${OUTPUT}.cast"
+echo "SpinBox ${MODE^} Demo - Recording to ${OUTPUT}.cast"
 
 # Pre-cleanup
 cleanup

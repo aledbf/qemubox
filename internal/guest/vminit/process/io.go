@@ -24,8 +24,8 @@ import (
 	"github.com/containerd/log"
 	"golang.org/x/sys/unix"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
-	"github.com/aledbf/qemubox/containerd/internal/iobuf"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/stream"
+	"github.com/spin-stack/spinbox/internal/iobuf"
 )
 
 const binaryIOProcTermTimeout = 12 * time.Second // Give logger process solid 10 seconds for cleanup

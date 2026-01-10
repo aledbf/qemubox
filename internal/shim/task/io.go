@@ -22,8 +22,8 @@ import (
 	"github.com/containerd/fifo"
 	"github.com/containerd/log"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
-	"github.com/aledbf/qemubox/containerd/internal/iobuf"
+	"github.com/spin-stack/spinbox/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/iobuf"
 )
 
 const (

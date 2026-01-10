@@ -1,10 +1,10 @@
 {
   "cniVersion": "1.0.0",
-  "name": "qemubox-net",
+  "name": "spinbox-net",
   "plugins": [
     {
       "type": "bridge",
-      "bridge": "qemubox0",
+      "bridge": "spinbox0",
       "isGateway": true,
       "ipMasq": true,
       "hairpinMode": true,

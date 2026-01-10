@@ -72,7 +72,7 @@ jobs:
         with:
           driver: docker-container
           use: true
-          name: qemubox-builder
+          name: spinbox-builder
           driver-opts: |
             image=moby/buildkit:latest
             network=host
@@ -146,7 +146,7 @@ jobs:
         run: |
           # BuildKit GC policy handles automatic cleanup based on gckeepstorage setting
           # Only manually clean very old local cache exports (60 days)
-          find /var/lib/qemubox-buildkit-cache -type f -mtime +60 -delete || true
+          find /var/lib/spinbox-buildkit-cache -type f -mtime +60 -delete || true
           echo "BuildKit cache cleanup complete (local cache files older than 60 days removed)"
 
   integration:
@@ -214,7 +214,7 @@ jobs:
         with:
           driver: docker-container
           use: true
-          name: qemubox-builder
+          name: spinbox-builder
           driver-opts: |
             image=moby/buildkit:latest
             network=host
@@ -241,5 +241,5 @@ jobs:
         run: |
           # BuildKit GC policy handles automatic cleanup based on gckeepstorage setting
           # Only manually clean very old local cache exports (60 days)
-          find /var/lib/qemubox-buildkit-cache -type f -mtime +60 -delete || true
+          find /var/lib/spinbox-buildkit-cache -type f -mtime +60 -delete || true
           echo "BuildKit cache cleanup complete (local cache files older than 60 days removed)"

@@ -4,14 +4,14 @@ syntax = "proto3";
 
 package containerd.vminitd.services.bundle.v1;
 
-option go_package = "github.com/aledbf/qemubox/containerd/api/services/bundle/v1;bundle";
+option go_package = "github.com/spin-stack/spinbox/api/services/bundle/v1;bundle";
 
 // Bundle service manages OCI bundle creation inside the VM.
 // This service is exposed by vminitd over vsock to the host shim.
 service Bundle {
 	// Create creates an OCI bundle from the provided files.
 	//
-	// The bundle directory is created at /run/qemubox/{namespace}/{id}/
+	// The bundle directory is created at /run/spinbox/{namespace}/{id}/
 	// and populated with the files from the request (e.g., config.json,
 	// hostname, hosts, resolv.conf).
 	//

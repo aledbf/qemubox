@@ -13,7 +13,7 @@ import (
 	"github.com/opencontainers/runc/libcontainer/capabilities"
 	"github.com/opencontainers/runtime-spec/specs-go"
 
-	"github.com/aledbf/qemubox/containerd/internal/shim/bundle"
+	"github.com/spin-stack/spinbox/internal/shim/bundle"
 )
 
 // TransformBindMounts converts bind mounts to extra files for the VM.

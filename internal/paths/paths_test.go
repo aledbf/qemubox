@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aledbf/qemubox/containerd/internal/config"
+	"github.com/spin-stack/spinbox/internal/config"
 )
 
 func TestFileExists(t *testing.T) {
@@ -182,20 +182,20 @@ func TestPathFunctions(t *testing.T) {
 	}{
 		{
 			name: "KernelPath",
-			cfg:  config.PathsConfig{ShareDir: "/usr/share/qemubox"},
+			cfg:  config.PathsConfig{ShareDir: "/usr/share/spinbox"},
 			fn:   KernelPath,
-			want: "/usr/share/qemubox/kernel/qemubox-kernel-x86_64",
+			want: "/usr/share/spinbox/kernel/spinbox-kernel-x86_64",
 		},
 		{
 			name: "InitrdPath",
-			cfg:  config.PathsConfig{ShareDir: "/usr/share/qemubox"},
+			cfg:  config.PathsConfig{ShareDir: "/usr/share/spinbox"},
 			fn:   InitrdPath,
-			want: "/usr/share/qemubox/kernel/qemubox-initrd",
+			want: "/usr/share/spinbox/kernel/spinbox-initrd",
 		},
 		{
 			name: "QemuPath with explicit config",
 			cfg: config.PathsConfig{
-				ShareDir: "/usr/share/qemubox",
+				ShareDir: "/usr/share/spinbox",
 				QEMUPath: "/custom/path/qemu-system-x86_64",
 			},
 			fn:   QemuPath,
@@ -204,7 +204,7 @@ func TestPathFunctions(t *testing.T) {
 		{
 			name: "QemuSharePath with explicit config",
 			cfg: config.PathsConfig{
-				ShareDir:      "/usr/share/qemubox",
+				ShareDir:      "/usr/share/spinbox",
 				QEMUSharePath: "/custom/share/qemu",
 			},
 			fn:   QemuSharePath,

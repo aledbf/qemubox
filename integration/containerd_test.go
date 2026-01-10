@@ -1,6 +1,6 @@
 //go:build linux && integration
 
-// Package integration provides end-to-end tests for the qemubox runtime.
+// Package integration provides end-to-end tests for the spinbox runtime.
 //
 // # Test Strategy
 //
@@ -14,16 +14,16 @@
 //
 // # Test Environment Requirements
 //
-// - Running containerd configured with qemubox runtime
+// - Running containerd configured with spinbox runtime
 // - KVM access (/dev/kvm readable by test user)
 // - CNI plugins installed (/opt/cni/bin)
 // - CNI configuration present (/etc/cni/net.d)
-// - Test image available (configurable via QEMUBOX_IMAGE)
+// - Test image available (configurable via SPINBOX_IMAGE)
 //
 // Default configuration expects:
-//   - Socket: /var/run/qemubox/containerd.sock
-//   - Runtime: io.containerd.qemubox.v1
-//   - Snapshotter: nexus-erofs
+//   - Socket: /var/run/spinbox/containerd.sock
+//   - Runtime: io.containerd.spinbox.v1
+//   - Snapshotter: spin-erofs
 //   - Namespace: default
 //
 // Override via environment variables (see loadTestConfig).
@@ -49,8 +49,8 @@
 // # Test Failures and Debugging
 //
 // If tests fail, check in order:
-//  1. containerd logs: journalctl -u qemubox-containerd
-//  2. VM logs: /var/log/qemubox/vm-*.log
+//  1. containerd logs: journalctl -u spinbox-containerd
+//  2. VM logs: /var/log/spinbox/vm-*.log
 //  3. CNI state: ls -la /var/lib/cni/networks/
 //  4. Network devices: ip link show | grep tap
 //  5. QEMU processes: ps aux | grep qemu
@@ -108,7 +108,7 @@ func (c *testLogCollector) dumpLogs() {
 
 	// Collect journald logs filtered by container ID
 	cmd := exec.Command("journalctl",
-		"-u", "qemubox-containerd",
+		"-u", "spinbox-containerd",
 		"--since", since,
 		"--no-pager",
 		"-o", "short-precise",
@@ -136,7 +136,7 @@ func (c *testLogCollector) dumpLogs() {
 	}
 
 	// Collect VM console log if it exists
-	consoleLogPath := filepath.Join("/var/log/qemubox", c.containerID, "console.log")
+	consoleLogPath := filepath.Join("/var/log/spinbox", c.containerID, "console.log")
 	if data, err := os.ReadFile(consoleLogPath); err == nil {
 		c.t.Logf("VM console log (%s):\n%s", consoleLogPath, string(data))
 	}
@@ -152,10 +152,10 @@ type testConfig struct {
 }
 
 const (
-	defaultSocket      = "/var/run/qemubox/containerd.sock"
-	defaultImage       = "ghcr.io/aledbf/qemubox/sandbox:latest"
-	defaultRuntime     = "io.containerd.qemubox.v1"
-	defaultSnapshotter = "nexus-erofs"
+	defaultSocket      = "/var/run/spinbox/containerd.sock"
+	defaultImage       = "ghcr.io/spin-stack/spinbox/sandbox:latest"
+	defaultRuntime     = "io.containerd.spinbox.v1"
+	defaultSnapshotter = "spin-erofs"
 	defaultNamespace   = namespaces.Default
 )
 
@@ -170,19 +170,19 @@ func loadTestConfig() testConfig {
 	}
 
 	// Override from environment variables if set
-	if v := os.Getenv("QEMUBOX_CONTAINERD_SOCKET"); v != "" {
+	if v := os.Getenv("SPINBOX_CONTAINERD_SOCKET"); v != "" {
 		cfg.Socket = v
 	}
-	if v := os.Getenv("QEMUBOX_IMAGE"); v != "" {
+	if v := os.Getenv("SPINBOX_IMAGE"); v != "" {
 		cfg.Image = v
 	}
-	if v := os.Getenv("QEMUBOX_RUNTIME"); v != "" {
+	if v := os.Getenv("SPINBOX_RUNTIME"); v != "" {
 		cfg.Runtime = v
 	}
-	if v := os.Getenv("QEMUBOX_SNAPSHOTTER"); v != "" {
+	if v := os.Getenv("SPINBOX_SNAPSHOTTER"); v != "" {
 		cfg.Snapshotter = v
 	}
-	if v := os.Getenv("QEMUBOX_NAMESPACE"); v != "" {
+	if v := os.Getenv("SPINBOX_NAMESPACE"); v != "" {
 		cfg.Namespace = v
 	}
 
@@ -359,7 +359,7 @@ func runContainer(t *testing.T, client *containerd.Client, cfg testConfig, conta
 	}
 }
 
-func TestContainerdRunQemubox(t *testing.T) {
+func TestContainerdRunSpinbox(t *testing.T) {
 	cfg := loadTestConfig()
 	t.Logf("test config: socket=%s image=%s runtime=%s snapshotter=%s",
 		cfg.Socket, cfg.Image, cfg.Runtime, cfg.Snapshotter)
@@ -372,14 +372,14 @@ func TestContainerdRunQemubox(t *testing.T) {
 	containerName := "qbx-ci-" + strings.ReplaceAll(time.Now().Format("150405.000"), ".", "")
 	t.Logf("container name: %s", containerName)
 
-	result := runContainer(t, client, cfg, containerName, []string{"/bin/echo", "OK_FROM_QEMUBOX"})
+	result := runContainer(t, client, cfg, containerName, []string{"/bin/echo", "OK_FROM_SPINBOX"})
 
 	if result.ExitCode != 0 {
 		t.Fatalf("container exited with code %d\nstdout: %s\nstderr: %s",
 			result.ExitCode, result.Stdout, result.Stderr)
 	}
 
-	if !strings.Contains(result.Stdout, "OK_FROM_QEMUBOX") {
+	if !strings.Contains(result.Stdout, "OK_FROM_SPINBOX") {
 		t.Fatalf("expected output not found\ngot stdout: %q\ngot stderr: %q",
 			result.Stdout, result.Stderr)
 	}
@@ -550,8 +550,8 @@ func TestContainerdNamespaceIsolation(t *testing.T) {
 }
 
 // TestContainerdKernelIsolation verifies that the VM runs its own kernel,
-// isolated from the host. This is the core security property of qemubox.
-// Inspired by: build/cast/qemubox.exp (uname -r check)
+// isolated from the host. This is the core security property of spinbox.
+// Inspired by: build/cast/spinbox.exp (uname -r check)
 func TestContainerdKernelIsolation(t *testing.T) {
 	cfg := loadTestConfig()
 
@@ -720,7 +720,7 @@ func TestContainerdEnvironmentVariables(t *testing.T) {
 		containerd.WithNewSpec(
 			oci.WithImageConfig(image),
 			oci.WithProcessArgs("/bin/sh", "-c", "echo $TEST_VAR"),
-			oci.WithEnv([]string{"TEST_VAR=qemubox_test_value"}),
+			oci.WithEnv([]string{"TEST_VAR=spinbox_test_value"}),
 		),
 	)
 	if err != nil {
@@ -771,7 +771,7 @@ func TestContainerdEnvironmentVariables(t *testing.T) {
 		t.Fatalf("exit code %d", exitCode)
 	}
 
-	if !strings.Contains(string(stdoutData), "qemubox_test_value") {
+	if !strings.Contains(string(stdoutData), "spinbox_test_value") {
 		t.Fatalf("expected env var value in output, got: %q", string(stdoutData))
 	}
 

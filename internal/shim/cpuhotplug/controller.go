@@ -9,7 +9,7 @@ import (
 
 	"github.com/containerd/log"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
 // Controller manages dynamic vCPU allocation for a VM based on CPU usage

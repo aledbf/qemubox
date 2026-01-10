@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/vm/qemu"
+	"github.com/spin-stack/spinbox/internal/host/vm/qemu"
 )
 
 // mockQMPClient simulates QEMU QMP client for testing

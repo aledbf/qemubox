@@ -1,6 +1,6 @@
 //go:build linux
 
-// Package task implements the containerd task service for qemubox runtime.
+// Package task implements the containerd task service for spinbox runtime.
 // It orchestrates VM lifecycle, container creation, and I/O streams within the shim.
 //
 // # Synchronization Model
@@ -95,13 +95,13 @@ import (
 	"github.com/containerd/ttrpc"
 	"github.com/containerd/typeurl/v2"
 
-	"github.com/aledbf/qemubox/containerd/api/services/vmevents/v1"
-	"github.com/aledbf/qemubox/containerd/internal/host/network"
-	"github.com/aledbf/qemubox/containerd/internal/shim/cpuhotplug"
-	"github.com/aledbf/qemubox/containerd/internal/shim/lifecycle"
-	"github.com/aledbf/qemubox/containerd/internal/shim/memhotplug"
-	platformMounts "github.com/aledbf/qemubox/containerd/internal/shim/platform/mounts"
-	platformNetwork "github.com/aledbf/qemubox/containerd/internal/shim/platform/network"
+	"github.com/spin-stack/spinbox/api/services/vmevents/v1"
+	"github.com/spin-stack/spinbox/internal/host/network"
+	"github.com/spin-stack/spinbox/internal/shim/cpuhotplug"
+	"github.com/spin-stack/spinbox/internal/shim/lifecycle"
+	"github.com/spin-stack/spinbox/internal/shim/memhotplug"
+	platformMounts "github.com/spin-stack/spinbox/internal/shim/platform/mounts"
+	platformNetwork "github.com/spin-stack/spinbox/internal/shim/platform/network"
 )
 
 const (
@@ -246,7 +246,7 @@ type service struct {
 	platformNetwork platformNetwork.Manager // Network namespace setup (stateless)
 
 	// === Container State (protected by containerMu) ===
-	// qemubox enforces 1 container per VM per shim - Create() rejects if already set
+	// spinbox enforces 1 container per VM per shim - Create() rejects if already set
 	container   *container // Container metadata and I/O shutdown functions
 	containerID string     // Container ID (empty string means no container)
 

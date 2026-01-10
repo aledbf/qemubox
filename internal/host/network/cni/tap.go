@@ -45,7 +45,7 @@ func ExtractTAPDeviceInfo(result *current.Result) (string, string, error) {
 // The tc-redirect-tap plugin creates TAP devices with predictable naming:
 // - Usually named "tap0" or "tapXXX"
 // - The TAP device is created inside the container netns (sandbox)
-// - qemubox opens the TAP inside that netns and passes the FD to QEMU
+// - spinbox opens the TAP inside that netns and passes the FD to QEMU
 //
 // To avoid false positives (e.g., interfaces like "tape0", "taproot"), we
 // validate that the interface is in a sandbox (container netns).

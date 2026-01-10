@@ -15,7 +15,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/mdlayher/vsock"
 
-	vsockports "github.com/aledbf/qemubox/containerd/internal/vsock"
+	vsockports "github.com/spin-stack/spinbox/internal/vsock"
 )
 
 func (q *Instance) StartStream(ctx context.Context) (uint32, net.Conn, error) {

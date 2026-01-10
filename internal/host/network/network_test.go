@@ -11,14 +11,14 @@ import (
 func TestLoadNetworkConfig(t *testing.T) {
 	t.Run("standard paths fallback", func(t *testing.T) {
 		// Clear environment variables to test fallback paths
-		t.Setenv("QEMUBOX_CNI_CONF_DIR", "")
-		t.Setenv("QEMUBOX_CNI_BIN_DIR", "")
+		t.Setenv("SPINBOX_CNI_CONF_DIR", "")
+		t.Setenv("SPINBOX_CNI_BIN_DIR", "")
 
 		cfg := LoadNetworkConfig()
 
 		// LoadNetworkConfig has a three-tier fallback:
 		// 1. Environment variables (cleared above)
-		// 2. Qemubox-bundled paths (/usr/share/qemubox/config/cni/net.d)
+		// 2. Spinbox-bundled paths (/usr/share/spinbox/config/cni/net.d)
 		// 3. Standard system paths (/etc/cni/net.d, /opt/cni/bin)
 		assert.NotEmpty(t, cfg.CNIConfDir)
 		assert.NotEmpty(t, cfg.CNIBinDir)

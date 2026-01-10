@@ -1,5 +1,5 @@
 file {
-  name: "github.com/aledbf/qemubox/containerd/api/services/bundle/v1/bundle.proto"
+  name: "github.com/spin-stack/spinbox/api/services/bundle/v1/bundle.proto"
   package: "containerd.vminitd.services.bundle.v1"
   message_type {
     name: "CreateRequest"
@@ -58,7 +58,128 @@ file {
     }
   }
   options {
-    go_package: "github.com/aledbf/qemubox/containerd/api/services/bundle/v1;bundle"
+    go_package: "github.com/spin-stack/spinbox/api/services/bundle/v1;bundle"
+  }
+  syntax: "proto3"
+}
+file {
+  name: "github.com/spin-stack/spinbox/api/services/stdio/v1/stdio.proto"
+  package: "containerd.vminitd.services.stdio.v1"
+  message_type {
+    name: "WriteStdinRequest"
+    field {
+      name: "container_id"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "containerId"
+    }
+    field {
+      name: "exec_id"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "execId"
+    }
+    field {
+      name: "data"
+      number: 3
+      label: LABEL_OPTIONAL
+      type: TYPE_BYTES
+      json_name: "data"
+    }
+  }
+  message_type {
+    name: "WriteStdinResponse"
+    field {
+      name: "bytes_written"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT32
+      json_name: "bytesWritten"
+    }
+  }
+  message_type {
+    name: "ReadOutputRequest"
+    field {
+      name: "container_id"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "containerId"
+    }
+    field {
+      name: "exec_id"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "execId"
+    }
+  }
+  message_type {
+    name: "OutputChunk"
+    field {
+      name: "data"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_BYTES
+      json_name: "data"
+    }
+    field {
+      name: "eof"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_BOOL
+      json_name: "eof"
+    }
+  }
+  message_type {
+    name: "CloseStdinRequest"
+    field {
+      name: "container_id"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "containerId"
+    }
+    field {
+      name: "exec_id"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "execId"
+    }
+  }
+  message_type {
+    name: "CloseStdinResponse"
+  }
+  service {
+    name: "StdIO"
+    method {
+      name: "WriteStdin"
+      input_type: ".containerd.vminitd.services.stdio.v1.WriteStdinRequest"
+      output_type: ".containerd.vminitd.services.stdio.v1.WriteStdinResponse"
+    }
+    method {
+      name: "ReadStdout"
+      input_type: ".containerd.vminitd.services.stdio.v1.ReadOutputRequest"
+      output_type: ".containerd.vminitd.services.stdio.v1.OutputChunk"
+      server_streaming: true
+    }
+    method {
+      name: "ReadStderr"
+      input_type: ".containerd.vminitd.services.stdio.v1.ReadOutputRequest"
+      output_type: ".containerd.vminitd.services.stdio.v1.OutputChunk"
+      server_streaming: true
+    }
+    method {
+      name: "CloseStdin"
+      input_type: ".containerd.vminitd.services.stdio.v1.CloseStdinRequest"
+      output_type: ".containerd.vminitd.services.stdio.v1.CloseStdinResponse"
+    }
+  }
+  options {
+    go_package: "github.com/spin-stack/spinbox/api/services/stdio/v1;stdio"
   }
   syntax: "proto3"
 }
@@ -80,7 +201,7 @@ file {
   syntax: "proto3"
 }
 file {
-  name: "github.com/aledbf/qemubox/containerd/api/services/system/v1/info.proto"
+  name: "github.com/spin-stack/spinbox/api/services/system/v1/info.proto"
   package: "containerd.vminitd.services.system.v1"
   dependency: "google/protobuf/empty.proto"
   message_type {
@@ -169,7 +290,7 @@ file {
     }
   }
   options {
-    go_package: "github.com/aledbf/qemubox/containerd/api/services/system/v1;system"
+    go_package: "github.com/spin-stack/spinbox/api/services/system/v1;system"
   }
   syntax: "proto3"
 }
@@ -309,8 +430,8 @@ file {
   syntax: "proto3"
 }
 file {
-  name: "github.com/aledbf/qemubox/containerd/api/services/vmevents/v1/events.proto"
-  package: "qemubox.services.vmevents.v1"
+  name: "github.com/spin-stack/spinbox/api/services/vmevents/v1/events.proto"
+  package: "spinbox.services.vmevents.v1"
   dependency: "github.com/containerd/containerd/api/types/event.proto"
   dependency: "google/protobuf/empty.proto"
   service {
@@ -323,7 +444,7 @@ file {
     }
   }
   options {
-    go_package: "github.com/aledbf/qemubox/containerd/api/services/vmevents/v1;vmevents"
+    go_package: "github.com/spin-stack/spinbox/api/services/vmevents/v1;vmevents"
   }
   syntax: "proto3"
 }

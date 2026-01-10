@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/aledbf/qemubox/containerd/internal/shim/bundle"
+	"github.com/spin-stack/spinbox/internal/shim/bundle"
 )
 
 const cgroupPath = "/sys/fs/cgroup"

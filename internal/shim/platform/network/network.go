@@ -5,8 +5,8 @@ package network
 import (
 	"context"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/network"
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/host/network"
+	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
 // Manager handles platform-specific network operations.

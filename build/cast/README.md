@@ -1,4 +1,4 @@
-# QemuBox Demo Recording
+# SpinBox Demo Recording
 
 Automated asciinema recordings using expect scripts.
 
@@ -15,7 +15,7 @@ sudo apt-get install asciinema expect
 ./record.sh snapshot
 
 # Play back
-asciinema play qemubox-demo.cast
+asciinema play spinbox-demo.cast
 ```
 
 ## Usage
@@ -26,14 +26,14 @@ asciinema play qemubox-demo.cast
 
 | Mode | Description | Default Output |
 |------|-------------|----------------|
-| `demo` | Basic demo (boot, Docker) | `qemubox-demo.cast` |
-| `snapshot` | Snapshot demo (persist state) | `qemubox-snapshot-demo.cast` |
+| `demo` | Basic demo (boot, Docker) | `spinbox-demo.cast` |
+| `snapshot` | Snapshot demo (persist state) | `spinbox-snapshot-demo.cast` |
 
 ## What Gets Recorded
 
 **Basic Demo (`demo`):**
-- Pull qemubox sandbox image
-- Boot VM with qemubox runtime
+- Pull spinbox sandbox image
+- Boot VM with spinbox runtime
 - Show systemd boot analysis
 - Run Docker inside VM
 
@@ -55,16 +55,16 @@ set LONG_DELAY 2        # Pause for long operations
 ## Upload
 
 ```bash
-asciinema upload qemubox-demo.cast
+asciinema upload spinbox-demo.cast
 ```
 
 ## Troubleshooting
 
-**Login credentials:** `root` / `qemubox`
+**Login credentials:** `root` / `spinbox`
 
 **Test without recording:**
 ```bash
-expect qemubox.exp
+expect spinbox.exp
 ```
 
 **Manual cleanup:**

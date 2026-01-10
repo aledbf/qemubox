@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
 // NewInstance returns an error on Darwin (not supported)

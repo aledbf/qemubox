@@ -13,7 +13,7 @@ import (
 	"github.com/containerd/errdefs"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 
-	api "github.com/aledbf/qemubox/containerd/api/services/system/v1"
+	api "github.com/spin-stack/spinbox/api/services/system/v1"
 )
 
 // Test helper functions

@@ -9,7 +9,7 @@
 ## Quick Overview
 
 **What this package does**:
-Provides lifecycle management primitives for the qemubox shim: a state machine for tracking shim states, a cleanup orchestrator for ordered resource cleanup, and a VM lifecycle manager. These components ensure safe state transitions and proper cleanup ordering.
+Provides lifecycle management primitives for the spinbox shim: a state machine for tracking shim states, a cleanup orchestrator for ordered resource cleanup, and a VM lifecycle manager. These components ensure safe state transitions and proper cleanup ordering.
 
 **Key responsibilities**:
 - Enforce valid state transitions (Idle → Creating → Running → Deleting → ShuttingDown)

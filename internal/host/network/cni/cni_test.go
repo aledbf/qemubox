@@ -163,8 +163,8 @@ func TestValidCNINetworkName(t *testing.T) {
 		{"simple name", "mynet", true},
 		{"name with dash", "my-net", true},
 		{"name with underscore", "my_net", true},
-		{"name with numbers", "qemubox-net-123", true},
-		{"name with spaces", "qemubox net", true}, // CNI spec allows various names
+		{"name with numbers", "spinbox-net-123", true},
+		{"name with spaces", "spinbox net", true}, // CNI spec allows various names
 	}
 
 	for _, tt := range tests {
@@ -193,7 +193,7 @@ func TestParseCNIResult(t *testing.T) {
 			result: &current.Result{
 				CNIVersion: "1.0.0",
 				Interfaces: []*current.Interface{
-					{Name: "qemubox0", Mac: "aa:bb:cc:dd:ee:ff", Sandbox: ""},
+					{Name: "spinbox0", Mac: "aa:bb:cc:dd:ee:ff", Sandbox: ""},
 					{Name: "tap0", Mac: "11:22:33:44:55:66", Sandbox: "/var/run/netns/test"},
 				},
 				IPs: []*current.IPConfig{

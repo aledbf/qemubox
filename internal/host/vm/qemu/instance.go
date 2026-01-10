@@ -11,10 +11,10 @@ import (
 
 	"github.com/containerd/log"
 
-	"github.com/aledbf/qemubox/containerd/internal/config"
-	"github.com/aledbf/qemubox/containerd/internal/host/vm"
-	"github.com/aledbf/qemubox/containerd/internal/paths"
-	vsockalloc "github.com/aledbf/qemubox/containerd/internal/vsock"
+	"github.com/spin-stack/spinbox/internal/config"
+	"github.com/spin-stack/spinbox/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/paths"
+	vsockalloc "github.com/spin-stack/spinbox/internal/vsock"
 )
 
 const (
@@ -137,7 +137,7 @@ func findKernel() (string, error) {
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
-	return "", fmt.Errorf("kernel not found at %s (use QEMUBOX_SHARE_DIR to override)", path)
+	return "", fmt.Errorf("kernel not found at %s (use SPINBOX_SHARE_DIR to override)", path)
 }
 
 // findInitrd returns the path to the initrd for QEMU
@@ -151,7 +151,7 @@ func findInitrd() (string, error) {
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
-	return "", fmt.Errorf("initrd not found at %s (use QEMUBOX_SHARE_DIR to override)", path)
+	return "", fmt.Errorf("initrd not found at %s (use SPINBOX_SHARE_DIR to override)", path)
 }
 
 // NewInstance creates a new QEMU VM instance.

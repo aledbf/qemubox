@@ -142,7 +142,7 @@ message SystemInfoResponse {
 
 ```go
 import (
-    bundleapi "github.com/aledbf/qemubox/containerd/api/services/bundle/v1"
+    bundleapi "github.com/spin-stack/spinbox/api/services/bundle/v1"
 )
 
 // Create client from TTRPC connection
@@ -162,7 +162,7 @@ if err != nil {
 
 ```go
 import (
-    bundleapi "github.com/aledbf/qemubox/containerd/api/services/bundle/v1"
+    bundleapi "github.com/spin-stack/spinbox/api/services/bundle/v1"
 )
 
 type bundleService struct {

@@ -1,14 +1,14 @@
-# qemubox Configuration Reference
+# spinbox Configuration Reference
 
-This document provides comprehensive documentation for qemubox's centralized configuration system.
+This document provides comprehensive documentation for spinbox's centralized configuration system.
 
 ## Overview
 
-qemubox uses a single JSON configuration file to manage all runtime settings. This file must be present for the system to start.
+spinbox uses a single JSON configuration file to manage all runtime settings. This file must be present for the system to start.
 
-**Default location**: `/etc/qemubox/config.json`
+**Default location**: `/etc/spinbox/config.json`
 
-**Override with environment variable**: `QEMUBOX_CONFIG=/path/to/config.json`
+**Override with environment variable**: `SPINBOX_CONFIG=/path/to/config.json`
 
 ## Configuration File Structure
 
@@ -24,14 +24,14 @@ qemubox uses a single JSON configuration file to manage all runtime settings. Th
 
 ## Paths Configuration
 
-Controls filesystem paths for qemubox components.
+Controls filesystem paths for spinbox components.
 
 ```json
 {
   "paths": {
-    "share_dir": "/usr/share/qemubox",
-    "state_dir": "/var/lib/qemubox",
-    "log_dir": "/var/log/qemubox",
+    "share_dir": "/usr/share/spinbox",
+    "state_dir": "/var/lib/spinbox",
+    "log_dir": "/var/log/spinbox",
     "qemu_path": "",
     "qemu_share_path": ""
   }
@@ -40,16 +40,16 @@ Controls filesystem paths for qemubox components.
 
 ### `paths.share_dir`
 - **Type**: string
-- **Default**: `/usr/share/qemubox`
+- **Default**: `/usr/share/spinbox`
 - **Required**: Yes
-- **Description**: Directory containing qemubox binaries, kernel, and initrd
+- **Description**: Directory containing spinbox binaries, kernel, and initrd
 - **Validation**: Must exist and contain:
-  - `kernel/qemubox-kernel-x86_64` (VM kernel)
-  - `kernel/qemubox-initrd` (initial ramdisk)
+  - `kernel/spinbox-kernel-x86_64` (VM kernel)
+  - `kernel/spinbox-initrd` (initial ramdisk)
 
 ### `paths.state_dir`
 - **Type**: string
-- **Default**: `/var/lib/qemubox`
+- **Default**: `/var/lib/spinbox`
 - **Required**: Yes
 - **Description**: Directory for runtime state files
 - **Validation**: Must be writable (created automatically if missing)
@@ -57,7 +57,7 @@ Controls filesystem paths for qemubox components.
 
 ### `paths.log_dir`
 - **Type**: string
-- **Default**: `/var/log/qemubox`
+- **Default**: `/var/log/spinbox`
 - **Required**: Yes
 - **Description**: Directory for VM logs
 - **Validation**: Must be writable (created automatically if missing)
@@ -87,7 +87,7 @@ Controls filesystem paths for qemubox components.
 
 ## Runtime Configuration
 
-Controls qemubox runtime behavior.
+Controls spinbox runtime behavior.
 
 ```json
 {
@@ -339,9 +339,9 @@ Controls dynamic memory allocation for VMs.
 ## Configuration Loading
 
 ### Load Order
-1. Check `QEMUBOX_CONFIG` environment variable
+1. Check `SPINBOX_CONFIG` environment variable
 2. If set, load from that path (fail if missing)
-3. Otherwise, load from `/etc/qemubox/config.json` (fail if missing)
+3. Otherwise, load from `/etc/spinbox/config.json` (fail if missing)
 
 ### Validation
 Configuration is validated on load:
@@ -353,7 +353,7 @@ Configuration is validated on load:
 - Memory increment must be 128MB-aligned
 
 ### Fail-Fast Behavior
-If configuration is missing or invalid, qemubox will:
+If configuration is missing or invalid, spinbox will:
 1. Print detailed error to stderr
 2. Exit with status code 1
 3. Never start with invalid/missing config
@@ -364,9 +364,9 @@ If configuration is missing or invalid, qemubox will:
 ```json
 {
   "paths": {
-    "share_dir": "/usr/share/qemubox",
-    "state_dir": "/var/lib/qemubox",
-    "log_dir": "/var/log/qemubox"
+    "share_dir": "/usr/share/spinbox",
+    "state_dir": "/var/lib/spinbox",
+    "log_dir": "/var/log/spinbox"
   },
   "runtime": {
     "vmm": "qemu"
@@ -387,14 +387,14 @@ To enable debug logging, configure it in containerd's config file (`/etc/contain
   level = "debug"
 ```
 
-Example qemubox config for aggressive hotplug testing:
+Example spinbox config for aggressive hotplug testing:
 
 ```json
 {
   "paths": {
-    "share_dir": "/usr/share/qemubox",
-    "state_dir": "/var/lib/qemubox",
-    "log_dir": "/var/log/qemubox"
+    "share_dir": "/usr/share/spinbox",
+    "state_dir": "/var/lib/spinbox",
+    "log_dir": "/var/log/spinbox"
   },
   "runtime": {
     "vmm": "qemu"
@@ -419,9 +419,9 @@ Longer timeouts for debugging, fast hotplug monitoring.
 ```json
 {
   "paths": {
-    "share_dir": "/usr/share/qemubox",
-    "state_dir": "/var/lib/qemubox",
-    "log_dir": "/var/log/qemubox"
+    "share_dir": "/usr/share/spinbox",
+    "state_dir": "/var/lib/spinbox",
+    "log_dir": "/var/log/spinbox"
   },
   "runtime": {
     "vmm": "qemu"
@@ -446,9 +446,9 @@ High thresholds, large safety margin, no scale-down.
 ```json
 {
   "paths": {
-    "share_dir": "/usr/share/qemubox",
-    "state_dir": "/var/lib/qemubox",
-    "log_dir": "/var/log/qemubox"
+    "share_dir": "/usr/share/spinbox",
+    "state_dir": "/var/lib/spinbox",
+    "log_dir": "/var/log/spinbox"
   },
   "runtime": {
     "vmm": "qemu"
@@ -481,25 +481,25 @@ Low thresholds, fast response, scale-down enabled, shorter QMP timeout.
 
 ### Error: "Config file not found"
 ```
-FATAL: Failed to load qemubox configuration: config file not found at /etc/qemubox/config.json
+FATAL: Failed to load spinbox configuration: config file not found at /etc/spinbox/config.json
 ```
 **Solution**: Create config file from example:
 ```bash
-sudo cp examples/config.json /etc/qemubox/config.json
+sudo cp examples/config.json /etc/spinbox/config.json
 ```
 
 ### Error: "Invalid JSON"
 ```
-FATAL: Failed to load qemubox configuration: failed to parse config file
+FATAL: Failed to load spinbox configuration: failed to parse config file
 ```
 **Solution**: Validate JSON syntax:
 ```bash
-cat /etc/qemubox/config.json | jq .
+cat /etc/spinbox/config.json | jq .
 ```
 
 ### Error: "Kernel not found"
 ```
-paths validation failed: kernel not found at /usr/share/qemubox/kernel/qemubox-kernel-x86_64
+paths validation failed: kernel not found at /usr/share/spinbox/kernel/spinbox-kernel-x86_64
 ```
 **Solution**: Build or install kernel:
 ```bash

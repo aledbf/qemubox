@@ -288,7 +288,7 @@ func TestRuntimeV2ShimEventsAndExecOrdering(t *testing.T) {
 	defer cancel()
 
 	// Use CI test ID if available, otherwise generate one
-	containerID := os.Getenv("QEMUBOX_TEST_ID")
+	containerID := os.Getenv("SPINBOX_TEST_ID")
 	if containerID == "" {
 		containerID = fmt.Sprintf("shim-validate-%d", time.Now().UnixNano())
 	} else {

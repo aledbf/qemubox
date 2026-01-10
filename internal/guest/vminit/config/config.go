@@ -11,7 +11,7 @@ import (
 
 	"github.com/containerd/containerd/v2/pkg/shutdown"
 
-	"github.com/aledbf/qemubox/containerd/internal/vsock"
+	"github.com/spin-stack/spinbox/internal/vsock"
 )
 
 // ServiceConfig holds the configuration for the vminitd service.

@@ -35,7 +35,7 @@ EOF
 # 5. Set root password
 # -------------------------------------------------
 echo "Setting root password..."
-echo 'root:qemubox' | chpasswd
+echo 'root:spinbox' | chpasswd
 
 # -------------------------------------------------
 # 6. Disable MOTD

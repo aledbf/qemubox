@@ -25,7 +25,7 @@ func TestParseCNIResult_Success(t *testing.T) {
 			result: &current.Result{
 				CNIVersion: "1.0.0",
 				Interfaces: []*current.Interface{
-					{Name: "qemubox0", Mac: "aa:bb:cc:dd:ee:ff"},
+					{Name: "spinbox0", Mac: "aa:bb:cc:dd:ee:ff"},
 					{Name: "tap123", Mac: "11:22:33:44:55:66", Sandbox: "/var/run/netns/test"},
 				},
 				IPs: []*current.IPConfig{
@@ -49,7 +49,7 @@ func TestParseCNIResult_Success(t *testing.T) {
 			result: &current.Result{
 				CNIVersion: "1.0.0",
 				Interfaces: []*current.Interface{
-					{Name: "qemubox0", Mac: "aa:bb:cc:dd:ee:ff"},
+					{Name: "spinbox0", Mac: "aa:bb:cc:dd:ee:ff"},
 					{Name: "tapABC123", Mac: "11:22:33:44:55:66", Sandbox: "/var/run/netns/test"},
 				},
 				IPs: []*current.IPConfig{
@@ -156,7 +156,7 @@ func TestParseCNIResult_NoTAPDevice(t *testing.T) {
 	result := &current.Result{
 		CNIVersion: "1.0.0",
 		Interfaces: []*current.Interface{
-			{Name: "qemubox0", Mac: "aa:bb:cc:dd:ee:ff"},
+			{Name: "spinbox0", Mac: "aa:bb:cc:dd:ee:ff"},
 			{Name: "veth123", Mac: "11:22:33:44:55:66", Sandbox: "/var/run/netns/test"},
 		},
 		IPs: []*current.IPConfig{

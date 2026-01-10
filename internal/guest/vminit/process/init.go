@@ -22,8 +22,8 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/stream"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/systools"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/stream"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/systools"
 )
 
 // Init represents an initial process for a container

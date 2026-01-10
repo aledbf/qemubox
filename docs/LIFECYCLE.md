@@ -1,6 +1,6 @@
 # VM and Container Lifecycle
 
-This document describes the lifecycle management of QEMU VMs and containers in qemubox.
+This document describes the lifecycle management of QEMU VMs and containers in spinbox.
 Understanding these states and transitions is essential for debugging and development.
 
 ## State Machine
@@ -149,7 +149,7 @@ Cleanup follows a strict dependency order. Each phase must complete before the n
 
 ## Timeout Configuration
 
-All lifecycle timeouts are configurable in `/etc/qemubox/config.json`:
+All lifecycle timeouts are configurable in `/etc/spinbox/config.json`:
 
 ```json
 {
@@ -235,7 +235,7 @@ journalctl -u containerd | grep "state transition"
 
 #### "VM not running"
 - Cause: Operation attempted after VM exit
-- Check: VM logs at `/var/log/qemubox/vm-*.log`
+- Check: VM logs at `/var/log/spinbox/vm-*.log`
 
 #### "device detection timeout"
 - Cause: Slow disk I/O or many devices
@@ -258,7 +258,7 @@ If the shim crashes during operation:
 sudo ./deploy/cleanup-cni.sh
 
 # Restart containerd
-systemctl restart qemubox-containerd
+systemctl restart spinbox-containerd
 ```
 
 ## Implementation Files

@@ -22,7 +22,7 @@ func TestExtractTAPDevice(t *testing.T) {
 			name: "tap device with tap prefix",
 			result: &current.Result{
 				Interfaces: []*current.Interface{
-					{Name: "qemubox0", Mac: "aa:bb:cc:dd:ee:ff", Sandbox: ""},
+					{Name: "spinbox0", Mac: "aa:bb:cc:dd:ee:ff", Sandbox: ""},
 					{Name: "tap123", Mac: "11:22:33:44:55:66", Sandbox: "/var/run/netns/test"},
 				},
 			},
@@ -41,7 +41,7 @@ func TestExtractTAPDevice(t *testing.T) {
 			name: "multiple interfaces returns first tap",
 			result: &current.Result{
 				Interfaces: []*current.Interface{
-					{Name: "qemubox0", Sandbox: ""},
+					{Name: "spinbox0", Sandbox: ""},
 					{Name: "tap999", Sandbox: "/var/run/netns/test"},
 					{Name: "veth0", Sandbox: "/var/run/netns/test"},
 				},
@@ -61,7 +61,7 @@ func TestExtractTAPDevice(t *testing.T) {
 			name: "multiple tap devices returns first",
 			result: &current.Result{
 				Interfaces: []*current.Interface{
-					{Name: "qemubox0", Sandbox: ""},
+					{Name: "spinbox0", Sandbox: ""},
 					{Name: "tap111", Sandbox: "/var/run/netns/test"},
 					{Name: "tap222", Sandbox: "/var/run/netns/test"},
 					{Name: "tap333", Sandbox: "/var/run/netns/test"},
@@ -119,7 +119,7 @@ func TestExtractTAPDevice(t *testing.T) {
 			name: "bridge interface only",
 			result: &current.Result{
 				Interfaces: []*current.Interface{
-					{Name: "qemubox0", Sandbox: ""},
+					{Name: "spinbox0", Sandbox: ""},
 				},
 			},
 			expectError:   true,

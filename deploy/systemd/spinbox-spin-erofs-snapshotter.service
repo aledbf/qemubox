@@ -1,0 +1,34 @@
+[Unit]
+Description=EROFS Snapshotter for containerd
+Documentation=https://github.com/spin-stack/erofs-snapshotter
+After=network.target
+Before=spinbox-containerd.service
+
+[Service]
+ExecSearchPath=/usr/share/spinbox/bin
+ExecSearchPath=/usr/local/sbin
+ExecSearchPath=/usr/local/bin
+ExecSearchPath=/usr/sbin
+ExecSearchPath=/usr/bin
+ExecSearchPath=/sbin
+ExecSearchPath=/bin
+ExecStartPre=-/bin/mkdir -p /run/spin-stack/erofs-snapshotter
+ExecStartPre=-/bin/mkdir -p /var/lib/spin-stack/erofs-snapshotter
+ExecStart=/usr/share/spinbox/bin/spin-erofs-snapshotter \
+  --root /var/lib/spin-stack/erofs-snapshotter \
+  --address /run/spin-stack/erofs-snapshotter/snapshotter.sock \
+  --containerd-address /var/run/spinbox/containerd.sock \
+  --containerd-namespace default \
+  --log-level debug \
+  --set-immutable
+
+Type=simple
+Restart=always
+RestartSec=5
+
+# Wait for the socket to be ready before declaring service as started
+ExecStartPost=/bin/sh -c 'for i in $(seq 1 30); do [ -S /run/spin-stack/erofs-snapshotter/snapshotter.sock ] && exit 0; sleep 0.1; done; exit 1'
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=spinbox-containerd.service

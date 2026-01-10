@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package containerd.vminitd.services.stdio.v1;
 
-option go_package = "github.com/aledbf/qemubox/containerd/api/services/stdio/v1;stdio";
+option go_package = "github.com/spin-stack/spinbox/api/services/stdio/v1;stdio";
 
 // StdIO service provides RPC-based I/O forwarding for container processes.
 // This enables attach/detach functionality by keeping I/O pipes available

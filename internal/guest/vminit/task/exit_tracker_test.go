@@ -7,8 +7,8 @@ import (
 
 	runcC "github.com/containerd/go-runc"
 
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/process"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/testutil"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/process"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/testutil"
 )
 
 func TestExitTracker_SubscribeAndHandleStart(t *testing.T) {

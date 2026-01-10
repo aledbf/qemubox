@@ -1,13 +1,13 @@
 #!/bin/bash
-# Shared cleanup for qemubox demo scripts
+# Shared cleanup for spinbox demo scripts
 # Usage: ./cleanup.sh [container-names...]
 # If no container names provided, cleans up all orphaned CNI allocations and firewall rules
 
 set -euo pipefail
 
-CTR="ctr --address /var/run/qemubox/containerd.sock"
-NERDCTL="nerdctl --address /var/run/qemubox/containerd.sock"
-CNI_NET_DIR="/var/lib/cni/networks/qemubox-net"
+CTR="ctr --address /var/run/spinbox/containerd.sock"
+NERDCTL="nerdctl --address /var/run/spinbox/containerd.sock"
+CNI_NET_DIR="/var/lib/cni/networks/spinbox-net"
 CNI_SUBNET="10.88."
 
 # Cleanup specific containers if provided
@@ -16,7 +16,7 @@ cleanup_container() {
     $CTR task kill "$name" 2>/dev/null || true
     $CTR task delete "$name" 2>/dev/null || true
     $CTR container rm "$name" 2>/dev/null || true
-    $CTR snapshots --snapshotter nexus-erofs delete "$name" 2>/dev/null || true
+    $CTR snapshots --snapshotter spin-erofs delete "$name" 2>/dev/null || true
 }
 
 # Get list of IPs allocated to running containers

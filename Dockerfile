@@ -1,8 +1,8 @@
-# Build the Linux kernel, initrd, and containerd shim for running qemubox
+# Build the Linux kernel, initrd, and containerd shim for running spinbox
 # This multi-stage build produces:
 # - Custom Linux kernel with container/virtualization support
 # - initrd with vminitd and crun
-# - containerd shim for qemubox runtime
+# - containerd shim for spinbox runtime
 
 # Base image versions
 ARG GO_VERSION=1.25.5
@@ -119,7 +119,7 @@ EOT
 
 FROM base AS shim-build
 
-WORKDIR /go/src/github.com/containerd/qemubox
+WORKDIR /go/src/github.com/containerd/spinbox
 
 ARG GO_DEBUG_GCFLAGS
 ARG GO_GCFLAGS
@@ -131,11 +131,11 @@ ARG TARGETPLATFORM
 
 RUN --mount=type=bind,target=.,rw \
     --mount=type=cache,target=/root/.cache/go-build,id=shim-build-$TARGETPLATFORM \
-    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build ${GO_DEBUG_GCFLAGS} ${GO_GCFLAGS} ${GO_BUILD_FLAGS} -o /build/containerd-shim-qemubox-v1 ${GO_LDFLAGS} -tags 'no_grpc' ./cmd/containerd-shim-qemubox-v1
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build ${GO_DEBUG_GCFLAGS} ${GO_GCFLAGS} ${GO_BUILD_FLAGS} -o /build/containerd-shim-spinbox-v1 ${GO_LDFLAGS} -tags 'no_grpc' ./cmd/containerd-shim-spinbox-v1
 
 FROM base AS vminit-build
 
-WORKDIR /go/src/github.com/containerd/qemubox
+WORKDIR /go/src/github.com/containerd/spinbox
 
 ARG GO_DEBUG_GCFLAGS
 ARG GO_GCFLAGS
@@ -193,7 +193,7 @@ RUN <<EOT
     fi
 
     mkdir /build
-    (find . -print0 | cpio --null -H newc -o ) | gzip -9 > /build/qemubox-initrd
+    (find . -print0 | cpio --null -H newc -o ) | gzip -9 > /build/spinbox-initrd
 EOT
 
 # ============================================================================
@@ -202,11 +202,11 @@ EOT
 
 FROM scratch AS kernel
 ARG KERNEL_ARCH="x86_64"
-COPY --from=kernel-build /build/kernel /qemubox-kernel-${KERNEL_ARCH}
+COPY --from=kernel-build /build/kernel /spinbox-kernel-${KERNEL_ARCH}
 COPY --from=kernel-build /build/kernel-config /kernel-config
 
 FROM scratch AS initrd
-COPY --from=initrd-build /build/qemubox-initrd /qemubox-initrd
+COPY --from=initrd-build /build/spinbox-initrd /spinbox-initrd
 
 FROM scratch AS shim
-COPY --from=shim-build /build/containerd-shim-qemubox-v1 /containerd-shim-qemubox-v1
+COPY --from=shim-build /build/containerd-shim-spinbox-v1 /containerd-shim-spinbox-v1

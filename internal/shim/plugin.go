@@ -9,7 +9,7 @@ import (
 	"github.com/containerd/plugin"
 	"github.com/containerd/plugin/registry"
 
-	"github.com/aledbf/qemubox/containerd/internal/shim/task"
+	"github.com/spin-stack/spinbox/internal/shim/task"
 )
 
 func init() {

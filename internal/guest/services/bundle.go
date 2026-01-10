@@ -1,4 +1,4 @@
-// Package services implements containerd TTRPC services for the qemubox VM runtime.
+// Package services implements containerd TTRPC services for the spinbox VM runtime.
 //
 // These services run inside the guest VM (vminitd) and provide:
 //   - Bundle management: creating OCI bundle directories
@@ -21,8 +21,8 @@ import (
 	"github.com/containerd/plugin/registry"
 	"github.com/containerd/ttrpc"
 
-	api "github.com/aledbf/qemubox/containerd/api/services/bundle/v1"
-	"github.com/aledbf/qemubox/containerd/internal/guest/vminit/bundle"
+	api "github.com/spin-stack/spinbox/api/services/bundle/v1"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/bundle"
 )
 
 const (

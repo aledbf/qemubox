@@ -1,4 +1,4 @@
-// Package paths provides standard filesystem paths used by qemubox.
+// Package paths provides standard filesystem paths used by spinbox.
 // These helpers take configuration as input to avoid global config coupling.
 // QemuPath and QemuSharePath may probe the filesystem when auto-discovering paths.
 package paths
@@ -7,17 +7,17 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/aledbf/qemubox/containerd/internal/config"
+	"github.com/spin-stack/spinbox/internal/config"
 )
 
 // KernelPath returns the full path to the kernel binary based on the provided configuration
 func KernelPath(pathsCfg config.PathsConfig) string {
-	return filepath.Join(pathsCfg.ShareDir, "kernel", "qemubox-kernel-x86_64")
+	return filepath.Join(pathsCfg.ShareDir, "kernel", "spinbox-kernel-x86_64")
 }
 
 // InitrdPath returns the full path to the initrd binary based on the provided configuration
 func InitrdPath(pathsCfg config.PathsConfig) string {
-	return filepath.Join(pathsCfg.ShareDir, "kernel", "qemubox-initrd")
+	return filepath.Join(pathsCfg.ShareDir, "kernel", "spinbox-initrd")
 }
 
 // QemuPath returns the full path to the qemu-system-x86_64 binary based on the provided configuration
@@ -44,7 +44,7 @@ func QemuSharePath(pathsCfg config.PathsConfig) string {
 
 // discoverQemuPath attempts to find qemu-system-x86_64 binary
 func discoverQemuPath(shareDir string) string {
-	// Check qemubox share directory first
+	// Check spinbox share directory first
 	candidates := []string{
 		filepath.Join(shareDir, "bin", "qemu-system-x86_64"),
 		"/usr/bin/qemu-system-x86_64",
@@ -63,7 +63,7 @@ func discoverQemuPath(shareDir string) string {
 
 // discoverQemuSharePath attempts to find QEMU share directory
 func discoverQemuSharePath(shareDir string) string {
-	// Check qemubox share directory first
+	// Check spinbox share directory first
 	candidates := []string{
 		filepath.Join(shareDir, "qemu"),
 		"/usr/share/qemu",
