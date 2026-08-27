@@ -506,12 +506,28 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 		memorySlots = 0 // No hotplug needed if max equals initial
 	}
 
+	// Fixed PCI slots bound how many devices fit on the root complex; check
+	// before building so the failure names the limit instead of surfacing as a
+	// QEMU slot collision at exec time.
+	if len(q.disks) > maxDisks {
+		return nil, fmt.Errorf("too many disks: %d configured, %d PCI slots available", len(q.disks), maxDisks)
+	}
+	if len(q.nets) > maxNICs {
+		return nil, fmt.Errorf("too many NICs: %d configured, %d PCI slots available", len(q.nets), maxNICs)
+	}
+
 	// Build QEMU command using fluent builder pattern
 	builder := newQemuCommandBuilder().
 		setNoDefaults(). // Disable default devices (prevents e1000e NIC needing ROM files)
+		// Seccomp sandbox: cheap hardening around the VM isolation boundary.
+		setSandbox().
 		setBIOSPath(paths.QemuSharePath(cfg.Paths)).
 		// Optimize: use kernel IRQ chip, disable HPET
 		setMachine("q35", "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on").
+		// Drop S3/S4 from the ACPI tables. A microVM never suspends or
+		// hibernates, and the guest skips the corresponding ACPI setup.
+		addGlobal("ICH9-LPC.disable_s3=1").
+		addGlobal("ICH9-LPC.disable_s4=1").
 		setCPU("host", "migratable=on").
 		// CPU configuration for hotplug:
 		// Simple topology: just specify initial CPUs and max CPUs, let QEMU handle the rest
@@ -543,14 +559,15 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 	// the still-present -serial carries nothing once the kernel targets hvc0.
 	if debug {
 		builder.
-			addDevice("virtio-serial-pci,id=virtio-serial0").
+			addDevice(fmt.Sprintf("virtio-serial-pci,id=virtio-serial0,%s,addr=0x%x",
+				virtioModern, pciSlotVirtioSerial)).
 			addChardevFile("hvc0", q.consoleFifoPath).
 			addDevice("virtconsole,chardev=hvc0,id=hvc0port")
 	}
 
 	// Add disks
 	for i, disk := range q.disks {
-		builder.addDisk(fmt.Sprintf("blk%d", i), disk)
+		builder.addDisk(i, fmt.Sprintf("blk%d", i), disk)
 	}
 
 	// Add NICs
@@ -563,7 +580,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 			return nil, fmt.Errorf("internal error: NIC %s has no TAP file descriptor (openTapFiles not called?)", nic.TapName)
 		}
 		fd := 3 + i
-		builder.addNIC(fmt.Sprintf("net%d", i), NICConfig{
+		builder.addNIC(i, fmt.Sprintf("net%d", i), NICConfig{
 			TapFD: fd,
 			MAC:   nic.MAC,
 		})
