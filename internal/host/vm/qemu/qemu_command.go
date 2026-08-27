@@ -5,6 +5,47 @@ import (
 	"strings"
 )
 
+// Fixed PCI slot assignments on the q35 root complex (pcie.0).
+//
+// Every virtio device sits directly on bus 0 - there are no PCIe root ports -
+// which is what lets the kernel cmdline carry pci=lastbus=0 and skip scanning
+// buses 1-255 (see kernel_cmdline.go). Pinning each device to a slot instead of
+// letting QEMU auto-assign makes guest enumeration order deterministic: it no
+// longer depends on the order of builder calls, so reordering code here cannot
+// silently renumber devices inside the guest.
+//
+// The q35 machine owns both ends of the bus: 0x00 is the host bridge and 0x1f
+// the ICH9 LPC/SATA/SMBus function block. 0x01 is left free (q35 convention
+// places VGA there; we run -nodefaults with no display).
+const (
+	pciSlotVsock        = 0x02
+	pciSlotRNG          = 0x03
+	pciSlotVirtioSerial = 0x04 // boot-profiling console only
+
+	pciSlotDiskBase = 0x05
+	pciSlotDiskMax  = 0x0f
+
+	pciSlotNICBase = 0x10
+	pciSlotNICMax  = 0x1e
+)
+
+// maxDisks and maxNICs bound the fixed slot ranges above. Exceeding either is a
+// configuration error, caught before the command line is built.
+const (
+	maxDisks = pciSlotDiskMax - pciSlotDiskBase + 1
+	maxNICs  = pciSlotNICMax - pciSlotNICBase + 1
+)
+
+// virtioModern forces virtio 1.0 (modern-only) on a PCI virtio device.
+//
+// disable-legacy=on drops the legacy I/O BAR and the transitional device ID, so
+// the guest skips the legacy probe path entirely. Every kernel we boot is
+// virtio 1.0 capable, so the transitional mode QEMU would otherwise negotiate
+// buys nothing. Note this was measured neutral for boot time (time-to-PID1 is
+// unchanged within run-to-run noise); the win is a smaller device surface, not
+// speed.
+const virtioModern = "disable-legacy=on"
+
 // qemuCommandBuilder constructs QEMU command-line arguments using a fluent builder pattern.
 // This provides type safety, validation, and clearer intent compared to raw string building.
 //
@@ -40,6 +81,30 @@ func (b *qemuCommandBuilder) setBIOSPath(path string) *qemuCommandBuilder {
 // All required devices must be explicitly added.
 func (b *qemuCommandBuilder) setNoDefaults() *qemuCommandBuilder {
 	b.args = append(b.args, "-nodefaults")
+	return b
+}
+
+// setSandbox enables QEMU's seccomp sandbox (-sandbox option).
+//
+// The binary is built with --enable-seccomp, so all four restrictions apply:
+//   - obsolete=deny          block obsolete syscalls
+//   - elevateprivileges=deny block setuid/setgid family; QEMU never drops into
+//     another user here (the shim starts it with the identity it keeps)
+//   - spawn=deny             block fork/exec; nothing is spawned - TAP arrives
+//     as a file descriptor, and slirp (which uses helpers) is not compiled in
+//   - resourcecontrol=deny   block sched_setaffinity and friends. vCPU pinning,
+//     if ever needed, must then be done from the host side rather than from
+//     inside QEMU.
+func (b *qemuCommandBuilder) setSandbox() *qemuCommandBuilder {
+	b.args = append(b.args,
+		"-sandbox", "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny")
+	return b
+}
+
+// addGlobal sets a global device property (-global option).
+// Example: addGlobal("ICH9-LPC.disable_s3=1")
+func (b *qemuCommandBuilder) addGlobal(property string) *qemuCommandBuilder {
+	b.args = append(b.args, "-global", property)
 	return b
 }
 
@@ -150,12 +215,13 @@ func (b *qemuCommandBuilder) addChardevFile(id, path string) *qemuCommandBuilder
 
 // addVsockDevice adds a vhost-vsock device for guest communication.
 func (b *qemuCommandBuilder) addVsockDevice(guestCID int) *qemuCommandBuilder {
-	return b.addDevice(fmt.Sprintf("vhost-vsock-pci,guest-cid=%d", guestCID))
+	return b.addDevice(fmt.Sprintf("vhost-vsock-pci,guest-cid=%d,%s,addr=0x%x",
+		guestCID, virtioModern, pciSlotVsock))
 }
 
 // addVirtioRNG adds a virtio-rng device for entropy.
 func (b *qemuCommandBuilder) addVirtioRNG() *qemuCommandBuilder {
-	return b.addDevice("virtio-rng-pci")
+	return b.addDevice(fmt.Sprintf("virtio-rng-pci,%s,addr=0x%x", virtioModern, pciSlotRNG))
 }
 
 // setQMP sets QMP socket configuration (-qmp option).
@@ -173,13 +239,14 @@ func (b *qemuCommandBuilder) setQMPUnixSocket(socketPath string) *qemuCommandBui
 // addDisk adds a disk drive with virtio-blk device.
 //
 // Parameters:
+//   - index: 0-based disk index, mapped to a fixed PCI slot (pciSlotDiskBase+index)
 //   - id: Drive identifier (e.g., "blk0")
 //   - disk: Disk configuration
 //
 // This generates both -drive and -device options:
 //
 //	-drive file=<path>,if=none,id=<id>,format=<format>[,readonly=on|,file.locking=on]
-//	-device virtio-blk-pci,drive=<id>
+//	-device virtio-blk-pci,drive=<id>,disable-legacy=on,addr=0x<slot>
 //
 // Format is auto-detected from file extension:
 //   - .vmdk → vmdk
@@ -191,7 +258,7 @@ func (b *qemuCommandBuilder) setQMPUnixSocket(socketPath string) *qemuCommandBui
 // on rwlayer.img to detect a running container; that only works if QEMU locks
 // the same inode. Setting it explicitly avoids depending on QEMU's
 // locking=auto default, which a shared-storage setup might globally disable.
-func (b *qemuCommandBuilder) addDisk(id string, disk *DiskConfig) *qemuCommandBuilder {
+func (b *qemuCommandBuilder) addDisk(index int, id string, disk *DiskConfig) *qemuCommandBuilder {
 	// Detect format based on file extension
 	format := "raw"
 	if strings.HasSuffix(disk.Path, ".vmdk") {
@@ -208,7 +275,8 @@ func (b *qemuCommandBuilder) addDisk(id string, disk *DiskConfig) *qemuCommandBu
 	}
 	b.args = append(b.args, "-drive", driveArgs)
 
-	deviceArgs := fmt.Sprintf("virtio-blk-pci,drive=%s", id)
+	deviceArgs := fmt.Sprintf("virtio-blk-pci,drive=%s,%s,addr=0x%x",
+		id, virtioModern, pciSlotDiskBase+index)
 	// Expose a stable serial so the guest can resolve this device via
 	// /sys/block/<dev>/serial instead of relying on PCI enumeration order.
 	if disk.Serial != "" {
@@ -227,19 +295,21 @@ type NICConfig struct {
 // addNIC adds a network interface using TAP device via file descriptor.
 //
 // Parameters:
+//   - index: 0-based NIC index, mapped to a fixed PCI slot (pciSlotNICBase+index)
 //   - id: Network identifier (e.g., "net0")
 //   - nic: NIC configuration
 //
 // This generates both -netdev and -device options:
 //
 //	-netdev tap,id=<id>,fd=<fd>
-//	-device virtio-net-pci,netdev=<id>,mac=<mac>,romfile=
+//	-device virtio-net-pci,netdev=<id>,mac=<mac>,romfile=,disable-legacy=on,addr=0x<slot>
 //
 // Note: romfile= disables option ROM loading (e.g., efi-virtio.rom) to avoid firmware dependency.
-func (b *qemuCommandBuilder) addNIC(id string, nic NICConfig) *qemuCommandBuilder {
+func (b *qemuCommandBuilder) addNIC(index int, id string, nic NICConfig) *qemuCommandBuilder {
 	b.args = append(b.args,
 		"-netdev", fmt.Sprintf("tap,id=%s,fd=%d", id, nic.TapFD),
-		"-device", fmt.Sprintf("virtio-net-pci,netdev=%s,mac=%s,romfile=", id, nic.MAC),
+		"-device", fmt.Sprintf("virtio-net-pci,netdev=%s,mac=%s,romfile=,%s,addr=0x%x",
+			id, nic.MAC, virtioModern, pciSlotNICBase+index),
 	)
 	return b
 }

@@ -305,12 +305,12 @@ func TestAddVsockDevice(t *testing.T) {
 		{
 			name:     "standard CID 3",
 			guestCID: 3,
-			want:     []string{"-device", "vhost-vsock-pci,guest-cid=3"},
+			want:     []string{"-device", "vhost-vsock-pci,guest-cid=3,disable-legacy=on,addr=0x2"},
 		},
 		{
 			name:     "custom CID",
 			guestCID: 42,
-			want:     []string{"-device", "vhost-vsock-pci,guest-cid=42"},
+			want:     []string{"-device", "vhost-vsock-pci,guest-cid=42,disable-legacy=on,addr=0x2"},
 		},
 	}
 
@@ -329,7 +329,7 @@ func TestAddVirtioRNG(t *testing.T) {
 		addVirtioRNG().
 		build()
 
-	want := []string{"-device", "virtio-rng-pci"}
+	want := []string{"-device", "virtio-rng-pci,disable-legacy=on,addr=0x3"}
 	assertArgs(t, args, want)
 }
 
@@ -353,74 +353,81 @@ func TestSetQMPUnixSocket(t *testing.T) {
 
 func TestAddDisk(t *testing.T) {
 	tests := []struct {
-		name string
-		id   string
-		disk *DiskConfig
-		want []string
+		name  string
+		index int
+		id    string
+		disk  *DiskConfig
+		want  []string
 	}{
 		{
-			name: "raw disk",
-			id:   "blk0",
+			name:  "raw disk",
+			index: 0,
+			id:    "blk0",
 			disk: &DiskConfig{
 				Path:     "/var/lib/vm/disk.raw",
 				Readonly: false,
 			},
 			want: []string{
 				"-drive", "file=/var/lib/vm/disk.raw,if=none,id=blk0,format=raw,file.locking=on",
-				"-device", "virtio-blk-pci,drive=blk0",
+				"-device", "virtio-blk-pci,drive=blk0,disable-legacy=on,addr=0x5",
 			},
 		},
 		{
-			name: "raw disk readonly",
-			id:   "blk0",
+			name:  "raw disk readonly",
+			index: 0,
+			id:    "blk0",
 			disk: &DiskConfig{
 				Path:     "/var/lib/vm/disk.raw",
 				Readonly: true,
 			},
 			want: []string{
 				"-drive", "file=/var/lib/vm/disk.raw,if=none,id=blk0,format=raw,readonly=on",
-				"-device", "virtio-blk-pci,drive=blk0",
+				"-device", "virtio-blk-pci,drive=blk0,disable-legacy=on,addr=0x5",
 			},
 		},
 		{
-			name: "vmdk disk",
-			id:   "blk1",
+			name:  "vmdk disk",
+			index: 1,
+			id:    "blk1",
 			disk: &DiskConfig{
 				Path:     "/var/lib/vm/rootfs.vmdk",
 				Readonly: true,
 			},
 			want: []string{
 				"-drive", "file=/var/lib/vm/rootfs.vmdk,if=none,id=blk1,format=vmdk,readonly=on",
-				"-device", "virtio-blk-pci,drive=blk1",
+				"-device", "virtio-blk-pci,drive=blk1,disable-legacy=on,addr=0x6",
 			},
 		},
 		{
-			name: "qcow2 disk",
-			id:   "data",
+			name:  "qcow2 disk",
+			index: 2,
+			id:    "data",
 			disk: &DiskConfig{
 				Path:     "/var/lib/vm/data.qcow2",
 				Readonly: false,
 			},
 			want: []string{
 				"-drive", "file=/var/lib/vm/data.qcow2,if=none,id=data,format=qcow2,file.locking=on",
-				"-device", "virtio-blk-pci,drive=data",
+				"-device", "virtio-blk-pci,drive=data,disable-legacy=on,addr=0x7",
 			},
 		},
 		{
-			name: "no extension defaults to raw",
-			id:   "blk0",
+			name:  "no extension defaults to raw",
+			index: 0,
+			id:    "blk0",
 			disk: &DiskConfig{
 				Path:     "/dev/sda",
 				Readonly: false,
 			},
 			want: []string{
 				"-drive", "file=/dev/sda,if=none,id=blk0,format=raw,file.locking=on",
-				"-device", "virtio-blk-pci,drive=blk0",
+				"-device", "virtio-blk-pci,drive=blk0,disable-legacy=on,addr=0x5",
 			},
 		},
 		{
-			name: "disk with serial",
-			id:   "blk2",
+			name:  "disk with serial",
+			index: 3,
+			id:    "blk2",
 			disk: &DiskConfig{
 				Path:     "/var/lib/vm/layer.erofs",
 				Readonly: true,
@@ -428,21 +435,22 @@ func TestAddDisk(t *testing.T) {
 			},
 			want: []string{
 				"-drive", "file=/var/lib/vm/layer.erofs,if=none,id=blk2,format=raw,readonly=on",
-				"-device", "virtio-blk-pci,drive=blk2,serial=sbxblk2",
+				"-device", "virtio-blk-pci,drive=blk2,disable-legacy=on,addr=0x8,serial=sbxblk2",
 			},
 		},
 		{
 			// The writable rwlayer must pin file.locking=on so the snapshotter's
 			// OFD lock on rwlayer.img reliably gates commit of a running container.
-			name: "writable rwlayer pins file.locking",
-			id:   "blk3",
+			name:  "writable rwlayer pins file.locking",
+			index: 4,
+			id:    "blk3",
 			disk: &DiskConfig{
 				Path:     "/var/lib/spinbox/rwlayer.img",
 				Readonly: false,
 			},
 			want: []string{
 				"-drive", "file=/var/lib/spinbox/rwlayer.img,if=none,id=blk3,format=raw,file.locking=on",
-				"-device", "virtio-blk-pci,drive=blk3",
+				"-device", "virtio-blk-pci,drive=blk3,disable-legacy=on,addr=0x9",
 			},
 		},
 	}
@@ -450,7 +458,7 @@ func TestAddDisk(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			args := newQemuCommandBuilder().
-				addDisk(tt.id, tt.disk).
+				addDisk(tt.index, tt.id, tt.disk).
 				build()
 			assertArgs(t, args, tt.want)
 		})
@@ -459,33 +467,36 @@ func TestAddDisk(t *testing.T) {
 
 func TestAddNIC(t *testing.T) {
 	tests := []struct {
-		name string
-		id   string
-		nic  NICConfig
-		want []string
+		name  string
+		index int
+		id    string
+		nic   NICConfig
+		want  []string
 	}{
 		{
-			name: "basic NIC",
-			id:   "net0",
+			name:  "basic NIC",
+			index: 0,
+			id:    "net0",
 			nic: NICConfig{
 				TapFD: 3,
 				MAC:   "52:54:00:12:34:56",
 			},
 			want: []string{
 				"-netdev", "tap,id=net0,fd=3",
-				"-device", "virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56,romfile=",
+				"-device", "virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56,romfile=,disable-legacy=on,addr=0x10",
 			},
 		},
 		{
-			name: "second NIC",
-			id:   "net1",
+			name:  "second NIC",
+			index: 1,
+			id:    "net1",
 			nic: NICConfig{
 				TapFD: 4,
 				MAC:   "52:54:00:12:34:57",
 			},
 			want: []string{
 				"-netdev", "tap,id=net1,fd=4",
-				"-device", "virtio-net-pci,netdev=net1,mac=52:54:00:12:34:57,romfile=",
+				"-device", "virtio-net-pci,netdev=net1,mac=52:54:00:12:34:57,romfile=,disable-legacy=on,addr=0x11",
 			},
 		},
 	}
@@ -493,7 +504,7 @@ func TestAddNIC(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			args := newQemuCommandBuilder().
-				addNIC(tt.id, tt.nic).
+				addNIC(tt.index, tt.id, tt.nic).
 				build()
 			assertArgs(t, args, tt.want)
 		})
@@ -515,8 +526,8 @@ func TestBuilderChaining(t *testing.T) {
 		addVsockDevice(3).
 		addVirtioRNG().
 		setQMPUnixSocket("/tmp/qmp.sock").
-		addDisk("blk0", &DiskConfig{Path: "/var/lib/vm/disk.raw", Readonly: true}).
-		addNIC("net0", NICConfig{TapFD: 3, MAC: "52:54:00:12:34:56"}).
+		addDisk(0, "blk0", &DiskConfig{Path: "/var/lib/vm/disk.raw", Readonly: true}).
+		addNIC(0, "net0", NICConfig{TapFD: 3, MAC: "52:54:00:12:34:56"}).
 		build()
 
 	// Verify essential components are present
@@ -561,10 +572,10 @@ func TestBuilderChaining(t *testing.T) {
 
 func TestMultipleDevices(t *testing.T) {
 	args := newQemuCommandBuilder().
-		addDisk("blk0", &DiskConfig{Path: "/disk1.raw"}).
-		addDisk("blk1", &DiskConfig{Path: "/disk2.vmdk", Readonly: true}).
-		addNIC("net0", NICConfig{TapFD: 3, MAC: "52:54:00:00:00:01"}).
-		addNIC("net1", NICConfig{TapFD: 4, MAC: "52:54:00:00:00:02"}).
+		addDisk(0, "blk0", &DiskConfig{Path: "/disk1.raw"}).
+		addDisk(1, "blk1", &DiskConfig{Path: "/disk2.vmdk", Readonly: true}).
+		addNIC(0, "net0", NICConfig{TapFD: 3, MAC: "52:54:00:00:00:01"}).
+		addNIC(1, "net1", NICConfig{TapFD: 4, MAC: "52:54:00:00:00:02"}).
 		build()
 
 	// Count -drive and -device occurrences
