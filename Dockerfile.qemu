@@ -4,7 +4,7 @@
 FROM ubuntu:26.04 AS builder
 
 # Build arguments
-ARG QEMU_VERSION=11.0.1
+ARG QEMU_VERSION=11.1.1
 ARG JOBS=8
 ARG DEBIAN_FRONTEND=noninteractive
 
