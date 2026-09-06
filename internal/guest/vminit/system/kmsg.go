@@ -36,10 +36,18 @@ type kmsgRecord struct {
 }
 
 // kmsgGap is a stretch of boot in which the kernel said nothing, named by the
-// last thing it said before going quiet.
+// lines on either side of it and stamped with where in the boot it falls.
+//
+// Both sides, because the first run of this reported only `after` and the
+// largest gap in the boot came back as "44695 us after: initcall
+// late_trace_init returned 0 after 0 usecs" — which says the silence begins once
+// the initcalls are done and nothing at all about what it is. The line that ends
+// a silence is the one that names it.
 type kmsgGap struct {
-	usec  int64
-	after string
+	usec   int64
+	atUS   int64
+	after  string
+	before string
 }
 
 // kmsgGapsN bounds how many silent stretches we print, and kmsgGapFloorUS the
@@ -105,7 +113,8 @@ func DumpKernelBootProfile(ctx context.Context) {
 	// is time no initcall accounts for, and the only thing the ring buffer can
 	// say about it is where the kernel fell silent.
 	for _, g := range kmsgGaps(records) {
-		log.G(ctx).Infof("KMSG_GAP %8d us  after: %s", g.usec, g.after)
+		log.G(ctx).Infof("KMSG_GAP %8d us  at %8d us  after: %s  ||  before: %s",
+			g.usec, g.atUS, g.after, g.before)
 	}
 
 	// And, when the initcall tracepoints were enabled at boot, how long each
@@ -127,7 +136,12 @@ func kmsgGaps(records []kmsgRecord) []kmsgGap {
 		if d < kmsgGapFloorUS || kmsgCallingRE.MatchString(records[i-1].msg) {
 			continue
 		}
-		gaps = append(gaps, kmsgGap{usec: d, after: records[i-1].msg})
+		gaps = append(gaps, kmsgGap{
+			usec:   d,
+			atUS:   records[i-1].tsUS,
+			after:  records[i-1].msg,
+			before: records[i].msg,
+		})
 	}
 	sort.Slice(gaps, func(i, j int) bool { return gaps[i].usec > gaps[j].usec })
 	if len(gaps) > kmsgGapsN {
