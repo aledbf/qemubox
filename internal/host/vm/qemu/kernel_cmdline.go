@@ -93,6 +93,26 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 	}
 	parts = append(parts, fmt.Sprintf("loglevel=%d", loglevel))
 
+	// Scan PCI bus 0 and stop. Every device this VM is given is placed there by
+	// hand - the fixed slots in qemu_command.go, 0x02 through 0x1e - and nothing
+	// creates a PCIe root port, so there has never been a bus 1 to find. The
+	// kernel does not know that and probes on.
+	//
+	// Measured on one machine, full device set, two runs each, kernel-to-init
+	// (VMINITD_READY pid1-entry):
+	//
+	//	without   87.6 / 85.0 ms      pci_subsys_init 30 / 29 ms
+	//	lastbus=0 51.1 / 51.8 ms      pci_subsys_init gone
+	//
+	// ~34 ms, and the devices still enumerate: the block device is found in 173 us
+	// and vsock listens as before.
+	//
+	// **This is a constraint, not just a flag.** A device behind a root port would
+	// be on bus 1 and would simply not exist for the guest - no error, no warning,
+	// an absent disk. The fixed-slot scheme is what makes it safe; whoever changes
+	// that has to change this line with it.
+	parts = append(parts, "pci=lastbus=0")
+
 	// Systemd options
 	parts = append(parts,
 		"systemd.show_status=0",

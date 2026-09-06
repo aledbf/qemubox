@@ -40,6 +40,17 @@ func TestBuildKernelCmdline(t *testing.T) {
 			excludes: []string{"initcall_debug"},
 		},
 		{
+			// Every boot, not just a profiling one: the PCI scan it bounds is
+			// ~34 ms of kernel time on a bus that only ever has one segment.
+			name: "pci scan is bounded to bus 0",
+			cfg: KernelCmdlineConfig{
+				Console:  "ttyS0",
+				Quiet:    true,
+				LogLevel: 3,
+			},
+			contains: []string{"pci=lastbus=0"},
+		},
+		{
 			name: "debug boot profiling",
 			cfg: KernelCmdlineConfig{
 				Console:  "ttyS0",
