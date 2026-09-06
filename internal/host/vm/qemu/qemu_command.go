@@ -17,6 +17,10 @@ import (
 // The q35 machine owns both ends of the bus: 0x00 is the host bridge and 0x1f
 // the ICH9 LPC/SATA/SMBus function block. 0x01 is left free (q35 convention
 // places VGA there; we run -nodefaults with no display).
+// Every device is on bus 0, and that is load-bearing beyond tidiness: the kernel
+// is booted with `pci=lastbus=0` (BuildKernelCmdline), which stops the PCI scan
+// after bus 0 and saves about 34 ms of every boot. A device placed behind a root
+// port would be on bus 1 and would not exist for the guest.
 const (
 	pciSlotVsock = 0x02
 	pciSlotRNG   = 0x03
