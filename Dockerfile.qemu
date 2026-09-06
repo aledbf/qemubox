@@ -6,6 +6,10 @@ FROM ubuntu:26.04 AS builder
 # Build arguments
 ARG QEMU_VERSION=11.1.1
 ARG JOBS=8
+# Bump when the configure flags or build/qemu/devices.mak change: the build directory lives
+# in a cache mount and configure only runs when it holds no config.status, so without this
+# a flag change would silently reuse the previous configuration.
+ARG QEMU_CONFIG_REV=1
 ARG DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -81,65 +85,149 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
         echo "Using cached extracted QEMU source"; \
     fi
 
-# Configure, build, and install QEMU with incremental build support
-# Only run configure if Makefile doesn't exist
-# Combine all steps in single RUN to ensure cache mount consistency
+# The device set (see build/qemu/devices.mak) and the flags.
+COPY build/qemu/devices.mak /build/spin-devices.mak
+
+# Configure, build, and install QEMU.
+#
+# The guard is config.status and not Makefile, and the directory is emptied before a
+# configure runs: configure writes the Makefile early and config.status only once it has
+# finished, so a configure that failed leaves a build directory that looks configured and a
+# `make` that dies at `./config.status: No such file or directory` — in a cache mount, on
+# every later build, until somebody prunes it.
+#
+# --disable-tcg, and nothing here needs the other half: every VM is started with accel=kvm
+# (internal/host/vm/qemu/start.go) and CI runs on self-hosted machines that have /dev/kvm.
+# A binary that cannot emulate fails at start-up on a host without KVM instead of running a
+# tenant's VM at a tenth of the speed.
+#
+# --disable-tools: qemu-img, qemu-nbd and the storage daemon are built by it and nothing in
+# this repository extracts or runs one.
 RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
-    --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION},target=/build/qemu-build \
+    --mount=type=cache,sharing=locked,id=qemu-build-${QEMU_VERSION}-${QEMU_CONFIG_REV},target=/build/qemu-build \
+    cp /build/spin-devices.mak \
+       "/var/cache/qemu/qemu-${QEMU_VERSION}/configs/devices/x86_64-softmmu/spin.mak" && \
     cd qemu-build && \
-    if [ ! -f Makefile ]; then \
-        echo "Disabling CXL device support (debloat)..."; \
-        DEVMAK="/var/cache/qemu/qemu-${QEMU_VERSION}/configs/devices/x86_64-softmmu/default.mak"; \
-        grep -q '^CONFIG_CXL=n' "$DEVMAK" || echo 'CONFIG_CXL=n' >> "$DEVMAK"; \
-        echo "Running QEMU configure (first build)..."; \
+    if [ ! -f config.status ]; then \
+        rm -rf ./* && \
         /var/cache/qemu/qemu-${QEMU_VERSION}/configure \
         --prefix=/opt/qemu \
         --target-list=x86_64-softmmu \
-        --enable-tools \
+        --with-devices-x86_64=spin \
+        --enable-system \
+        --disable-user \
+        --disable-tools \
+        --enable-kvm \
+        --disable-tcg \
         --enable-lto \
         --enable-strip \
+        --enable-linux-aio \
+        --enable-linux-io-uring \
+        --enable-cap-ng \
+        --enable-seccomp \
         --disable-containers \
         --disable-docs \
         --disable-debug-info \
         --disable-werror \
+        --disable-plugins \
+        --disable-xen \
+        --disable-xen-pci-passthrough \
+        --disable-whpx \
+        --disable-hvf \
+        --disable-nvmm \
+        --disable-vhost-user-blk-server \
         --disable-sdl \
         --disable-gtk \
+        --disable-curses \
         --disable-opengl \
         --disable-virglrenderer \
         --disable-spice \
         --disable-vnc \
+        --disable-png \
+        --disable-vte \
+        --disable-xkbcommon \
+        --disable-brlapi \
         --disable-alsa \
         --disable-coreaudio \
         --disable-oss \
         --disable-pa \
         --disable-jack \
         --disable-sndio \
-        --enable-kvm \
-        --enable-virtfs \
-        --enable-linux-aio \
-        --enable-linux-io-uring \
-        --enable-cap-ng \
-        --enable-seccomp \
+        --disable-pipewire \
         --disable-slirp \
-        --disable-gio; \
-    else \
-        echo "Using cached QEMU build (Makefile exists, skipping configure)"; \
+        --disable-passt \
+        --disable-vde \
+        --disable-netmap \
+        --disable-gio \
+        --disable-curl \
+        --disable-libssh \
+        --disable-libnfs \
+        --disable-libiscsi \
+        --disable-rbd \
+        --disable-vvfat \
+        --disable-vdi \
+        --disable-vmdk \
+        --disable-qed \
+        --disable-qcow1 \
+        --disable-bochs \
+        --disable-cloop \
+        --disable-dmg \
+        --disable-parallels \
+        --disable-vhdx \
+        --disable-vpc \
+        --disable-tpm \
+        --disable-libusb \
+        --disable-usb-redir \
+        --disable-smartcard \
+        --disable-u2f \
+        --disable-canokey \
+        --disable-guest-agent \
+        --disable-guest-agent-msi \
+        --disable-capstone \
+        --disable-fuse \
+        --disable-fuse-lseek \
+        --disable-multiprocess \
+        --disable-replication \
+        --disable-rdma \
+        --disable-libdw \
+        --disable-gettext \
+        --disable-virtfs \
+        --disable-hv-balloon; \
     fi && \
     make -j${JOBS} && \
     make install
 
-# Copy BIOS/firmware files and verify
-# Also copy source to regular directory for later COPY commands (cache mount not available in later stages)
+# The firmware this VM boots with, and not `pc-bios/*`: that directory is 331 MB, of which
+# 317 MB is edk2 for aarch64, arm, riscv and loongarch, in a build whose target list is
+# x86_64-softmmu — and it was being copied into the image and out again on every build.
+#
+# Four files. pvh.bin is the one that matters: the kernel is an ELF with Xen PVH notes and
+# QEMU enters it through this ROM, with no real mode and no bzImage protocol. No
+# vgabios-stdvga.bin, because the VM starts with -nodefaults and -nographic and no display
+# adapter is built any more (build/qemu/devices.mak); no efi-virtio.rom, because the NIC is
+# started with `romfile=`. A caller that changes either has to add the file back — a device
+# whose option ROM is missing does not slow the VM down, it stops it from starting.
 RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
-    cp -a /var/cache/qemu/qemu-${QEMU_VERSION}/pc-bios/* /opt/qemu/share/qemu/ && \
-    if [ ! -f /opt/qemu/share/qemu/bios-256k.bin ]; then \
-        install -m 0644 /var/cache/qemu/qemu-${QEMU_VERSION}/pc-bios/bios-256k.bin /opt/qemu/share/qemu/bios-256k.bin; \
-    fi && \
-    test -f /opt/qemu/share/qemu/bios-256k.bin && \
-    ls -la /opt/qemu/share/qemu && \
     mkdir -p /build/pc-bios && \
-    cp /var/cache/qemu/qemu-${QEMU_VERSION}/pc-bios/kvmvapic.bin /build/pc-bios/ && \
-    cp /var/cache/qemu/qemu-${QEMU_VERSION}/pc-bios/vgabios-stdvga.bin /build/pc-bios/
+    for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin; do \
+        install -m 0644 "/var/cache/qemu/qemu-${QEMU_VERSION}/pc-bios/$f" "/build/pc-bios/$f"; \
+    done && \
+    mkdir -p /opt/qemu/share/qemu && \
+    cp /build/pc-bios/* /opt/qemu/share/qemu/
+
+# Fail the build here, not in a lane three phases later, if this configuration did not
+# produce the devices and the accelerator this VM needs. The last two lines are the split
+# that matters: virtio-net must be there and the cards whose option ROMs are no longer
+# shipped must not, and a binary that could emulate would hide a host with no /dev/kvm.
+RUN /opt/qemu/bin/qemu-system-x86_64 -device help 2>&1 | grep -q 'virtio-blk-pci' && \
+    /opt/qemu/bin/qemu-system-x86_64 -device help 2>&1 | grep -q 'virtio-net-pci' && \
+    /opt/qemu/bin/qemu-system-x86_64 -device help 2>&1 | grep -q 'vhost-vsock-pci' && \
+    /opt/qemu/bin/qemu-system-x86_64 -device help 2>&1 | grep -q 'virtconsole' && \
+    ! /opt/qemu/bin/qemu-system-x86_64 -device help 2>&1 | grep -qE '^name "(e1000e?|rtl8139|pcnet|vmxnet3|igb|ne2k_pci|tulip)"' && \
+    /opt/qemu/bin/qemu-system-x86_64 -machine help | grep -q '^q35 ' && \
+    ! /opt/qemu/bin/qemu-system-x86_64 -machine help | grep -q '^pc-i440fx' && \
+    ! /opt/qemu/bin/qemu-system-x86_64 -accel help | grep -qx tcg && \
+    /opt/qemu/bin/qemu-system-x86_64 --version
 
 # Verify binary type and show dynamic library dependencies
 RUN file /opt/qemu/bin/qemu-system-x86_64 && \
@@ -166,7 +254,7 @@ RUN --mount=type=cache,sharing=locked,id=qemu-runtime-aptlib,target=/var/lib/apt
         libpixman-1-0 \
         libcap-ng0 \
         libseccomp2 \
-        libaio1 \
+        libaio1t64 \
         liburing2 \
         libpmem1 \
         librdmacm1t64 \
@@ -177,7 +265,7 @@ RUN --mount=type=cache,sharing=locked,id=qemu-runtime-aptlib,target=/var/lib/apt
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64
 
 # Copy BIOS/firmware files needed for boot
-COPY --from=builder /opt/qemu/share/qemu/ /usr/share/spin-stack/qemu/
+COPY --from=builder /build/pc-bios/ /usr/share/spin-stack/qemu/
 
 ENTRYPOINT ["/usr/local/bin/qemu-system-x86_64"]
 
@@ -190,8 +278,4 @@ FROM scratch AS extract
 COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
 
 # Copy BIOS/firmware files needed for boot
-COPY --from=builder /opt/qemu/share/qemu/bios.bin /share/spin-stack/qemu/bios.bin
-COPY --from=builder /opt/qemu/share/qemu/bios-256k.bin /share/spin-stack/qemu/bios-256k.bin
-COPY --from=builder /opt/qemu/share/qemu/pvh.bin /share/spin-stack/qemu/pvh.bin
-COPY --from=builder /build/pc-bios/kvmvapic.bin /share/spin-stack/qemu/kvmvapic.bin
-COPY --from=builder /build/pc-bios/vgabios-stdvga.bin /share/spin-stack/qemu/vgabios-stdvga.bin
+COPY --from=builder /build/pc-bios/ /share/spin-stack/qemu/
