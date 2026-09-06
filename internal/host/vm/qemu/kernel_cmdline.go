@@ -93,24 +93,39 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 	}
 	parts = append(parts, fmt.Sprintf("loglevel=%d", loglevel))
 
-	// Scan PCI bus 0 and stop. Every device this VM is given is placed there by
-	// hand - the fixed slots in qemu_command.go, 0x02 through 0x1e - and nothing
-	// creates a PCIe root port, so there has never been a bus 1 to find. The
-	// kernel does not know that and probes on.
+	// Scan PCI bus 0 and stop. The mechanism is worth writing down because the first
+	// version of this comment guessed at it and was wrong.
 	//
-	// Measured on one machine, full device set, two runs each, kernel-to-init
-	// (VMINITD_READY pid1-entry):
+	// arch/x86/pci/mmconfig-shared.c takes the *last bus of the ECAM window* as the
+	// last bus worth probing:
 	//
-	//	without   87.6 / 85.0 ms      pci_subsys_init 30 / 29 ms
-	//	lastbus=0 51.1 / 51.8 ms      pci_subsys_init gone
+	//	if (pcibios_last_bus < 0)
+	//		list_for_each_entry(cfg, &pci_mmcfg_list, list)
+	//			pcibios_last_bus = cfg->end_bus;
 	//
-	// ~34 ms, and the devices still enumerate: the block device is found in 173 us
-	// and vsock listens as before.
+	// and a q35 advertises `ECAM [mem 0xb0000000-0xbfffffff] for domain 0000
+	// [bus 00-ff]`, so that is 255. pci_subsys_init then calls
+	// pcibios_fixup_peer_bridges(), which walks buses 0..255 and reads the vendor ID
+	// at 32 devfns on each looking for a peer host bridge: 8192 config reads, every
+	// one a VM exit, to discover that there is nothing behind a bus this VM never had.
 	//
-	// **This is a constraint, not just a flag.** A device behind a root port would
-	// be on bus 1 and would simply not exist for the guest - no error, no warning,
-	// an absent disk. The fixed-slot scheme is what makes it safe; whoever changes
-	// that has to change this line with it.
+	// Setting it on the command line wins because the parser runs before MMCONFIG
+	// init, so the `< 0` test above no longer fires. Measured here, full device set,
+	// kernel-to-init (VMINITD_READY pid1-entry): 87.6 / 85.0 ms without, 51.1 / 51.8
+	// with, and pci_subsys_init 30 ms -> 1. `pci=lastbus=255` behaves exactly like no
+	// flag at all, which is the check that this is the mechanism and not a
+	// coincidence.
+	//
+	// **It is a constraint, not just a flag.** A device behind a root port would be on
+	// bus 1 and would simply not exist for the guest - no error, no warning, an absent
+	// disk. Everything here is placed by hand at a fixed slot on bus 0
+	// (qemu_command.go, 0x02 through 0x1e); whoever changes that has to change this.
+	//
+	// Open: the CI runner does not pay this at all (pci_subsys_init under 39 us there,
+	// against 30 ms here) and the flag buys nothing on it. Same kernel, same QEMU, so
+	// something about that host stops the ECAM window from setting last_bus - most
+	// likely pci_mmcfg_reject_broken() rejecting it over the E820 map. Unexplained,
+	// and harmless: where the loop does not run, this changes nothing.
 	parts = append(parts, "pci=lastbus=0")
 
 	// Systemd options
