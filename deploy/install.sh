@@ -537,7 +537,7 @@ CORE_FILES=(
     "/usr/share/spin-stack/bin/qemu-system-x86_64"
     "/usr/share/spin-stack/qemu/bios-256k.bin"
     "/usr/share/spin-stack/qemu/kvmvapic.bin"
-    "/usr/share/spin-stack/qemu/vgabios-stdvga.bin"
+    "/usr/share/spin-stack/qemu/pvh.bin"
     "/usr/share/spin-stack/kernel/spinbox-kernel-x86_64"
     "/usr/share/spin-stack/kernel/spinbox-initrd"
     "/usr/share/spin-stack/config/spinbox/config.json"
