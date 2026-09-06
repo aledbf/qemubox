@@ -61,6 +61,10 @@ func TestBuildKernelCmdline(t *testing.T) {
 				// Enlarged printk ring: everything initcall_debug emits has to
 				// still be there when vminitd reads it after boot.
 				"log_buf_len=4M",
+				// The initcall tracepoints: per-level boundaries, which
+				// initcall_debug does not report.
+				"trace_event=initcall:*",
+				"trace_buf_size=4M",
 				// Userspace profiling marker consumed by vminitd.
 				"spin.profile",
 			},
