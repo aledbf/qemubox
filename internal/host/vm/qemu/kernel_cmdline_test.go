@@ -50,19 +50,21 @@ func TestBuildKernelCmdline(t *testing.T) {
 			contains: []string{
 				"initcall_debug",
 				"printk.time=1",
-				"loglevel=8",
+				// The console stays silent: the profile is read from /dev/kmsg,
+				// and writing it out a second time is what made the console's own
+				// initcall the largest entry in the profile.
+				"loglevel=0",
 				"no_timer_check",
-				// Debug routes the console through virtio-console (hvc0) so the
-				// verbose output does not backpressure on the emulated UART and
-				// skew the per-initcall timings.
-				"console=hvc0",
-				// Enlarged printk ring so early (pre-hvc0) initcalls are not
-				// dropped from the profile by ring-buffer overflow.
+				// And it stays the production console, so the boot being measured
+				// is the boot that runs.
+				"console=ttyS0",
+				// Enlarged printk ring: everything initcall_debug emits has to
+				// still be there when vminitd reads it after boot.
 				"log_buf_len=4M",
 				// Userspace profiling marker consumed by vminitd.
 				"spin.profile",
 			},
-			excludes: []string{"quiet", "loglevel=3", "console=ttyS0"},
+			excludes: []string{"quiet", "loglevel=3", "console=hvc0"},
 		},
 		{
 			name: "with network config",

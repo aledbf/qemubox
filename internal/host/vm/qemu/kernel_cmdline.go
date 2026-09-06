@@ -36,9 +36,9 @@ type KernelCmdlineConfig struct {
 	// The guest parses spin.extras_disk=N to locate the block device.
 	ExtrasDiskIndex *int
 
-	// Debug enables boot profiling: it turns on initcall_debug and forces
-	// verbose kernel output (overriding Quiet/LogLevel) so per-initcall
-	// timings land in the console log. Off by default; opt in for profiling.
+	// Debug enables boot profiling: initcall_debug, a printk ring big enough to
+	// hold the result, and a console that stays silent so measuring costs
+	// nothing. vminitd dumps the ring afterwards. Off by default.
 	Debug bool
 }
 
@@ -57,21 +57,24 @@ func DefaultKernelCmdlineConfig() KernelCmdlineConfig {
 func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 	var parts []string
 
-	// Console. Debug/profiling mode routes the kernel console through
-	// virtio-console (hvc0) instead of the emulated 8250 UART (ttyS0): every
-	// byte written to ttyS0 is a PIO VMEXIT, so the verbose initcall_debug
-	// stream backpressures the guest and inflates the very per-initcall timings
-	// we are measuring (the chattiest initcalls - ACPI, PCI - are penalized
-	// most). virtio-console batches output over a virtqueue, so it does not skew
-	// the profile. ACPI/PCI run as subsys_initcalls, before virtio-console
-	// registers (a device_initcall), so their early messages buffer in the
-	// printk ring and flush once hvc0 comes up - timing stays accurate.
-	// Note: a hang before the device-initcall phase would leave the console log
-	// empty, an acceptable trade-off for a profiling-only mode.
+	// Console. The profiling boot uses the same console as a production boot, and
+	// says nothing on it: the per-initcall lines are read from /dev/kmsg by vminitd
+	// (system.DumpKernelBootProfile), not scraped from the console, so there is no
+	// reason for them to be written twice.
+	//
+	// This used to route the console through virtio-console (hvc0) because the
+	// verbose stream over the emulated 8250 - a PIO VMEXIT per byte - inflated the
+	// timings being measured. It fixed the symptom and moved the cost: a console
+	// registers at the device_initcall phase, and registering it replays the whole
+	// printk ring into it, synchronously, inside that initcall. The profile then
+	// showed 24 ms in virtio_console_init, which was the measurement writing itself
+	// out - the largest single entry in a boot the same run reported as 137 ms,
+	// against the ~90 ms a normal boot takes.
+	//
+	// With loglevel=0 below, nothing reaches the console at all and the question
+	// does not arise; the ring buffer still records everything, which is all the
+	// profile needs.
 	console := cfg.Console
-	if cfg.Debug && console != "" {
-		console = "hvc0"
-	}
 	if console != "" {
 		parts = append(parts, fmt.Sprintf("console=%s", console))
 	}
@@ -80,7 +83,10 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 	// are visible; otherwise honor the configured quiet/loglevel.
 	quiet, loglevel := cfg.Quiet, cfg.LogLevel
 	if cfg.Debug {
-		quiet, loglevel = false, 8
+		// Silent console, full ring buffer. loglevel is the *console* threshold;
+		// every message is still recorded for /dev/kmsg, which is where the
+		// profile is read from.
+		quiet, loglevel = false, 0
 	}
 	if quiet {
 		parts = append(parts, "quiet")
@@ -127,14 +133,13 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 
 	// Boot profiling: print per-initcall timings to the console log.
 	//
-	// log_buf_len enlarges the printk ring buffer for the profiling boot. The
-	// console is routed through virtio-console (hvc0, see above), which only
-	// registers at the device_initcall phase; every message emitted before that
-	// - the verbose ACPI/PCI dumps plus initcall_debug lines for every early
-	// (core/subsys) initcall - accumulates in the ring and is replayed once hvc0
-	// comes up. The default 256 KiB ring (CONFIG_LOG_BUF_SHIFT=18) overflows
-	// under that load and silently drops the earliest entries, so the early
-	// initcalls vanish from the profile. 4 MiB holds the whole pre-hvc0 burst.
+	// log_buf_len enlarges the printk ring buffer for the profiling boot, and it is
+	// the one part of this that is not about the console: vminitd reads the ring
+	// after boot, so everything initcall_debug emits - two lines per initcall, plus
+	// the verbose ACPI/PCI dumps - has to still be in it. The default 256 KiB
+	// (CONFIG_LOG_BUF_SHIFT=18) overflows under that load and silently drops the
+	// earliest entries, which are exactly the early core/subsys initcalls the
+	// profile exists to see. 4 MiB holds the whole boot.
 	if cfg.Debug {
 		parts = append(parts, "initcall_debug", "printk.time=1", "log_buf_len=4M")
 		// Userspace companion to initcall_debug: vminitd emits VMINITD_PROFILE

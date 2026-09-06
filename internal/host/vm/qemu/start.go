@@ -487,9 +487,9 @@ func bootDebugEnabled() bool {
 }
 
 // buildQemuCommandLine constructs the QEMU command line arguments.
-// When debug is set, a virtio-console is added and the kernel console is routed
-// through it (the cmdline already selects console=hvc0) so verbose boot
-// profiling output does not backpressure on the emulated UART.
+// When debug is set, the kernel is asked for initcall_debug and a printk ring big
+// enough to hold the result; the VM itself is the same one a production boot gets,
+// which is the point — a profile of a different machine measures a different boot.
 func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]string, error) {
 	cfg, err := config.Get()
 	if err != nil {
@@ -550,20 +550,11 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 		// RNG device for entropy
 		addVirtioRNG()
 
-	// Boot profiling: add a virtio-console and route the kernel console through
-	// it (cmdline selects console=hvc0). virtio-console batches output over a
-	// virtqueue instead of per-byte UART PIO exits, so the verbose
-	// initcall_debug stream does not backpressure the guest and skew the
-	// per-initcall timings. The chardev reuses the same console FIFO, so the
-	// existing FIFO→console.log reader (setupConsoleFIFO) picks it up unchanged;
-	// the still-present -serial carries nothing once the kernel targets hvc0.
-	if debug {
-		builder.
-			addDevice(fmt.Sprintf("virtio-serial-pci,id=virtio-serial0,%s,addr=0x%x",
-				virtioModern, pciSlotVirtioSerial)).
-			addChardevFile("hvc0", q.consoleFifoPath).
-			addDevice("virtconsole,chardev=hvc0,id=hvc0port")
-	}
+	// No virtio-console for profiling any more: the profile is read from /dev/kmsg
+	// and the console is silent (BuildKernelCmdline), so the device the debug boot
+	// used to add existed only to carry output nobody reads. Removing it also takes
+	// the 24 ms `virtio_console_init` out of the profile — which was the console
+	// registering and replaying the ring, not work a production boot does.
 
 	// Add disks
 	for i, disk := range q.disks {

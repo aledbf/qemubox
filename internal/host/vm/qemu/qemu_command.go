@@ -20,7 +20,8 @@ import (
 const (
 	pciSlotVsock        = 0x02
 	pciSlotRNG          = 0x03
-	pciSlotVirtioSerial = 0x04 // boot-profiling console only
+	// 0x04 is free: it held the boot-profiling virtio-serial until the profile
+	// stopped needing a console at all.
 
 	pciSlotDiskBase = 0x05
 	pciSlotDiskMax  = 0x0f
@@ -201,15 +202,6 @@ func (b *qemuCommandBuilder) setSerial(config string) *qemuCommandBuilder {
 // Example: addDevice("vhost-vsock-pci,guest-cid=3")
 func (b *qemuCommandBuilder) addDevice(device string) *qemuCommandBuilder {
 	b.args = append(b.args, "-device", device)
-	return b
-}
-
-// addChardevFile adds a file-backed character device (-chardev file).
-// The path may be a regular file or a FIFO; QEMU opens it for writing. This is
-// the same backend "-serial file:<path>" uses, so a FIFO with a reader already
-// attached works identically.
-func (b *qemuCommandBuilder) addChardevFile(id, path string) *qemuCommandBuilder {
-	b.args = append(b.args, "-chardev", fmt.Sprintf("file,id=%s,path=%s", id, path))
 	return b
 }
 
