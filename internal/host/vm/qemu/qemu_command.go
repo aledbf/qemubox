@@ -18,8 +18,8 @@ import (
 // the ICH9 LPC/SATA/SMBus function block. 0x01 is left free (q35 convention
 // places VGA there; we run -nodefaults with no display).
 const (
-	pciSlotVsock        = 0x02
-	pciSlotRNG          = 0x03
+	pciSlotVsock = 0x02
+	pciSlotRNG   = 0x03
 	// 0x04 is free: it held the boot-profiling virtio-serial until the profile
 	// stopped needing a console at all.
 
