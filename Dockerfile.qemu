@@ -9,7 +9,7 @@ ARG JOBS=8
 # Bump when the configure flags or build/qemu/devices.mak change: the build directory lives
 # in a cache mount and configure only runs when it holds no config.status, so without this
 # a flag change would silently reuse the previous configuration.
-ARG QEMU_CONFIG_REV=1
+ARG QEMU_CONFIG_REV=2
 ARG DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -166,7 +166,6 @@ RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/ca
         --disable-rbd \
         --disable-vvfat \
         --disable-vdi \
-        --disable-vmdk \
         --disable-qed \
         --disable-qcow1 \
         --disable-bochs \
