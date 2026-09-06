@@ -76,8 +76,14 @@ else
   echo "  warn: QEMU firmware files not found - skipping"
 fi
 
+# The firmware a q35 started with -nodefaults -nographic and a PVH kernel needs, which is
+# what Dockerfile.qemu ships. vgabios-stdvga.bin is not on the list any more because no
+# display adapter is built or created; pvh.bin is, and it was missing from this check while
+# being the one file a direct kernel boot cannot start without — QEMU has no entry point
+# into a PVH ELF kernel otherwise, and it fails as a rom-open error that reads like a
+# backend bug.
 missing_qemu_firmware=0
-for firmware in bios-256k.bin kvmvapic.bin vgabios-stdvga.bin; do
+for firmware in bios.bin bios-256k.bin pvh.bin kvmvapic.bin; do
   if [ ! -f "${RELEASE_DIR}/usr/share/spin-stack/qemu/${firmware}" ]; then
     echo "👹 Error: missing QEMU firmware file ${firmware} in release"
     missing_qemu_firmware=1
