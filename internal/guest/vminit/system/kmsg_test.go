@@ -103,7 +103,15 @@ func TestKmsgGapsReportSilenceThatBelongsToNoInitcall(t *testing.T) {
 		t.Errorf("largest gap = %d us, want 20000", gaps[0].usec)
 	}
 	if gaps[0].after != "Memory: 498M/512M available" {
-		t.Errorf("gap named %q, want the last thing the kernel said before it", gaps[0].after)
+		t.Errorf("gap opens after %q, want the last thing the kernel said before it", gaps[0].after)
+	}
+	// The far side is the half that names a silence: "after late_trace_init" says
+	// only that the initcalls are over.
+	if gaps[0].before != "smp: Bringing up secondary CPUs ..." {
+		t.Errorf("gap closes before %q, want the line that ended the silence", gaps[0].before)
+	}
+	if gaps[0].atUS != 1_000 {
+		t.Errorf("gap at %d us, want the timestamp it opens at", gaps[0].atUS)
 	}
 	for _, g := range gaps {
 		if g.usec == 18_000 {
