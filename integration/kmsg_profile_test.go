@@ -102,6 +102,29 @@ func TestKernelBootProfileComplete(t *testing.T) {
 	for _, e := range entries {
 		t.Logf("KMSG_PROFILE   %6d us  %s", e.usec, e.name)
 	}
+
+	// The initcalls are the half of boot that names itself; sum_us above is
+	// smaller than last_ts_us, and the difference is what these two report. The
+	// gaps are stretches in which the kernel said nothing and no initcall was
+	// running; the levels are how long each initcall level took end to end, from
+	// the tracepoints. Logged verbatim: they are what the run is for, and a
+	// regexp here would only be a second place to keep their format.
+	for _, line := range strings.Split(readFileOrEmpty(consolePath), "\n") {
+		if strings.Contains(line, "KMSG_GAP") || strings.Contains(line, "KMSG_LEVEL") {
+			t.Log(strings.TrimSpace(line[strings.Index(line, "KMSG_"):]))
+		}
+	}
+}
+
+// readFileOrEmpty reads path, returning "" on any error: the caller is logging
+// extra detail about a run that has already succeeded, and a missing file there
+// is not a test failure.
+func readFileOrEmpty(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 type kmsgHeader struct {

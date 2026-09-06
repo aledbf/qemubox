@@ -142,6 +142,14 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 	// profile exists to see. 4 MiB holds the whole boot.
 	if cfg.Debug {
 		parts = append(parts, "initcall_debug", "printk.time=1", "log_buf_len=4M")
+		// The initcall tracepoints, which are the only source for where a level
+		// *boundary* falls: initcall_debug times each call and says nothing about
+		// the time between them, and that time is the larger half of boot. The
+		// events have been compiled in all along (CONFIG_EVENT_TRACING=y), so this
+		// costs a cmdline token and a ring; vminitd reads /sys/kernel/tracing/trace
+		// after boot, the same way it reads /dev/kmsg, and for the same reason -
+		// nothing is printed while the thing being measured is running.
+		parts = append(parts, "trace_event=initcall:*", "trace_buf_size=4M")
 		// Userspace companion to initcall_debug: vminitd emits VMINITD_PROFILE
 		// lines for its boot phases when this marker is present (see
 		// system.BootProfiler). Kept as a separate token so the kernel ignores

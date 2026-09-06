@@ -5,6 +5,7 @@ package system
 import (
 	"context"
 	"errors"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -28,6 +29,32 @@ type kmsgInitcall struct {
 	usec int
 }
 
+// kmsgRecord is one kernel log line with the timestamp it carries.
+type kmsgRecord struct {
+	tsUS int64
+	msg  string
+}
+
+// kmsgGap is a stretch of boot in which the kernel said nothing, named by the
+// last thing it said before going quiet.
+type kmsgGap struct {
+	usec  int64
+	after string
+}
+
+// kmsgGapsN bounds how many silent stretches we print, and kmsgGapFloorUS the
+// size below which one is not worth a line.
+const (
+	kmsgGapsN      = 10
+	kmsgGapFloorUS = 500
+)
+
+// kmsgCallingRE matches the line initcall_debug prints *before* running an
+// initcall. A gap that opens after one of those is the initcall itself, which
+// is already reported by name and duration, so it is not a gap worth listing:
+// what these are for is the time that belongs to no initcall at all.
+var kmsgCallingRE = regexp.MustCompile(`^calling  \S+ @ `)
+
 // DumpKernelBootProfile reads the kernel ring buffer (/dev/kmsg) and emits a
 // compact KMSG_PROFILE summary of the boot's initcalls.
 //
@@ -49,7 +76,7 @@ func DumpKernelBootProfile(ctx context.Context) {
 		return
 	}
 
-	calls, lastTS, err := readKmsgInitcalls()
+	calls, records, lastTS, err := readKmsgInitcalls()
 	if err != nil {
 		log.G(ctx).WithError(err).Warn("kmsg boot profile: read failed")
 		return
@@ -72,25 +99,61 @@ func DumpKernelBootProfile(ctx context.Context) {
 		}
 		log.G(ctx).Infof("KMSG_PROFILE %8d us  %s", c.usec, c.name)
 	}
+
+	// The initcalls are the half of boot that names itself. The other half - the
+	// difference between last_ts_us and sum_us, which is the larger of the two -
+	// is time no initcall accounts for, and the only thing the ring buffer can
+	// say about it is where the kernel fell silent.
+	for _, g := range kmsgGaps(records) {
+		log.G(ctx).Infof("KMSG_GAP %8d us  after: %s", g.usec, g.after)
+	}
+
+	// And, when the initcall tracepoints were enabled at boot, how long each
+	// initcall *level* took end to end. Subtracting the initcalls of a level from
+	// its wall time splits the silence into "before the level's first initcall"
+	// and "between them".
+	for _, l := range initcallLevels() {
+		log.G(ctx).Infof("KMSG_LEVEL %8d us  %s", l.usec, l.name)
+	}
+}
+
+// kmsgGaps returns the largest stretches between consecutive kernel records,
+// skipping the ones that open right after initcall_debug announced a call: that
+// time is the initcall, and it is already reported by name.
+func kmsgGaps(records []kmsgRecord) []kmsgGap {
+	var gaps []kmsgGap
+	for i := 1; i < len(records); i++ {
+		d := records[i].tsUS - records[i-1].tsUS
+		if d < kmsgGapFloorUS || kmsgCallingRE.MatchString(records[i-1].msg) {
+			continue
+		}
+		gaps = append(gaps, kmsgGap{usec: d, after: records[i-1].msg})
+	}
+	sort.Slice(gaps, func(i, j int) bool { return gaps[i].usec > gaps[j].usec })
+	if len(gaps) > kmsgGapsN {
+		gaps = gaps[:kmsgGapsN]
+	}
+	return gaps
 }
 
 // readKmsgInitcalls reads all currently-buffered /dev/kmsg records and returns
 // the initcall timings plus the highest record timestamp seen (microseconds
 // since boot).
-func readKmsgInitcalls() ([]kmsgInitcall, int64, error) {
+func readKmsgInitcalls() ([]kmsgInitcall, []kmsgRecord, int64, error) {
 	// O_NONBLOCK so Read returns EAGAIN once we have drained the buffer instead
 	// of blocking for future messages. Raw unix.Read (not os.File) avoids the Go
 	// runtime poller, which would otherwise wait on EAGAIN.
 	fd, err := unix.Open("/dev/kmsg", unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	defer func() { _ = unix.Close(fd) }()
 
 	var (
-		calls  []kmsgInitcall
-		lastTS int64
-		buf    = make([]byte, 8192) // the kernel returns one record per read
+		calls   []kmsgInitcall
+		records []kmsgRecord
+		lastTS  int64
+		buf     = make([]byte, 8192) // the kernel returns one record per read
 	)
 
 	for {
@@ -99,7 +162,7 @@ func readKmsgInitcalls() ([]kmsgInitcall, int64, error) {
 			switch {
 			case errors.Is(err, unix.EAGAIN), errors.Is(err, unix.EWOULDBLOCK):
 				// Drained: caught up to the end of the buffer.
-				return calls, lastTS, nil
+				return calls, records, lastTS, nil
 			case errors.Is(err, unix.EINTR):
 				continue
 			case errors.Is(err, unix.EPIPE):
@@ -107,11 +170,11 @@ func readKmsgInitcalls() ([]kmsgInitcall, int64, error) {
 				// on, so keep reading.
 				continue
 			default:
-				return calls, lastTS, err
+				return calls, records, lastTS, err
 			}
 		}
 		if n == 0 {
-			return calls, lastTS, nil
+			return calls, records, lastTS, nil
 		}
 
 		ts, msg, ok := parseKmsgRecord(string(buf[:n]))
@@ -121,6 +184,7 @@ func readKmsgInitcalls() ([]kmsgInitcall, int64, error) {
 		if ts > lastTS {
 			lastTS = ts
 		}
+		records = append(records, kmsgRecord{tsUS: ts, msg: msg})
 		if name, usec, ok := extractInitcall(msg); ok {
 			calls = append(calls, kmsgInitcall{name: name, usec: usec})
 		}
@@ -164,4 +228,80 @@ func extractInitcall(msg string) (name string, usec int, ok bool) {
 		return "", 0, false
 	}
 	return m[1], usec, true
+}
+
+// tracefsTrace is where the initcall tracepoints land when the kernel was
+// booted with `trace_event=initcall:*` (see BuildKernelCmdline's debug branch).
+const (
+	tracefsDir   = "/sys/kernel/tracing"
+	tracefsTrace = tracefsDir + "/trace"
+)
+
+// traceLevelRE matches an initcall_level event in the ftrace text format:
+//
+//	<idle>-1  [000] .....  0.089303: initcall_level: level=early
+var traceLevelRE = regexp.MustCompile(`\s(\d+)\.(\d{6}): initcall_level: level=(\S+)`)
+
+// kmsgLevel is one initcall level and the wall time it took end to end.
+type kmsgLevel struct {
+	name string
+	usec int64
+}
+
+// initcallLevels reports how long each initcall level took, read from the
+// ftrace buffer.
+//
+// This is the one number /dev/kmsg cannot give: the kernel prints per-initcall
+// durations but says nothing about the boundaries between levels, so the time a
+// level spends outside its own initcalls - the larger half of boot - has no name
+// in the log. The initcall tracepoints have been compiled in all along
+// (CONFIG_EVENT_TRACING=y); all that was missing was asking for them at boot.
+//
+// Empty when the tracepoints were not enabled or tracefs is not there, which is
+// every non-profiling boot: this must add nothing to a VM that did not ask for
+// it.
+func initcallLevels() []kmsgLevel {
+	data, err := os.ReadFile(tracefsTrace)
+	if err != nil {
+		// tracefs is not mounted on a normal boot; mount it once, here, rather
+		// than making every VM carry a mount it will not read.
+		if err := unix.Mount("tracefs", tracefsDir, "tracefs", 0, ""); err != nil {
+			return nil
+		}
+		if data, err = os.ReadFile(tracefsTrace); err != nil {
+			return nil
+		}
+	}
+
+	type mark struct {
+		name string
+		usec int64
+	}
+	var marks []mark
+	for _, line := range strings.Split(string(data), "\n") {
+		m := traceLevelRE.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		sec, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		frac, err := strconv.ParseInt(m[2], 10, 64)
+		if err != nil {
+			continue
+		}
+		marks = append(marks, mark{name: m[3], usec: sec*1_000_000 + frac})
+	}
+	if len(marks) < 2 {
+		return nil
+	}
+
+	// A level runs until the next one starts. The last one has no successor in
+	// the trace, so it is left out rather than guessed at.
+	levels := make([]kmsgLevel, 0, len(marks)-1)
+	for i := 0; i+1 < len(marks); i++ {
+		levels = append(levels, kmsgLevel{name: marks[i].name, usec: marks[i+1].usec - marks[i].usec})
+	}
+	return levels
 }
