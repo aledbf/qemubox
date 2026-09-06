@@ -1,6 +1,6 @@
 module github.com/spin-stack/spinbox
 
-go 1.26
+go 1.24.3
 
 require (
 	github.com/containerd/cgroups/v3 v3.1.2

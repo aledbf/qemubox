@@ -55,6 +55,10 @@ CONFIG_CAN_CTUCANFD=n
 CONFIG_CAN_CTUCANFD_PCI=n
 
 # --- storage: one disk ------------------------------------------------------------------
+# (The *formats* that disk carries are a configure flag and not a device, and they are not
+# one either: every container layer the erofs snapshotter hands the VM is a .vmdk, so
+# --disable-vmdk turns every VM into `Unknown driver 'vmdk'` at start-up. Read as `format=`
+# in internal/shim, not assumed: vmdk, raw and qcow2 are opened here.)
 # virtio-blk, which is what every mount becomes (internal/shim/platform/mounts). The HBAs
 # below emulate 1990s hardware. AHCI is not in the list because Q35 selects AHCI_ICH9 —
 # the ICH9 southbridge has SATA whether or not anything is plugged into it.
