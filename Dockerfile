@@ -84,6 +84,10 @@ RUN <<EOT
     grep -q "CONFIG_MEMORY_HOTREMOVE=y" .config || (echo "ERROR: CONFIG_MEMORY_HOTREMOVE not enabled (unplug cannot work)!" ; exit 1)
     grep -q "CONFIG_ACPI_HOTPLUG_MEMORY=y" .config || (echo "ERROR: CONFIG_ACPI_HOTPLUG_MEMORY not enabled (a pc-dimm is never noticed)!" ; exit 1)
 
+    # The initrd is lz4 (see the initrd stage). Without this the kernel does not
+    # recognise the archive at all and the VM does not boot.
+    grep -q "CONFIG_RD_LZ4=y" .config || (echo "ERROR: CONFIG_RD_LZ4 not enabled (the lz4 initramfs cannot be unpacked)!" ; exit 1)
+
     # Boot performance: the RAID6 PQ benchmark probes all SIMD implementations at
     # boot to pick the fastest, adding noticeable latency. It must stay disabled.
     # (RAID6_PQ itself is not selected today, so the symbol is normally absent.)
@@ -194,7 +198,7 @@ WORKDIR /usr/src/init
 ARG TARGETPLATFORM
 RUN --mount=type=cache,sharing=locked,id=initrd-aptlib,target=/var/lib/apt \
     --mount=type=cache,sharing=locked,id=initrd-aptcache,target=/var/cache/apt \
-        apt-get update && apt-get install -y --no-install-recommends cpio kmod
+        apt-get update && apt-get install -y --no-install-recommends cpio kmod lz4
 
 RUN mkdir -p sbin bin proc sys tmp run lib/modules
 
@@ -214,7 +218,30 @@ RUN <<EOT
     fi
 
     mkdir /build
-    (find . -print0 | cpio --null -H newc -o ) | gzip -9 > /build/spinbox-initrd
+    # lz4 and not gzip, and the reason is in the boot profile: unpacking this
+    # archive is the single largest item in kernel boot. KMSG_GAP measured 41.6 ms
+    # of silence ending at "Freeing initrd memory: 6584K" - 34% of the kernel's
+    # 122 ms, more than acpi_init and every other initcall put together, and it
+    # was invisible until the gap report because no initcall owns it.
+    #
+    # gzip -9 optimises the artefact and charges every boot for it: gzip is among
+    # the slowest formats to *decompress*, and -9 changes only how hard the build
+    # tries. Measured on one machine, same kernel and same QEMU, from "Unpacking
+    # initramfs..." to "Freeing initrd memory":
+    #
+    #     gzip -9    58.7 ms   6,738,472 bytes
+    #     lz4 -l -9   9.5 ms   7,834,657 bytes
+    #
+    # 49 ms of every VM's boot for 1.05 MB (+16%) of a file that is read from local
+    # disk once per VM. Uncompressed would be the floor, and is one word from here,
+    # but it triples what QEMU copies into guest RAM at launch - which moves the
+    # cost to qemu_launch_us rather than removing it, and has to be measured on
+    # both sides before it is worth taking.
+    #
+    # -l is not optional: the kernel's initramfs decompressor expects lz4's legacy
+    # frame format, and a default-framed archive is not recognised at all - which
+    # presents as a VM that does not boot, not as a warning.
+    (find . -print0 | cpio --null -H newc -o ) | lz4 -l -9 > /build/spinbox-initrd
 EOT
 
 # ============================================================================
