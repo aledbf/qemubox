@@ -74,6 +74,16 @@ RUN <<EOT
     grep -q "CONFIG_VIRTIO_PCI=y" .config || (echo "ERROR: CONFIG_VIRTIO_PCI not enabled!" ; exit 1)
     grep -q "CONFIG_NET_CLS_ACT=y" .config || (echo "ERROR: CONFIG_NET_CLS_ACT not enabled!" ; exit 1)
 
+    # Memory hotplug, checked here for the same reason the others are: olddefconfig
+    # resolves what it cannot satisfy, and a dropped symbol is silent. Without these
+    # three the host can add a DIMM, QEMU will accept it, query-memory-devices will
+    # show it, and /sys/devices/system/memory/memory<N>/online — the file
+    # internal/guest/services/system.go writes to — will not exist, so the guest never
+    # sees the memory. That was the state until this config enabled them.
+    grep -q "CONFIG_MEMORY_HOTPLUG=y" .config || (echo "ERROR: CONFIG_MEMORY_HOTPLUG not enabled (memory hotplug cannot reach the guest)!" ; exit 1)
+    grep -q "CONFIG_MEMORY_HOTREMOVE=y" .config || (echo "ERROR: CONFIG_MEMORY_HOTREMOVE not enabled (unplug cannot work)!" ; exit 1)
+    grep -q "CONFIG_ACPI_HOTPLUG_MEMORY=y" .config || (echo "ERROR: CONFIG_ACPI_HOTPLUG_MEMORY not enabled (a pc-dimm is never noticed)!" ; exit 1)
+
     # Boot performance: the RAID6 PQ benchmark probes all SIMD implementations at
     # boot to pick the fastest, adding noticeable latency. It must stay disabled.
     # (RAID6_PQ itself is not selected today, so the symbol is normally absent.)
