@@ -364,35 +364,13 @@ tasks:
         }
         trap 'cleanup_ctr' EXIT
 
-        ${SUDO} "${CTR_BIN}" \
-          --address "${SOCKET}" \
-          --namespace "${CTR_NAMESPACE}" \
-          containers create --privileged \
-          --snapshotter "{{.INTEGRATION_SNAPSHOTTER}}" \
-          --runtime "{{.INTEGRATION_RUNTIME}}" \
-          "{{.INTEGRATION_IMAGE}}" \
-          "${CTR_ID}" \
-          /sbin/init
-
-        ${SUDO} "${CTR_BIN}" \
-          --address "${SOCKET}" \
-          --namespace "${CTR_NAMESPACE}" \
-          tasks start --detach \
-          "${CTR_ID}"
-
-        STATUS=""
-        for _ in $(seq 1 30); do
-          STATUS=$(${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks list 2>/dev/null | awk -v id="${CTR_ID}" 'NR>1 && $1==id {print $3}')
-          if [ "${STATUS}" = "RUNNING" ]; then
-            break
-          fi
-          sleep 1
-        done
-
-        if [ "${STATUS}" != "RUNNING" ]; then
-          echo "👹 Error: task did not reach RUNNING state (status=${STATUS:-unknown})"
-          ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks info "${CTR_ID}" || true
-          ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks list || true
+        # Everything the VM said about why it did not come up. Defined once and called
+        # from both failure paths: a `tasks start` that fails takes the script out through
+        # `set -e`, so until now the only failure that printed anything was the *later*
+        # one — a task that started and never reached RUNNING. The QMP handshake failing
+        # is the earlier one, and it left the lane saying "failed to create shim task" and
+        # nothing else.
+        dump_vm_logs() {
           echo "---- spinbox logs ----"
           ${SUDO} journalctl -u spinbox --no-pager -n 200 || true
           echo "---- spinbox qemu.log (latest) ----"
@@ -409,6 +387,42 @@ tasks:
           else
             echo "No console.log found under /var/log/spin-stack/"
           fi
+        }
+
+        ${SUDO} "${CTR_BIN}" \
+          --address "${SOCKET}" \
+          --namespace "${CTR_NAMESPACE}" \
+          containers create --privileged \
+          --snapshotter "{{.INTEGRATION_SNAPSHOTTER}}" \
+          --runtime "{{.INTEGRATION_RUNTIME}}" \
+          "{{.INTEGRATION_IMAGE}}" \
+          "${CTR_ID}" \
+          /sbin/init
+
+        if ! ${SUDO} "${CTR_BIN}" \
+          --address "${SOCKET}" \
+          --namespace "${CTR_NAMESPACE}" \
+          tasks start --detach \
+          "${CTR_ID}"; then
+          echo "👹 Error: tasks start failed"
+          dump_vm_logs
+          exit 1
+        fi
+
+        STATUS=""
+        for _ in $(seq 1 30); do
+          STATUS=$(${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks list 2>/dev/null | awk -v id="${CTR_ID}" 'NR>1 && $1==id {print $3}')
+          if [ "${STATUS}" = "RUNNING" ]; then
+            break
+          fi
+          sleep 1
+        done
+
+        if [ "${STATUS}" != "RUNNING" ]; then
+          echo "👹 Error: task did not reach RUNNING state (status=${STATUS:-unknown})"
+          ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks info "${CTR_ID}" || true
+          ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks list || true
+          dump_vm_logs
           exit 1
         fi
 
