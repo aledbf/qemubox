@@ -7,6 +7,27 @@
 #
 set -eu -o pipefail
 
+# protoc itself, pinned: the version is recorded in every generated file, so a
+# different one rewrites the header of each .pb.go and buries the real change.
+# The release archive also carries the well-known types (descriptor.proto and
+# friends) that protoc looks for in /usr/local/include; without them protobuild
+# fails with 'File "google/protobuf/descriptor.proto" not found'.
+PROTOC_VERSION=3.20.1
+
+if [ "$(protoc --version 2>/dev/null | awk '{print $2}')" != "${PROTOC_VERSION}" ] ||
+   [ ! -f /usr/local/include/google/protobuf/descriptor.proto ]; then
+  SUDO=""
+  [ -w /usr/local/bin ] || SUDO="sudo"
+
+  TMP="$(mktemp -d)"
+  trap 'rm -rf "${TMP}"' EXIT
+  curl -fsSL -o "${TMP}/protoc.zip" \
+    "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+  unzip -oq "${TMP}/protoc.zip" -d "${TMP}/protoc"
+  ${SUDO} install -m 0755 "${TMP}/protoc/bin/protoc" /usr/local/bin/protoc
+  ${SUDO} cp -r "${TMP}/protoc/include/google" /usr/local/include/
+fi
+
 # install `protobuild` and other commands
 go install github.com/containerd/protobuild@v0.3.0
 go install github.com/containerd/protobuild/cmd/go-fix-acronym@v0.3.0
