@@ -80,20 +80,21 @@ func (q *qmpClient) SetCommandTimeout(timeout time.Duration) {
 //
 // The returned client owns a background goroutine (eventLoop) that must be
 // cleaned up by calling Close().
-func newQMPClient(ctx context.Context, socketPath string) (*qmpClient, error) {
+func newQMPClient(ctx context.Context, socketPath string) (*qmpClient, time.Time, error) {
 	// Wait for socket to appear
 	if err := waitForSocket(ctx, socketPath, vmStartTimeout); err != nil {
-		return nil, fmt.Errorf("QMP socket not available: %w", err)
+		return nil, time.Now(), fmt.Errorf("QMP socket not available: %w", err)
 	}
+	tSocket := time.Now()
 
 	monitor, err := qmpapi.NewSocketMonitor("unix", socketPath, qmpDefaultTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to QMP socket: %w", err)
+		return nil, tSocket, fmt.Errorf("failed to connect to QMP socket: %w", err)
 	}
 
 	if err := monitor.Connect(); err != nil {
 		_ = monitor.Disconnect()
-		return nil, fmt.Errorf("failed to negotiate QMP capabilities: %w", err)
+		return nil, tSocket, fmt.Errorf("failed to negotiate QMP capabilities: %w", err)
 	}
 
 	log.G(ctx).WithFields(log.Fields{
@@ -106,7 +107,7 @@ func newQMPClient(ctx context.Context, socketPath string) (*qmpClient, error) {
 	events, err := monitor.Events(eventCtx)
 	if err != nil && !errors.Is(err, qmpapi.ErrEventsNotSupported) {
 		_ = monitor.Disconnect()
-		return nil, fmt.Errorf("failed to subscribe to QMP events: %w", err)
+		return nil, tSocket, fmt.Errorf("failed to subscribe to QMP events: %w", err)
 	}
 
 	qmp := &qmpClient{
@@ -119,7 +120,7 @@ func newQMPClient(ctx context.Context, socketPath string) (*qmpClient, error) {
 	// Start event loop in background AFTER connecting
 	go qmp.eventLoop(eventCtx)
 
-	return qmp, nil
+	return qmp, tSocket, nil
 }
 
 // execute sends a QMP command and waits for response.
