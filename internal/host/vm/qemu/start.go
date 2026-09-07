@@ -480,6 +480,8 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 	// Boot profiling is enabled per-VM (via the debug-boot annotation) or
 	// host-wide (SPINBOX_DEBUG_BOOT).
 	cfg.Debug = startOpts.DebugBoot || bootDebugEnabled()
+	// The root port only exists on a VM that deals in templates, and the guest
+	// has to be told to look past bus 0 to find it.
 	return BuildKernelCmdline(cfg)
 }
 
@@ -551,8 +553,6 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 		// QEMU writes VM console output here; background goroutine reads and streams to log file
 		// See setupConsoleFIFO() for the producer-consumer pipeline details
 		setSerial(fmt.Sprintf("file:%s", q.consoleFifoPath)).
-		// Vsock for guest communication (using vhost-vsock kernel module)
-		addVsockDevice(int(q.guestCID)).
 		// QMP for VM control
 		setQMPUnixSocket(q.qmpSocketPath).
 		// RNG device for entropy
@@ -564,12 +564,21 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 	// the 24 ms `virtio_console_init` out of the profile — which was the console
 	// registering and replaying the ring, not work a production boot does.
 
-	// Snapshot plumbing. Both are no-ops on a VM that neither builds a template
-	// nor restores from one, which is every VM today.
+	// Vsock for guest communication (using vhost-vsock kernel module). It sits on
+	// the root complex, cold-plugged, on a restored VM exactly as on a booted one:
+	// a restore is handed its own CID on the command line and the guest picks it
+	// up by itself. See below.
+	builder.addVsockDevice(int(q.guestCID))
+
+	// Snapshot plumbing. All of it is skipped on a VM that neither builds a
+	// template nor restores from one, which is every VM today.
 	if q.memoryFilePath != "" {
 		// A restoring VM maps the template's RAM privately (copy-on-write); a
 		// template writes into it and must share.
-		builder.setMemoryBackendFile(q.memoryFilePath, memoryMB, q.restoreStatePath == "")
+		builder.setMemoryBackendFile(q.memoryFilePath, memoryMB, q.restoreStatePath == "").
+			// Every restore inherits the template's random pool along with its
+			// memory; this is how the guest learns it is a new VM and reseeds.
+			addVMGenID()
 	}
 	if q.restoreStatePath != "" {
 		builder.setIncomingDefer()

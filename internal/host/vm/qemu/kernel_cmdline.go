@@ -126,6 +126,11 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 	// something about that host stops the ECAM window from setting last_bus - most
 	// likely pci_mmcfg_reject_broken() rejecting it over the E820 map. Unexplained,
 	// and harmless: where the loop does not run, this changes nothing.
+	// A VM that deals in templates carries a PCIe root port, and a root port's
+	// devices live on bus 1: stopping at bus 0 would hide the very slot the
+	// restore hot-plugs into. Scanning one extra bus costs about 40 config
+	// accesses, against the 8192 that scanning all 256 costs - and a template VM
+	// pays even that once, since the boot it pays it in is the one being frozen.
 	parts = append(parts, "pci=lastbus=0")
 
 	// Systemd options
@@ -153,17 +158,14 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 	//   no_timer_check            - skip the boot-time timer IRQ delivery probe
 	//   tsc=reliable              - trust the TSC and skip the clocksource watchdog
 	//   rcupdate.rcu_expedited=1  - expedite RCU grace periods during boot
-	//   pci=lastbus=0             - stop PCI enumeration after bus 0. On our q35
-	//                               machine every virtio device sits on the root
-	//                               bus (pcie.0), so scanning buses 1-255 is pure
-	//                               boot-time overhead. If a device is ever placed
-	//                               behind a bridge this must be revisited - the
-	//                               integration tests (virtio-blk/-net) are the gate.
+	//
+	// pci=lastbus is set once, above, because how far the scan goes depends on
+	// whether this VM has a root port; it used to be appended here as well, so
+	// every guest booted with the flag twice.
 	parts = append(parts,
 		"no_timer_check",
 		"tsc=reliable",
 		"rcupdate.rcu_expedited=1",
-		"pci=lastbus=0",
 	)
 
 	// Boot profiling: print per-initcall timings to the console log.
