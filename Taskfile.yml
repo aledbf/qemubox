@@ -451,7 +451,14 @@ tasks:
           SPINBOX_SNAPSHOTTER="{{.INTEGRATION_SNAPSHOTTER}}" \
           SPINBOX_FIFO_DIR="/run/spin-stack/containerd/fifo" \
           SPINBOX_TEST_ID="${TEST_ID}" \
-          go test -v -tags=integration -count=1 ./integration -test.v || {
+          # ./internal/host/vm/qemu carries TestTemplateRestore, the only coverage
+          # of the snapshot path: nothing in ./integration restores, because the
+          # shim still always boots.
+          #
+          # -p 1 because both packages start VMs and each allocates vsock CIDs from
+          # its own process, so run in parallel they pick the same CID and the
+          # second one fails to bind with EADDRINUSE.
+          go test -v -tags=integration -count=1 -p 1 ./integration ./internal/host/vm/qemu -test.v || {
             echo "---- spinbox logs for ${TEST_ID} ----"
             ${SUDO} journalctl -u spinbox --no-pager -n 200 | grep "${TEST_ID}" || true
             echo "---- spinbox logs ----"
