@@ -247,17 +247,21 @@ func (q *Instance) monitorProcess(ctx context.Context) {
 	}()
 }
 
-func (q *Instance) connectQMP(ctx context.Context) error {
-	qmpClient, err := newQMPClient(ctx, q.qmpSocketPath)
+// connectQMP waits for QEMU to expose its monitor socket and completes the QMP
+// capabilities handshake. It reports when the socket appeared, which splits the
+// launch cost in two: how long QEMU takes to reach chardev init, and how long it
+// then takes to reach a main loop that answers. See BOOT_TIMELINE.
+func (q *Instance) connectQMP(ctx context.Context) (time.Time, error) {
+	qmpClient, tSocket, err := newQMPClient(ctx, q.qmpSocketPath)
 	if err != nil {
 		// Check if QEMU process is still running
 		if q.cmd.Process != nil {
 			_ = q.cmd.Process.Kill()
 		}
-		return fmt.Errorf("failed to connect to QMP: %w", err)
+		return tSocket, fmt.Errorf("failed to connect to QMP: %w", err)
 	}
 	q.qmpClient = qmpClient
-	return nil
+	return tSocket, nil
 }
 
 func (q *Instance) connectVsockClient(ctx context.Context) error {
@@ -417,7 +421,8 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	}
 
 	// Connect to QMP for control
-	if err := q.connectQMP(ctx); err != nil {
+	tSocket, err := q.connectQMP(ctx)
+	if err != nil {
 		return err
 	}
 	tQMP := time.Now()
@@ -456,12 +461,16 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 
 	// BOOT_TIMELINE isolates VM cold-start on a normal boot, the half that the
 	// initcall/userspace profiles do not cover:
-	//   qemu_launch = exec + machine/firmware init until QMP responds
+	//   qemu_launch = exec + machine/firmware init until QMP responds, split into
+	//                 qmp_socket (exec until the monitor socket exists) and
+	//                 qmp_handshake (the capabilities negotiation on it)
 	//   guest_boot  = kernel boot + vminitd init until its vsock RPC accepts
 	// Container create/start happen afterwards over RPC and are logged separately.
 	// Always on (one line per VM start) so plain boots emit it - no debug mode.
-	log.G(ctx).Infof("BOOT_TIMELINE qemu_launch_us=%d guest_boot_us=%d total_us=%d",
+	log.G(ctx).Infof("BOOT_TIMELINE qemu_launch_us=%d qmp_socket_us=%d qmp_handshake_us=%d guest_boot_us=%d total_us=%d",
 		tQMP.Sub(tExec).Microseconds(),
+		tSocket.Sub(tExec).Microseconds(),
+		tQMP.Sub(tSocket).Microseconds(),
 		tVsock.Sub(tQMP).Microseconds(),
 		tVsock.Sub(tExec).Microseconds())
 
