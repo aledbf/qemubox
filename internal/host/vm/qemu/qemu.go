@@ -53,7 +53,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -138,7 +137,10 @@ type Instance struct {
 	// mu protects fields accessed concurrently:
 	// - disks, nets: Written during configuration, read during Start()
 	// - cmd, qmpClient, client, vsockConn: Written during Start(), read during operation
-	mu sync.Mutex
+	// See vmMutex: under the race detector it panics instead of deadlocking when
+	// a method that takes it is called from one that already holds it, which
+	// Start and Shutdown do for their whole bodies.
+	mu vmMutex
 
 	// vmState tracks lifecycle (see vmState constants).
 	// Accessed atomically, no mutex needed.

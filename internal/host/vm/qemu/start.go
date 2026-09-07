@@ -236,16 +236,29 @@ func (q *Instance) monitorProcess(ctx context.Context) {
 			// Channel may be closed if Shutdown() already completed
 		}
 
+		// Both fields are written by Start, which is still running when this
+		// goroutine is created - startQemuProcess launches it, and runCancel is
+		// set twenty-seven lines later. Reading them without the lock is a race,
+		// and the losing side is this one: a QEMU that exits early leaves the
+		// background monitors running because runCancel still looked nil.
+		//
+		// They are copied out under the lock and called outside it, because
+		// onProcessExit is the shim's and calling into it while holding this
+		// instance's lock invites the deadlock vmMutex exists to report.
+		q.mu.Lock()
+		onExit, cancel := q.onProcessExit, q.runCancel
+		q.mu.Unlock()
+
 		// Invoke process exit callback if registered.
 		// This provides a reliable signal for the shim to detect VM death
 		// even when vsock connections don't receive EOF cleanly.
-		if q.onProcessExit != nil {
-			q.onProcessExit()
+		if onExit != nil {
+			onExit()
 		}
 
 		// Cancel background monitors if still running
-		if q.runCancel != nil {
-			q.runCancel()
+		if cancel != nil {
+			cancel()
 		}
 
 		// Don't close clients/TAP here - Shutdown() owns cleanup
