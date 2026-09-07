@@ -5,7 +5,7 @@
 # - containerd shim for spinbox runtime
 
 # Base image versions
-ARG GO_VERSION=1.26.2
+ARG GO_VERSION=1.27.1
 ARG BASE_DEBIAN_DISTRO="bookworm"
 ARG GOLANG_IMAGE="golang:${GO_VERSION}-${BASE_DEBIAN_DISTRO}"
 
@@ -175,7 +175,7 @@ FROM base AS crun-build
 ARG TARGETARCH
 WORKDIR /usr/src/crun
 
-ARG CRUN_VERSION="1.26"
+ARG CRUN_VERSION="1.29.1"
 # Download crun binary (cached across builds using cache mount)
 RUN --mount=type=cache,sharing=locked,id=crun-download,target=/var/cache/crun \
     mkdir -p /build && \
