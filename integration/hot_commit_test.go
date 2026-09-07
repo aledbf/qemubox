@@ -37,12 +37,7 @@ func waitForOutput(t *testing.T, path, want string, timeout time.Duration) {
 		if err == nil && strings.Contains(string(data), want) {
 			return
 		}
-		// 1 ms, not 100: this poll is inside the interval TestBootLatency
-		// reports, and a 100 ms sleep quantised that metric to its own step -
-		// it read 105-108 ms across changes that moved the boot by 10 ms,
-		// because it was measuring the first poll after the boot, not the boot.
-		// Same file, same loop, at 1 ms: 9-17 ms.
-		time.Sleep(time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %q in %s", want, path)
 }

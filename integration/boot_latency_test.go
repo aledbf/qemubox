@@ -3,13 +3,14 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -101,6 +102,65 @@ func TestBootLatency(t *testing.T) {
 	}
 }
 
+// tokenWaiter is an io.Writer that stamps the moment a token first appears in
+// the stream containerd copies out of the container.
+//
+// The alternative is what this test used to do: write the stream to a file and
+// poll it. A poll cannot report a time it did not sample at, so its interval
+// becomes the metric's resolution - at 100 ms it reported 105-108 ms for
+// everything - and shortening it does not fix the shape of the problem, it only
+// moves it: a 1 ms poll still quantises at 1 ms, against a run-to-run noise
+// floor of about 0.6 ms, and it wakes ~200 times inside the interval it is
+// measuring. On this host, CPU contention during boot is not hypothetical - it
+// is 29 of the 35 ms of qemu_launch - so an instrument that competes with what
+// it measures is not a neutral choice.
+//
+// Writing is done by one containerd goroutine, but Seen may be read from
+// another, so the mutex is not decoration.
+type tokenWaiter struct {
+	want []byte
+
+	mu   sync.Mutex
+	buf  []byte
+	at   time.Time
+	seen chan struct{}
+}
+
+func newTokenWaiter(want string) *tokenWaiter {
+	return &tokenWaiter{want: []byte(want), seen: make(chan struct{})}
+}
+
+func (w *tokenWaiter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.at.IsZero() {
+		// Keep only enough of the tail for a token split across two writes.
+		w.buf = append(w.buf, p...)
+		if bytes.Contains(w.buf, w.want) {
+			w.at = time.Now()
+			close(w.seen)
+		} else if n := len(w.want); len(w.buf) > n {
+			w.buf = w.buf[len(w.buf)-n:]
+		}
+	}
+	return len(p), nil
+}
+
+// wait blocks until the token appears, and returns when it did.
+func (w *tokenWaiter) wait(t *testing.T, timeout time.Duration) time.Time {
+	t.Helper()
+	select {
+	case <-w.seen:
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.at
+	case <-time.After(timeout):
+		t.Fatalf("timed out after %s waiting for %q on the container's stdout", timeout, w.want)
+		return time.Time{}
+	}
+}
+
 // summarize sorts samples in place and returns min, median and max.
 func summarize(samples []time.Duration) (minD, medD, maxD time.Duration) {
 	sort.Slice(samples, func(a, b int) bool { return samples[a] < samples[b] })
@@ -120,12 +180,7 @@ func measureBootOnce(t *testing.T, ctx context.Context, client *containerd.Clien
 	t.Helper()
 	name := fmt.Sprintf("qbx-boot-%d-%s", i, strings.ReplaceAll(time.Now().Format("150405.000"), ".", ""))
 
-	stdoutPath := filepath.Join(t.TempDir(), "stdout.log")
-	stdoutFile, err := os.Create(stdoutPath)
-	if err != nil {
-		t.Fatalf("create stdout file: %v", err)
-	}
-	defer stdoutFile.Close()
+	waiter := newTokenWaiter("BOOTED")
 
 	container, err := client.NewContainer(ctx, name,
 		containerd.WithSnapshotter(cfg.Snapshotter),
@@ -150,7 +205,7 @@ func measureBootOnce(t *testing.T, ctx context.Context, client *containerd.Clien
 	// Before NewTask, not after: the shim runs Create from here, and Create is
 	// where QEMU is launched and the guest boots.
 	tCreate := time.Now()
-	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStreams(nil, stdoutFile, nil)))
+	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStreams(nil, waiter, nil)))
 	if err != nil {
 		t.Fatalf("create task for %s: %v", name, err)
 	}
@@ -170,7 +225,6 @@ func measureBootOnce(t *testing.T, ctx context.Context, client *containerd.Clien
 	if err := task.Start(ctx); err != nil {
 		t.Fatalf("start task %s: %v", name, err)
 	}
-	waitForOutput(t, stdoutPath, "BOOTED", 60*time.Second)
-	done := time.Now()
+	done := waiter.wait(t, 60*time.Second)
 	return bootSample{createToOutput: done.Sub(tCreate), execToOutput: done.Sub(start)}
 }
