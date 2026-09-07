@@ -267,6 +267,19 @@ func (b *qemuCommandBuilder) addVsockDevice(guestCID int) *qemuCommandBuilder {
 		guestCID, virtioModern, pciSlotVsock))
 }
 
+// addVMGenID adds the VM Generation ID device, whose value QEMU randomises for
+// every VM it starts.
+//
+// It exists for restores. Every VM restored from a template starts with the
+// template's memory, which includes the state of the guest's random pool: two
+// containers restored from the same template would otherwise produce the same
+// "random" bytes until something reseeded them. The guest watches this device
+// (CONFIG_VMGENID) and reseeds when the value it sees differs from the one in
+// the memory it woke up with, which is exactly the case here.
+func (b *qemuCommandBuilder) addVMGenID() *qemuCommandBuilder {
+	return b.addDevice("vmgenid,guid=auto")
+}
+
 // addVirtioRNG adds a virtio-rng device for entropy.
 func (b *qemuCommandBuilder) addVirtioRNG() *qemuCommandBuilder {
 	return b.addDevice(fmt.Sprintf("virtio-rng-pci,%s,addr=0x%x", virtioModern, pciSlotRNG))

@@ -143,8 +143,15 @@ tasks:
       - |
         set -eou pipefail
         echo "🐳 Building initrd..."
-        # Use git commit SHA to bust vminitd cache and prevent stale builds
+        # Bust the vminitd cache on what the build actually contains, not on the
+        # commit it sits at. Keying on `git rev-parse HEAD` alone silently
+        # returned the previous initrd whenever vminitd had uncommitted changes -
+        # the build reported success, installed a stale binary, and the change
+        # under test was simply absent.
         COMMIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+        WORKTREE_SHA=$(git diff HEAD -- cmd internal go.mod go.sum 2>/dev/null | sha256sum | cut -c1-12)
+        UNTRACKED_SHA=$(git ls-files --others --exclude-standard -- cmd internal 2>/dev/null | sha256sum | cut -c1-12)
+        COMMIT_SHA="${COMMIT_SHA}-${WORKTREE_SHA}-${UNTRACKED_SHA}"
         {{.BUILDX}} build \
           --file Dockerfile \
           --target initrd \

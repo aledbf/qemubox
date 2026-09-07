@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,29 +101,62 @@ func TestTemplateRestore(t *testing.T) {
 		t.Fatalf("RestoreFrom: %v", err)
 	}
 
-	// Restore onto the CID the template was built with. The guest's virtio-vsock
-	// driver reads its CID from the device at probe time and keeps it, so a
-	// restored guest still believes it is the template's CID however the new
-	// device is configured - packets addressed to a fresh CID reach the VM and
-	// are then dropped by the guest as not its own. Whether that is really the
-	// constraint is what this line tests: with the CIDs equal the restore should
-	// serve RPC, and with them different it does not.
-	if v := os.Getenv("SNAPSHOT_RESTORE_CID"); v == "template" {
-		restInst.guestCID = tmplInst.guestCID
-	}
+	// No CID borrowing, no device swap: the restored VM is given a CID of its own
+	// on its command line and comes up on it.
+	//
+	// What makes that work is that guest-cid is not in the migration stream -
+	// vhost-vsock's vmstate is VMSTATE_VIRTIO_DEVICE and nothing else - so the
+	// destination keeps the CID it was started with, in its vhost backend and in
+	// its virtio config space. The guest then re-reads it: QEMU's post_load arms a
+	// timer that pushes VIRTIO_VSOCK_EVENT_TRANSPORT_RESET onto the event
+	// virtqueue, and the guest's handler calls virtio_vsock_update_guest_cid and
+	// resets the sockets that belonged to the template.
+	//
+	// The alternative was to restore on the template's CID and hot-swap the device
+	// for one carrying the VM's own. That works, and it costs 6.2 s: QEMU's
+	// device_del on a root port is a PCIe attention-button press and Linux blinks
+	// the power indicator for five seconds before acting. Against a 25 ms restore
+	// and a 117 ms boot, it made the snapshot fifty times slower than booting.
+	t.Logf("SNAPSHOT restoring straight onto its own cid=%d (template was cid=%d)",
+		restInst.guestCID, tmplInst.guestCID)
 
-	t.Logf("SNAPSHOT restoring with cid=%d (template had cid=%d)", restInst.guestCID, tmplInst.guestCID)
 	restoreStart := time.Now()
 	err = restInst.Start(ctx, vm.WithNetworkNamespace(hostNetns))
 	restoreTook := time.Since(restoreStart)
 	if err != nil {
+		t.Logf("--- qemu.log ---\n%s", tailFile(restInst.qemuLogPath, 40))
 		t.Fatalf("SNAPSHOT restore reached %d ms and then failed: %v", restoreTook.Milliseconds(), err)
 	}
 
-	// Start only returns once the guest accepted the host's vsock connection, so
-	// reaching here means the restored guest is answering on the NEW CID.
-	t.Logf("SNAPSHOT restored and serving in %d ms (boot was %d ms)",
-		restoreTook.Milliseconds(), bootTook.Milliseconds())
+	// Start only returns once the guest accepted the host's vsock connection on
+	// the new CID, so reaching here is the whole claim: one template, many VMs,
+	// no hot-plug.
+	t.Logf("SNAPSHOT restored and serving on cid=%d in %d ms (boot was %d ms)",
+		restInst.guestCID, restoreTook.Milliseconds(), bootTook.Milliseconds())
+
+	// QEMU drops the reset event silently if the guest left no buffer on the event
+	// queue, and the guest would then keep the template's CID. Nothing above would
+	// fail if it had happened to be the same CID, so the log is checked too.
+	if logged := tailFile(restInst.qemuLogPath, 200); strings.Contains(logged, "missed transport reset") {
+		t.Errorf("guest never received the transport reset event:\n%s", logged)
+	}
+
+	if restoreTook >= bootTook {
+		t.Errorf("restoring (%s) was not faster than booting (%s)", restoreTook, bootTook)
+	}
+}
+
+// tailFile returns the last n lines of a file, for logging why a VM failed.
+func tailFile(path string, n int) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("(cannot read %s: %v)", path, err)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // sizeOf reports a file's size for the log line, or why it is not there.
