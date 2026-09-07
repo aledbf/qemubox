@@ -622,7 +622,6 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 		addGlobal("ICH9-LPC.disable_s4=1").
 		setKernel(q.kernelPath).
 		setInitrd(q.initrdPath).
-		setKernelArgs(cmdlineArgs).
 		setNoGraphic().
 		// Serial console → FIFO pipe (producer side)
 		// QEMU writes VM console output here; background goroutine reads and streams to log file
@@ -644,6 +643,22 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 	// a restore is handed its own CID on the command line and the guest picks it
 	// up by itself. See below.
 	builder.addVsockDevice(int(q.guestCID))
+
+	// A restored VM is given no kernel command line.
+	//
+	// It would be inert twice over. The VM never executes the kernel - its memory
+	// arrives from the template already booted - so nothing parses what is in
+	// -append; and the guest's own /proc/cmdline comes from that restored memory,
+	// which is the template's command line, not this one. Passing a container's
+	// address and disk layout here would write them into a process command line
+	// that nothing reads and `ps` shows to everyone.
+	//
+	// A VM that boots still takes its identity from here; that is what
+	// system.FromCmdline reads, and booting is the fallback whenever restoring is
+	// not possible.
+	if q.restoreStatePath == "" {
+		builder.setKernelArgs(cmdlineArgs)
+	}
 
 	// Snapshot plumbing. All of it is skipped on a VM that neither builds a
 	// template nor restores from one, which is every VM today.
