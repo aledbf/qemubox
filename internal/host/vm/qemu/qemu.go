@@ -170,6 +170,11 @@ type Instance struct {
 	// restores from one. See snapshot.go.
 	memoryFilePath   string // guest RAM lives here, so a snapshot can skip it
 	restoreStatePath string // restore from this template instead of booting
+	// paused says the vCPUs are stopped, and with them any hope of the guest
+	// answering an RPC. Guarded by mu; read it directly from anything that
+	// already holds mu (Start and Shutdown hold it for their whole bodies) and
+	// use setPaused from anything that does not.
+	paused bool
 
 	consoleFifo *os.File // FIFO reader handle (closed on shutdown to cancel console goroutine)
 

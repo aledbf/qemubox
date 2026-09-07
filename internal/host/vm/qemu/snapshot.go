@@ -159,6 +159,7 @@ func (q *Instance) SaveTemplate(ctx context.Context, statePath string) error {
 	if err := c.Stop(ctx); err != nil {
 		return fmt.Errorf("pausing VM before snapshot: %w", err)
 	}
+	q.setPaused(true)
 	if err := c.migrateToFile(ctx, statePath); err != nil {
 		return err
 	}
@@ -242,4 +243,14 @@ func (q *Instance) loadTemplate(ctx context.Context) error {
 		"loaded_us": loaded.Microseconds(),
 	}).Info("qemu: restored from template")
 	return nil
+}
+
+// setPaused records that the VM's vCPUs have been stopped or restarted.
+//
+// It takes q.mu, so it must not be called from anything that already holds it -
+// Start and Shutdown both do, for their whole bodies.
+func (q *Instance) setPaused(paused bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.paused = paused
 }

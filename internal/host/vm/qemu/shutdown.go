@@ -73,6 +73,24 @@ func (q *Instance) prepareGuestShutdown(ctx context.Context, logger *log.Entry) 
 		return
 	}
 
+	// A paused VM cannot answer. Its vCPUs are stopped, so the RPC never reaches
+	// a guest that could reply, and the only outcome is waiting out
+	// shutdownPrepareGuestTimeout - five seconds spent on a question that could
+	// not be answered. A template VM is paused from the moment its state is
+	// saved, and that wait was the whole of what building one cost beyond
+	// booting the guest, which takes 74 ms.
+	//
+	// There is nothing to prepare either way: the pause is what quiesced it.
+	//
+	// q.paused is read directly: Shutdown holds q.mu across this call, and an
+	// accessor that takes the same mutex would deadlock against its caller. That
+	// is not hypothetical - it is how this was written first, and the VM sat
+	// there with its QEMU process alive and nothing to wake it.
+	if q.paused {
+		logger.Debug("qemu: VM is paused, nothing to prepare for shutdown")
+		return
+	}
+
 	logger.Info("qemu: requesting guest shutdown preparation")
 	prepareCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownPrepareGuestTimeout)
 	defer cancel()

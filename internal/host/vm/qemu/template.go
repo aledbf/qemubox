@@ -174,6 +174,10 @@ func HostCPUModel() (string, error) {
 // machine fingerprint.
 type TemplateStore struct {
 	dir string
+
+	// cache memoises the content hashes the fingerprint is built from, which
+	// cost 29 ms to compute and would otherwise be paid on every container.
+	cache *fingerprintCache
 }
 
 // NewTemplateStore returns a store rooted at dir, which is created if it does
@@ -185,7 +189,7 @@ func NewTemplateStore(dir string) (*TemplateStore, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("creating template store %s: %w", dir, err)
 	}
-	return &TemplateStore{dir: dir}, nil
+	return &TemplateStore{dir: dir, cache: newFingerprintCache(dir)}, nil
 }
 
 // Template is a template that exists: the two files a VM restores from.
@@ -202,7 +206,7 @@ type Template struct {
 // Save - but a host that ran out of disk mid-build should boot rather than
 // restore from half a machine.
 func (s *TemplateStore) Lookup(id MachineIdentity) (Template, error) {
-	fp, err := id.Fingerprint()
+	fp, err := s.cache.fingerprint(id)
 	if err != nil {
 		return Template{}, err
 	}
@@ -235,7 +239,7 @@ func (s *TemplateStore) at(fp string) Template {
 // template would not fail cleanly - it would resume a guest whose memory is
 // part of one machine and part of nothing.
 func (s *TemplateStore) Stage(id MachineIdentity) (Template, error) {
-	fp, err := id.Fingerprint()
+	fp, err := s.cache.fingerprint(id)
 	if err != nil {
 		return Template{}, err
 	}
@@ -310,24 +314,54 @@ func (s *TemplateStore) Remove(fp string) error {
 
 // MachineIdentity describes the machine this instance would present to a guest,
 // which is what decides whether it may restore from a given template.
+func (q *Instance) MachineIdentity() (MachineIdentity, error) {
+	return machineIdentity(q.binaryPath, q.kernelPath, q.initrdPath, q.resourceCfg)
+}
+
+// MachineIdentityFor returns the identity of the machine this host would build
+// for a container of this size, without creating one.
+//
+// The lookup that decides whether a VM restores happens before there is an
+// instance to ask, and building a throwaway one to ask it would allocate a vsock
+// CID and a log directory for a question.
+func MachineIdentityFor(resourceCfg *vm.VMResourceConfig) (MachineIdentity, error) {
+	qemuPath, err := findQemu()
+	if err != nil {
+		return MachineIdentity{}, err
+	}
+	kernelPath, err := findKernel()
+	if err != nil {
+		return MachineIdentity{}, err
+	}
+	initrdPath, err := findInitrd()
+	if err != nil {
+		return MachineIdentity{}, err
+	}
+	return machineIdentity(qemuPath, kernelPath, initrdPath, resourceCfg)
+}
+
+// machineIdentity is the one place an identity is assembled.
 //
 // The four QEMU arguments come from machineShape, the same function the command
 // line is built from, so the identity cannot describe a machine other than the
-// one QEMU is given.
-func (q *Instance) MachineIdentity() (MachineIdentity, error) {
+// one QEMU is given. The resource config goes through validateResourceConfig
+// first for the same reason: an instance is created from the defaulted values,
+// so an identity taken from the raw ones would hash a machine nobody builds -
+// and the template a VM built would never be the template it later looked up.
+func machineIdentity(qemuPath, kernelPath, initrdPath string, resourceCfg *vm.VMResourceConfig) (MachineIdentity, error) {
 	hostCPU, err := HostCPUModel()
 	if err != nil {
 		return MachineIdentity{}, err
 	}
 
 	// Always file-backed: a template and every VM restored from one have their
-	// memory in a file, whatever this particular instance was configured with.
-	machine, cpu, smp, memory := machineShape(q.resourceCfg, true)
+	// memory in a file, whatever the instance asking was configured with.
+	machine, cpu, smp, memory := machineShape(validateResourceConfig(resourceCfg), true)
 
 	return MachineIdentity{
-		QEMU:    q.binaryPath,
-		Kernel:  q.kernelPath,
-		Initrd:  q.initrdPath,
+		QEMU:    qemuPath,
+		Kernel:  kernelPath,
+		Initrd:  initrdPath,
 		Machine: machine,
 		CPU:     cpu,
 		SMP:     smp,
@@ -383,4 +417,13 @@ func nonEmpty(values ...string) []string {
 		}
 	}
 	return kept
+}
+
+// buildsTemplate reports whether this VM is the one a template is made from: it
+// writes guest memory into a template's RAM file and loads no state of its own.
+//
+// Derived rather than flagged, because it is exactly what those two fields mean
+// together and a third field could disagree with them.
+func (q *Instance) buildsTemplate() bool {
+	return q.memoryFilePath != "" && q.restoreStatePath == ""
 }
