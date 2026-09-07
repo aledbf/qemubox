@@ -37,6 +37,8 @@ type vminitdPhase struct {
 // extras, cgroup, network, service setup), turning the userspace half of boot
 // into a CI artifact alongside the kernel initcall profile.
 func TestUserspaceBootProfile(t *testing.T) {
+	requireQuietHost(t)
+
 	cfg := loadTestConfig()
 
 	client := setupContainerdClient(t, cfg)
