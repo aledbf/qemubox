@@ -31,6 +31,35 @@ import (
 // possible - no template yet, a machine that does not match one, a backend that
 // cannot restore. A container that starts slowly is better than one that does
 // not start.
+//
+// What it costs, and what does not fix it
+//
+// A restored VM maps the template's memory MAP_PRIVATE, so the mapping is
+// populated lazily - that is why restoring is fast - and the deferred work lands
+// on whatever touches those pages first, which is the container starting.
+// Measured on this host, QEMU's minor faults across task.Start:
+//
+//	booted     9-10 ms       5 faults
+//	restored  27-32 ms    4008 faults
+//
+// 4008 faults at about 4.5 us each is 18 ms, which is the whole difference. Each
+// is taken by the guest, so each is a vmexit, a page allocation, a 4 KB copy and
+// a nested page table update.
+//
+// Bigger pages do not help, and this was measured rather than assumed. A tmpfs
+// mounted huge=always does give the template 2 MB pages - the mount option
+// overrides the host's shmem_enabled, so it needs no host tuning, which was the
+// attraction - and it changes nothing: 3966 faults against 4008, inside the
+// noise, with the interval unmoved. A write to a huge page in a private mapping
+// splits the PMD and copies 4 KB at a time regardless of how the page was
+// allocated. Do not spend another afternoon on it.
+//
+// The cost is still worth paying: create_to_output is 209 ms booting against 154
+// restoring, and that number already contains these 18 ms. What would actually
+// remove them is populating the mapping in bigger units than a fault - a
+// userfaultfd handler serving the guest's misses with UFFDIO_COPY over large
+// ranges, which is how Firecracker and Cloud Hypervisor do it - and that is a
+// project rather than a flag.
 
 // templatesDirName is where templates live under the configured state directory.
 const templatesDirName = "templates"
