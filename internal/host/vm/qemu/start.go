@@ -35,7 +35,9 @@ func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
 		_ = os.Remove(q.consoleFifoPath)
 		return fmt.Errorf("failed to create console log file: %w", err)
 	}
+	q.mu.Lock()
 	q.consoleFile = consoleFile
+	q.mu.Unlock()
 
 	// Start background goroutine to stream FIFO → log file
 	// This prevents QEMU from blocking on slow disk I/O
@@ -58,8 +60,12 @@ func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
 			_ = fifo.Close()
 		}()
 
-		// Store FIFO handle so Shutdown() can close it to cancel this goroutine
+		// Store FIFO handle so Shutdown() can close it to cancel this goroutine.
+		// Under the lock: this goroutine outlives Start, and Shutdown reads the
+		// same field to close it.
+		q.mu.Lock()
 		q.consoleFifo = fifo
+		q.mu.Unlock()
 
 		// Continuously stream: FIFO (fast, kernel-buffered) → log file (persistent, may be slow)
 		// This decouples QEMU's write speed from disk I/O performance
@@ -147,19 +153,30 @@ func (q *Instance) openTapFiles(ctx context.Context, netns string) error {
 		tapFile, err := openTAPInNetNS(ctx, nic.TapName, netns)
 		if err != nil {
 			// Clean up any already-opened FDs on failure
-			q.closeTAPFiles()
+			q.mu.Lock()
+			q.closeTAPFilesLocked()
+			q.mu.Unlock()
 			return fmt.Errorf("failed to open tap %s in netns: %w", nic.TapName, err)
 		}
 		// Store the file descriptor
+		q.mu.Lock()
 		nic.TapFile = tapFile
+		q.mu.Unlock()
 	}
+	q.mu.Lock()
 	q.tapNetns = netns
+	q.mu.Unlock()
 	return nil
 }
 
-// closeTAPFiles closes all TAP file descriptors and resets the netns tracking.
-// This centralizes TAP FD cleanup logic used in multiple error paths.
-func (q *Instance) closeTAPFiles() {
+// closeTAPFilesLocked closes all TAP file descriptors and resets the netns
+// tracking. This centralizes TAP FD cleanup logic used in multiple error paths.
+//
+// The caller must hold q.mu. Every caller is a cleanup path that is already
+// mutating fields under it, which is why this does not take it: taking it here
+// would deadlock against them, loudly under the race detector and silently
+// otherwise. See vmMutex.
+func (q *Instance) closeTAPFilesLocked() {
 	for _, nic := range q.nets {
 		if nic.TapFile != nil {
 			_ = nic.TapFile.Close()
@@ -183,13 +200,13 @@ func (q *Instance) startQemuProcess(ctx context.Context, qemuArgs []string) erro
 	// returns and the TTRPC layer cancels the context, Go's exec.CommandContext
 	// would SIGKILL the QEMU process.
 	//nolint:gosec // QEMU path and args are controlled by VM configuration.
-	q.cmd = exec.CommandContext(context.WithoutCancel(ctx), q.binaryPath, qemuArgs...)
-	q.cmd.Stdout = qemuLogFile
-	q.cmd.Stderr = qemuLogFile
-	q.cmd.SysProcAttr = &syscall.SysProcAttr{
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), q.binaryPath, qemuArgs...)
+	cmd.Stdout = qemuLogFile
+	cmd.Stderr = qemuLogFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
 	}
-	q.waitCh = make(chan error, 1)
+	waitCh := make(chan error, 1)
 
 	// Pass TAP file descriptors to QEMU via ExtraFiles
 	// These will be available to QEMU as FD 3, 4, 5, ... (0,1,2 are stdin/stdout/stderr)
@@ -200,11 +217,11 @@ func (q *Instance) startQemuProcess(ctx context.Context, qemuArgs []string) erro
 		}
 	}
 	if len(extraFiles) > 0 {
-		q.cmd.ExtraFiles = extraFiles
+		cmd.ExtraFiles = extraFiles
 		log.G(ctx).WithField("fd_count", len(extraFiles)).Debug("passing TAP file descriptors to QEMU")
 	}
 
-	if err := q.cmd.Start(); err != nil {
+	if err := cmd.Start(); err != nil {
 		// Clean up TAP FDs on start failure
 		for _, f := range extraFiles {
 			_ = f.Close()
@@ -212,18 +229,28 @@ func (q *Instance) startQemuProcess(ctx context.Context, qemuArgs []string) erro
 		return fmt.Errorf("failed to start qemu: %w", err)
 	}
 
+	// Published once the process exists, so a reader never sees a cmd that has
+	// not been started.
+	q.mu.Lock()
+	q.cmd = cmd
+	q.waitCh = waitCh
+	q.mu.Unlock()
+
 	log.G(ctx).Info("qemu: process started, waiting for QMP socket...")
 
-	q.monitorProcess(ctx)
+	// cmd and waitCh are handed over rather than read back out of the instance:
+	// the goroutine outlives Start and would otherwise race with Shutdown's
+	// teardown of the same fields.
+	q.monitorProcess(ctx, cmd, waitCh)
 	return nil
 }
 
-func (q *Instance) monitorProcess(ctx context.Context) {
+func (q *Instance) monitorProcess(ctx context.Context, cmd *exec.Cmd, waitCh chan error) {
 	// Monitor QEMU process in background
 	// Process monitor: detects when QEMU exits (poweroff, reboot, crash)
 	// This goroutine only signals exit - cleanup is handled by Shutdown()
 	go func() {
-		exitErr := q.cmd.Wait()
+		exitErr := cmd.Wait()
 
 		if exitErr != nil {
 			log.G(ctx).WithError(exitErr).Debug("qemu: process exited")
@@ -231,7 +258,7 @@ func (q *Instance) monitorProcess(ctx context.Context) {
 
 		// Signal Shutdown() that process exited
 		select {
-		case q.waitCh <- exitErr:
+		case waitCh <- exitErr:
 		default:
 			// Channel may be closed if Shutdown() already completed
 		}
@@ -279,7 +306,9 @@ func (q *Instance) connectQMP(ctx context.Context) (time.Time, error) {
 		}
 		return tSocket, fmt.Errorf("failed to connect to QMP: %w", err)
 	}
+	q.mu.Lock()
 	q.qmpClient = qmpClient
+	q.mu.Unlock()
 	return tSocket, nil
 }
 
@@ -307,8 +336,10 @@ func (q *Instance) connectVsockClient(ctx context.Context) error {
 		return err
 	}
 
+	q.mu.Lock()
 	q.vsockConn = conn
 	q.client = ttrpc.NewClient(conn)
+	q.mu.Unlock()
 	return nil
 }
 
@@ -317,6 +348,12 @@ func (q *Instance) rollbackStart(success *bool) {
 		return
 	}
 	q.setState(vmStateNew)
+
+	// Under the lock throughout: this undoes what Start published, and Start no
+	// longer holds the lock for the caller. Everything here closes a handle or
+	// kills a process that is already dying, so nothing waits.
+	q.mu.Lock()
+	defer q.mu.Unlock()
 
 	// Close vsock connection FIRST (before killing QEMU)
 	if q.vsockConn != nil {
@@ -346,7 +383,7 @@ func (q *Instance) rollbackStart(success *bool) {
 	}
 
 	// Close any opened TAP FDs on failure
-	q.closeTAPFiles()
+	q.closeTAPFilesLocked()
 
 	// Release CID lease on failure (allows CID reuse)
 	if q.cidLease != nil {
@@ -384,8 +421,23 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	success := false
 	defer q.rollbackStart(&success)
 
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	// No lock is held across this function, and that is deliberate.
+	//
+	// It used to hold q.mu for its whole body - a hundred and twelve lines, over
+	// launching QEMU, loading a migration stream and connecting vsock with
+	// retries, seconds of I/O. That is what the root CLAUDE.md says not to do,
+	// and it made every helper called from here unable to take the lock, which
+	// deadlocked this package twice.
+	//
+	// It was never needed for the thing a lock is for. Start is entered through a
+	// compare-and-swap from vmStateNew to vmStateStarting, so only one goroutine
+	// is ever inside it; there is no second writer to exclude. What the lock
+	// protects is readers, and every reader that matters - Client, DialClient,
+	// CPUHotplugger, StartStream - refuses to do anything unless the state is
+	// vmStateRunning, which this function only sets on its last line.
+	//
+	// So the fields are published under the lock where they are written, by the
+	// helper that writes them, and nothing holds it while waiting for a VM.
 
 	// Remove old socket files if they exist
 	if err := os.Remove(q.qmpSocketPath); err != nil && !os.IsNotExist(err) {
@@ -402,7 +454,9 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	}
 
 	// Store network configuration
+	q.mu.Lock()
 	q.networkCfg = startOpts.NetworkConfig
+	q.mu.Unlock()
 
 	// Open TAP file descriptors in the network namespace.
 	// QEMU (running in init netns for vhost-vsock) will use these FDs to attach to
@@ -460,9 +514,10 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// We use context.Background() here because the background monitors need to outlive
 	// the Start() call and continue running until explicit Shutdown().
 	runCtx, runCancel := context.WithCancel(context.WithoutCancel(ctx))
-	// Note: q.mu is already held, so we can set these fields directly
+	q.mu.Lock()
 	q.runCtx = runCtx
 	q.runCancel = runCancel
+	q.mu.Unlock()
 
 	// Connect to vsock RPC server
 	if err := q.connectVsockClient(ctx); err != nil {
