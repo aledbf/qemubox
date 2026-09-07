@@ -22,13 +22,20 @@ import (
 
 // bootTimelineRE matches the shim's BOOT_TIMELINE line, e.g.:
 //
-//	BOOT_TIMELINE qemu_launch_us=8123 guest_boot_us=146210 total_us=154333
-var bootTimelineRE = regexp.MustCompile(`BOOT_TIMELINE qemu_launch_us=(\d+) guest_boot_us=(\d+) total_us=(\d+)`)
+//	BOOT_TIMELINE qemu_launch_us=8123 qmp_socket_us=6945 qmp_handshake_us=13943 guest_boot_us=146210 total_us=154333
+//
+// It captures the whole run of key=value pairs rather than naming them in
+// order. The previous regex spelled the three fields out positionally and broke
+// the moment two were added between them - reporting "no BOOT_TIMELINE line in
+// the journal" about a journal full of them.
+var bootTimelineRE = regexp.MustCompile(`BOOT_TIMELINE ((?:[a-z_]+=\d+ ?)+)`)
 
 type bootTimeline struct {
-	qemuLaunchUS int
-	guestBootUS  int
-	totalUS      int
+	qemuLaunchUS   int
+	qmpSocketUS    int
+	qmpHandshakeUS int
+	guestBootUS    int
+	totalUS        int
 }
 
 // TestBootTimeline boots one VM on the normal (non-debug) path and reports the
@@ -104,9 +111,10 @@ func TestBootTimeline(t *testing.T) {
 	waitForOutput(t, stdoutPath, "BOOTED", 60*time.Second)
 
 	tl := readBootTimeline(t, since)
-	t.Logf("BOOT_TIMELINE qemu_launch_us=%d guest_boot_us=%d total_us=%d (%.1f ms total: %.1f ms qemu + %.1f ms guest)",
-		tl.qemuLaunchUS, tl.guestBootUS, tl.totalUS,
-		float64(tl.totalUS)/1000, float64(tl.qemuLaunchUS)/1000, float64(tl.guestBootUS)/1000)
+	t.Logf("BOOT_TIMELINE %.1f ms total: %.1f ms qemu launch (%.1f ms to the monitor socket, %.1f ms to a QMP that answers) + %.1f ms guest boot",
+		float64(tl.totalUS)/1000, float64(tl.qemuLaunchUS)/1000,
+		float64(tl.qmpSocketUS)/1000, float64(tl.qmpHandshakeUS)/1000,
+		float64(tl.guestBootUS)/1000)
 }
 
 // readBootTimeline reads the shim journal since the given time and returns the
@@ -150,11 +158,27 @@ func parseLastBootTimeline(text string) (bootTimeline, bool) {
 	if len(matches) == 0 {
 		return bootTimeline{}, false
 	}
-	m := matches[len(matches)-1]
+
+	fields := map[string]int{}
+	for _, pair := range strings.Fields(matches[len(matches)-1][1]) {
+		k, v, ok := strings.Cut(pair, "=")
+		if !ok {
+			continue
+		}
+		fields[k] = mustAtoi(v)
+	}
+
+	// Only the outer two are required. The breakdown between them is there to be
+	// read, and a shim that stops emitting part of it should not fail this test.
+	if _, ok := fields["total_us"]; !ok {
+		return bootTimeline{}, false
+	}
 	return bootTimeline{
-		qemuLaunchUS: mustAtoi(m[1]),
-		guestBootUS:  mustAtoi(m[2]),
-		totalUS:      mustAtoi(m[3]),
+		qemuLaunchUS:   fields["qemu_launch_us"],
+		qmpSocketUS:    fields["qmp_socket_us"],
+		qmpHandshakeUS: fields["qmp_handshake_us"],
+		guestBootUS:    fields["guest_boot_us"],
+		totalUS:        fields["total_us"],
 	}, true
 }
 
