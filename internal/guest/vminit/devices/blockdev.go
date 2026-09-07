@@ -6,6 +6,7 @@ package devices
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -22,6 +23,11 @@ const (
 
 	// inotifyPollInterval is how often to check context while waiting for inotify events.
 	inotifyPollInterval = 100 // milliseconds
+
+	// rescanPollInterval is how often RescanPCI looks for the devices it is
+	// waiting for. A rescan binds drivers in a few milliseconds, so this is fine
+	// enough not to be the thing being measured.
+	rescanPollInterval = 200 * time.Microsecond
 )
 
 // findVirtioBlockDevices finds virtio block devices in /sys/block.
@@ -337,5 +343,53 @@ func waitForSysBlockDevicesPoll(ctx context.Context) []string {
 
 		time.Sleep(backoff)
 		backoff = min(backoff*2, maxBackoff)
+	}
+}
+
+// RescanPCI re-enumerates the PCI bus and waits until at least want virtio
+// block devices are present, returning the ones it found.
+//
+// A VM restored from a template enumerated its PCI bus when the template booted,
+// which was before any of this container's disks existed. The disks are
+// cold-plugged onto the restored VM's command line, so QEMU has them from the
+// first instruction and no hot-plug is involved - the guest has simply never
+// looked at those slots. Writing to /sys/bus/pci/rescan makes it look, and the
+// devices bind their drivers as if they had been there at boot, without the
+// attention-button dance pciehp performs for a real hot-plug.
+//
+// It waits for a count the caller states rather than for a timeout to expire:
+// the host knows exactly how many disks it attached, so the guest can be told
+// instead of left to guess. WaitForBlockDevices, used on the boot path, has to
+// guess, and spends BlockDeviceTimeout doing it whenever a VM has no disks.
+func RescanPCI(ctx context.Context, want int) ([]string, error) {
+	start := time.Now()
+
+	// #nosec G306 -- a sysfs trigger, written by root inside the VM.
+	if err := os.WriteFile("/sys/bus/pci/rescan", []byte("1"), 0200); err != nil {
+		return nil, fmt.Errorf("triggering a PCI rescan: %w", err)
+	}
+
+	for {
+		devices, err := findVirtioBlockDevices()
+		if err != nil {
+			return nil, fmt.Errorf("listing virtio block devices: %w", err)
+		}
+		if len(devices) >= want {
+			log.G(ctx).WithFields(log.Fields{
+				"devices":  devices,
+				"took_us":  time.Since(start).Microseconds(),
+				"expected": want,
+			}).Info("PCI rescan complete")
+			return devices, nil
+		}
+		if time.Since(start) > BlockDeviceTimeout {
+			return devices, fmt.Errorf("found %d of %d virtio block devices within %s: %w",
+				len(devices), want, BlockDeviceTimeout, context.DeadlineExceeded)
+		}
+		select {
+		case <-ctx.Done():
+			return devices, ctx.Err()
+		case <-time.After(rescanPollInterval):
+		}
 	}
 }

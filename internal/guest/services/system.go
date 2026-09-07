@@ -5,6 +5,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 
 	api "github.com/spin-stack/spinbox/api/services/system/v1"
+	"github.com/spin-stack/spinbox/internal/guest/vminit/devices"
 	guestsystem "github.com/spin-stack/spinbox/internal/guest/vminit/system"
 	"github.com/spin-stack/spinbox/internal/version"
 )
@@ -435,4 +437,21 @@ func (s *systemService) writeRuntimeFeatures() error {
 
 	featuresFile := filepath.Join(featuresDir, "features.json")
 	return os.WriteFile(featuresFile, data, featuresFilePerms)
+}
+
+// RescanPCI re-enumerates the PCI bus and waits for the container's disks.
+//
+// It exists for restored VMs. A template is frozen with no container disks - it
+// does not know which container it will become - so the guest inside it
+// enumerated a bus without them. The disks are cold-plugged onto the restored
+// VM's command line, and this is the host telling the guest to go and look.
+func (s *systemService) RescanPCI(ctx context.Context, req *api.RescanPCIRequest) (*api.RescanPCIResponse, error) {
+	found, err := devices.RescanPCI(ctx, int(req.GetExpectedBlockDevices()))
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, errgrpc.ToGRPC(fmt.Errorf("%w: %w", errdefs.ErrUnavailable, err))
+		}
+		return nil, errgrpc.ToGRPC(err)
+	}
+	return &api.RescanPCIResponse{BlockDevices: found}, nil
 }
