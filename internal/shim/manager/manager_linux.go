@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	bootapi "github.com/containerd/containerd/api/runtime/bootstrap/v1"
 	"github.com/containerd/containerd/api/types"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/shim"
@@ -34,7 +35,7 @@ const (
 
 // NewShimManager returns an implementation of the shim manager
 // using run_vminitd
-func NewShimManager(name string) shim.Manager {
+func NewShimManager(name string) shim.Shim {
 	return &manager{
 		name: name,
 	}
@@ -182,19 +183,24 @@ func newShimSocket(ctx context.Context, path, id string, debug bool) (*shimSocke
 	}, nil
 }
 
-func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shim.BootstrapParams, retErr error) {
-	var params shim.BootstrapParams
-	params.Version = 3
-	params.Protocol = "ttrpc"
+func (manager) Start(ctx context.Context, params *bootapi.BootstrapParams) (_ *bootapi.BootstrapResult, retErr error) {
+	id := params.InstanceID
+	address := params.ContainerdGrpcAddress
+	debug := params.LogLevel <= bootapi.LogLevel_LOG_LEVEL_DEBUG
 
-	cmd, err := newCommand(ctx, id, opts.Address, opts.Debug)
+	result := &bootapi.BootstrapResult{
+		Version:  3,
+		Protocol: "ttrpc",
+	}
+
+	cmd, err := newCommand(ctx, id, address, debug)
 	if err != nil {
-		return params, err
+		return nil, err
 	}
 	grouping := id
 	spec, err := readSpec()
 	if err != nil {
-		return params, err
+		return nil, err
 	}
 	for _, group := range groupLabels {
 		if groupID, ok := spec.Annotations[group]; ok {
@@ -212,23 +218,23 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 		}
 	}()
 
-	s, err := newShimSocket(ctx, opts.Address, grouping, false)
+	s, err := newShimSocket(ctx, address, grouping, false)
 	if err != nil {
 		var existsErr *socketExistsError
 		if errors.As(err, &existsErr) {
 			// Shim already exists - reuse it
-			params.Address = existsErr.address
-			return params, nil
+			result.Address = existsErr.address
+			return result, nil
 		}
-		return params, err
+		return nil, err
 	}
 	sockets = append(sockets, s)
 	cmd.ExtraFiles = append(cmd.ExtraFiles, s.f)
 
-	if opts.Debug {
-		s, err = newShimSocket(ctx, opts.Address, grouping, true)
+	if debug {
+		s, err = newShimSocket(ctx, address, grouping, true)
 		if err != nil {
-			return params, err
+			return nil, err
 		}
 		sockets = append(sockets, s)
 		cmd.ExtraFiles = append(cmd.ExtraFiles, s.f)
@@ -239,7 +245,7 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 
 	origNS, err := os.Open("/proc/self/ns/mnt")
 	if err != nil {
-		return params, err
+		return nil, err
 	}
 	// Register close first - it will execute last (LIFO)
 	defer origNS.Close()
@@ -252,11 +258,11 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 	}()
 
 	if err := setupMntNs(); err != nil {
-		return params, err
+		return nil, err
 	}
 
 	if err := cmd.Start(); err != nil {
-		return params, err
+		return nil, err
 	}
 
 	defer func() {
@@ -278,11 +284,11 @@ func (manager) Start(ctx context.Context, id string, opts shim.StartOpts) (_ shi
 	// Write PID file to the bundle directory (current working directory).
 	// This file is used by Stop() to send signals to the shim process.
 	if err = shim.WritePidFile("shim.pid", cmd.Process.Pid); err != nil {
-		return params, err
+		return nil, err
 	}
 
-	params.Address = sockets[0].addr
-	return params, nil
+	result.Address = sockets[0].addr
+	return result, nil
 }
 
 func (manager) Stop(ctx context.Context, id string) (shim.StopStatus, error) {
