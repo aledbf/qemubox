@@ -141,6 +141,9 @@ func TestTemplateRestore(t *testing.T) {
 		t.Errorf("guest never received the transport reset event:\n%s", logged)
 	}
 
+	t.Logf("SNAPSHOT restored VM resident memory: %.1f MB (template RAM file is 512 MB, mapped copy-on-write)",
+		privateRSS(t, restInst.cmd.Process.Pid))
+
 	if restoreTook >= bootTook {
 		t.Errorf("restoring (%s) was not faster than booting (%s)", restoreTook, bootTook)
 	}
@@ -196,4 +199,27 @@ func testMAC(t *testing.T, s string) net.HardwareAddr {
 		t.Fatalf("parsing MAC %s: %v", s, err)
 	}
 	return mac
+}
+
+// privateRSS reports a process's resident anonymous+private memory in MB, which
+// for a restored VM is what it costs over and above the template's shared RAM
+// file.
+func privateRSS(t *testing.T, pid int) float64 {
+	t.Helper()
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		t.Fatalf("reading process status: %v", err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if !strings.HasPrefix(line, "VmRSS:") {
+			continue
+		}
+		var kb float64
+		if _, err := fmt.Sscanf(strings.TrimPrefix(line, "VmRSS:"), "%f kB", &kb); err != nil {
+			t.Fatalf("parsing %q: %v", line, err)
+		}
+		return kb / 1024
+	}
+	t.Fatalf("no VmRSS in the status of pid %d", pid)
+	return 0
 }
