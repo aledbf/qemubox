@@ -48,9 +48,12 @@ func init() {
 			if !ok {
 				return nil, fmt.Errorf("unexpected config type %T", ic.Config)
 			}
-			l, err := vsock.ListenContextID(config.ContextID, config.Port, &vsock.Config{})
+			// Bind to this VM's current CID rather than the one named on the
+			// kernel command line; see the RPC listener in
+			// internal/guest/vminit/service for why they can differ.
+			l, err := vsock.Listen(config.Port, &vsock.Config{})
 			if err != nil {
-				return nil, fmt.Errorf("failed to listen on vsock port %d with context id %d: %w", config.Port, config.ContextID, err)
+				return nil, fmt.Errorf("failed to listen on vsock port %d: %w", config.Port, err)
 			}
 
 			s := &service{

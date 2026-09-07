@@ -422,6 +422,14 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	}
 	tQMP := time.Now()
 
+	// A restored VM has no state until it is told where to read it from; it
+	// cannot answer on vsock before that.
+	if q.restoreStatePath != "" {
+		if err := q.loadTemplate(ctx); err != nil {
+			return err
+		}
+	}
+
 	log.G(ctx).Info("qemu: QMP connected, waiting for vsock...")
 
 	// Create long-lived context for background monitors; Start ctx may be cancelled by callers.
@@ -523,7 +531,7 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 		setSandbox().
 		setBIOSPath(paths.QemuSharePath(cfg.Paths)).
 		// Optimize: use kernel IRQ chip, disable HPET
-		setMachine("q35", "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on").
+		setMachine("q35", "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on", machineMemoryBackend(q.memoryFilePath)).
 		// Drop S3/S4 from the ACPI tables. A microVM never suspends or
 		// hibernates, and the guest skips the corresponding ACPI setup.
 		addGlobal("ICH9-LPC.disable_s3=1").
@@ -555,6 +563,17 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 	// used to add existed only to carry output nobody reads. Removing it also takes
 	// the 24 ms `virtio_console_init` out of the profile — which was the console
 	// registering and replaying the ring, not work a production boot does.
+
+	// Snapshot plumbing. Both are no-ops on a VM that neither builds a template
+	// nor restores from one, which is every VM today.
+	if q.memoryFilePath != "" {
+		// A restoring VM maps the template's RAM privately (copy-on-write); a
+		// template writes into it and must share.
+		builder.setMemoryBackendFile(q.memoryFilePath, memoryMB, q.restoreStatePath == "")
+	}
+	if q.restoreStatePath != "" {
+		builder.setIncomingDefer()
+	}
 
 	// Add disks
 	for i, disk := range q.disks {

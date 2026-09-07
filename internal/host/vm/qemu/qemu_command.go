@@ -51,6 +51,11 @@ const (
 // speed.
 const virtioModern = "disable-legacy=on"
 
+// memoryBackendID names the RAM object when guest memory is file-backed. The
+// machine references it by id, and migration matches RAM blocks by name across
+// save and restore, so it must be identical on both sides.
+const memoryBackendID = "pc.ram"
+
 // qemuCommandBuilder constructs QEMU command-line arguments using a fluent builder pattern.
 // This provides type safety, validation, and clearer intent compared to raw string building.
 //
@@ -116,9 +121,19 @@ func (b *qemuCommandBuilder) addGlobal(property string) *qemuCommandBuilder {
 // setMachine sets the machine type and options (-machine option).
 // Example: setMachine("q35", "accel=kvm", "kernel-irqchip=on")
 func (b *qemuCommandBuilder) setMachine(machineType string, options ...string) *qemuCommandBuilder {
+	// Empty options are dropped rather than joined, so a caller can pass one
+	// conditionally without building the string itself - QEMU rejects the
+	// trailing comma an empty element would leave behind.
+	kept := make([]string, 0, len(options))
+	for _, o := range options {
+		if o != "" {
+			kept = append(kept, o)
+		}
+	}
+
 	value := machineType
-	if len(options) > 0 {
-		value = fmt.Sprintf("%s,%s", machineType, strings.Join(options, ","))
+	if len(kept) > 0 {
+		value = fmt.Sprintf("%s,%s", machineType, strings.Join(kept, ","))
 	}
 	b.args = append(b.args, "-machine", value)
 	return b
@@ -167,6 +182,43 @@ func (b *qemuCommandBuilder) setMemory(memoryMB int, slots int, maxMemoryMB int)
 	} else {
 		b.args = append(b.args, "-m", fmt.Sprintf("%d", memoryMB))
 	}
+	return b
+}
+
+// setMemoryBackendFile backs guest RAM with a file rather than anonymous
+// memory, and points the machine at it.
+//
+// share=on is what a template needs: the pages it dirties must land in the file
+// the restores will read. A restoring VM passes share=off, which maps the same
+// file MAP_PRIVATE - it sees the template's memory, and anything it writes stays
+// private to it. That is the whole copy-on-write story, and it is why one
+// template file can serve many VMs without being copied.
+func (b *qemuCommandBuilder) setMemoryBackendFile(path string, memoryMB int, share bool) *qemuCommandBuilder {
+	shareVal := "off"
+	if share {
+		shareVal = "on"
+	}
+	b.args = append(b.args, "-object",
+		fmt.Sprintf("memory-backend-file,id=%s,size=%dM,mem-path=%s,share=%s",
+			memoryBackendID, memoryMB, path, shareVal))
+	return b
+}
+
+// machineMemoryBackend returns the machine option that points at the file-backed
+// RAM object, or an empty string when guest memory is anonymous. setMachine
+// drops empty options, so this composes without branching at the call site.
+func machineMemoryBackend(memoryFilePath string) string {
+	if memoryFilePath == "" {
+		return ""
+	}
+	return "memory-backend=" + memoryBackendID
+}
+
+// setIncomingDefer starts QEMU with no machine state, waiting to be told where
+// to load it from (migrate-incoming). Without "defer" the URI has to be known at
+// exec time, which would mean re-execing QEMU to change templates.
+func (b *qemuCommandBuilder) setIncomingDefer() *qemuCommandBuilder {
+	b.args = append(b.args, "-incoming", "defer")
 	return b
 }
 
