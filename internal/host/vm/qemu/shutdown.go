@@ -45,13 +45,21 @@ func (q *Instance) shutdownGuest(ctx context.Context, logger *log.Entry) {
 	// Try CTRL+ALT+DELETE first (more reliable for some distributions), then ACPI powerdown
 	// We use a fresh context here because the caller's context might be cancelled/expired,
 	// but we still need time to properly shut down the VM.
-	if q.qmpClient != nil {
+	//
+	// The client is copied out under the lock and used without it: these QMP
+	// commands take up to shutdownQMPTimeout, and the lock is not held across
+	// waits here. See Shutdown.
+	q.mu.Lock()
+	qmp := q.qmpClient
+	q.mu.Unlock()
+
+	if qmp != nil {
 		logger.Info("qemu: sending CTRL+ALT+DELETE via QMP")
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownQMPTimeout)
-		if err := q.qmpClient.SendCtrlAltDelete(shutdownCtx); err != nil {
+		if err := qmp.SendCtrlAltDelete(shutdownCtx); err != nil {
 			logger.WithError(err).Debug("qemu: failed to send CTRL+ALT+DELETE, trying ACPI powerdown")
 			// Fall back to ACPI powerdown
-			if err := q.qmpClient.Shutdown(shutdownCtx); err != nil {
+			if err := qmp.Shutdown(shutdownCtx); err != nil {
 				logger.WithError(err).Warning("qemu: failed to send ACPI powerdown")
 			}
 		}
@@ -60,16 +68,23 @@ func (q *Instance) shutdownGuest(ctx context.Context, logger *log.Entry) {
 }
 
 func (q *Instance) cleanupAfterFailedKill() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	// Clean up QMP and TAPs before returning error
 	if q.qmpClient != nil {
 		_ = q.qmpClient.Close()
 		q.qmpClient = nil
 	}
-	q.closeTAPFiles()
+	q.closeTAPFilesLocked()
 }
 
 func (q *Instance) prepareGuestShutdown(ctx context.Context, logger *log.Entry) {
-	if q.client == nil {
+	q.mu.Lock()
+	client, paused := q.client, q.paused
+	q.mu.Unlock()
+
+	if client == nil {
 		return
 	}
 
@@ -81,12 +96,7 @@ func (q *Instance) prepareGuestShutdown(ctx context.Context, logger *log.Entry) 
 	// booting the guest, which takes 74 ms.
 	//
 	// There is nothing to prepare either way: the pause is what quiesced it.
-	//
-	// q.paused is read directly: Shutdown holds q.mu across this call, and an
-	// accessor that takes the same mutex would deadlock against its caller. That
-	// is not hypothetical - it is how this was written first, and the VM sat
-	// there with its QEMU process alive and nothing to wake it.
-	if q.paused {
+	if paused {
 		logger.Debug("qemu: VM is paused, nothing to prepare for shutdown")
 		return
 	}
@@ -95,8 +105,8 @@ func (q *Instance) prepareGuestShutdown(ctx context.Context, logger *log.Entry) 
 	prepareCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownPrepareGuestTimeout)
 	defer cancel()
 
-	client := systemAPI.NewTTRPCSystemClient(q.client)
-	if _, err := client.PrepareShutdown(prepareCtx, &emptypb.Empty{}); err != nil {
+	sysClient := systemAPI.NewTTRPCSystemClient(client)
+	if _, err := sysClient.PrepareShutdown(prepareCtx, &emptypb.Empty{}); err != nil {
 		logger.WithError(err).Warn("qemu: guest shutdown preparation failed")
 		return
 	}
@@ -105,28 +115,42 @@ func (q *Instance) prepareGuestShutdown(ctx context.Context, logger *log.Entry) 
 }
 
 func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error {
+	// Everything this waits on is copied out first. The waits below run to several
+	// seconds and the lock is not held across them; see Shutdown.
+	q.mu.Lock()
+	cmd, waitCh, qmp := q.cmd, q.waitCh, q.qmpClient
+	q.mu.Unlock()
+
 	// Brief wait to let guest start shutdown, then send quit
 	// QEMU won't exit on its own - it always needs an explicit quit command
-	if q.cmd == nil || q.cmd.Process == nil {
+	if cmd == nil || cmd.Process == nil {
 		return nil
+	}
+
+	// forget clears the process handle once it is gone, so a later phase does not
+	// act on a process that no longer exists.
+	forget := func() {
+		q.mu.Lock()
+		q.cmd = nil
+		q.mu.Unlock()
 	}
 
 	// Wait for guest to receive ACPI signal
 	select {
-	case exitErr := <-q.waitCh:
+	case exitErr := <-waitCh:
 		// Unexpected early exit - shouldn't happen but handle it
 		logger.WithError(exitErr).Debug("qemu: process exited during ACPI wait")
-		q.cmd = nil
+		forget()
 		return nil
 	case <-time.After(shutdownACPIWait):
 		// Expected - continue to quit command
 	}
 
 	// Send quit command to tell QEMU to exit
-	if q.qmpClient != nil {
+	if qmp != nil {
 		logger.Debug("qemu: sending quit command to QEMU")
 		quitCtx, quitCancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownQuitTimeout)
-		if err := q.qmpClient.Quit(quitCtx); err != nil {
+		if err := qmp.Quit(quitCtx); err != nil {
 			logger.WithError(err).Debug("qemu: failed to send quit command")
 			quitCancel()
 			// Fall through to SIGKILL
@@ -134,13 +158,13 @@ func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error
 			quitCancel()
 			// Wait for quit to complete (should be fast - ~50ms)
 			select {
-			case exitErr := <-q.waitCh:
+			case exitErr := <-waitCh:
 				if exitErr != nil && exitErr.Error() != "signal: killed" {
 					logger.WithError(exitErr).Debug("qemu: process exited with error after quit")
 				} else {
 					logger.Info("qemu: process exited after quit command")
 				}
-				q.cmd = nil
+				forget()
 				return nil
 			case <-time.After(shutdownQuitWait):
 				// Quit didn't work - fall through to SIGKILL
@@ -151,9 +175,9 @@ func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error
 
 	// Still not dead - SIGKILL as last resort
 	logger.Warning("qemu: sending SIGKILL to process")
-	if err := q.cmd.Process.Kill(); err != nil {
+	if err := cmd.Process.Kill(); err != nil {
 		logger.WithError(err).Error("qemu: failed to send SIGKILL")
-		q.cmd = nil
+		forget()
 		q.cleanupAfterFailedKill()
 		return fmt.Errorf("failed to kill QEMU process: %w", err)
 	}
@@ -161,17 +185,17 @@ func (q *Instance) stopQemuProcess(ctx context.Context, logger *log.Entry) error
 
 	// Wait for SIGKILL to complete (with timeout)
 	select {
-	case exitErr := <-q.waitCh:
+	case exitErr := <-waitCh:
 		if exitErr != nil {
 			logger.WithError(exitErr).Debug("qemu: process exited after SIGKILL")
 		}
 	case <-time.After(shutdownKillWait):
 		logger.Error("qemu: process did not exit after SIGKILL")
-		q.cmd = nil
+		forget()
 		q.cleanupAfterFailedKill()
 		return fmt.Errorf("process did not exit after SIGKILL")
 	}
-	q.cmd = nil
+	forget()
 	return nil
 }
 
@@ -189,8 +213,13 @@ func closeAndLog(logger *log.Entry, name string, closer io.Closer) {
 
 // closeClientConnections closes all client connections to the VM.
 // This includes TTRPC client, vsock connection, and console FIFO.
-// Must be called with q.mu held.
+//
+// It takes q.mu, which is safe because nothing here waits: closing a ttrpc
+// client, a socket and a FIFO handle are all immediate.
 func (q *Instance) closeClientConnections(logger *log.Entry) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	// Close TTRPC client to stop guest communication
 	if q.client != nil {
 		logger.Debug("qemu: closing TTRPC client")
@@ -217,13 +246,20 @@ func (q *Instance) closeClientConnections(logger *log.Entry) {
 // cancelBackgroundMonitors cancels all background monitoring goroutines.
 // This includes VM status monitors and guest RPC handlers.
 func (q *Instance) cancelBackgroundMonitors(logger *log.Entry) {
-	if q.runCancel != nil {
+	q.mu.Lock()
+	cancel := q.runCancel
+	q.mu.Unlock()
+
+	if cancel != nil {
 		logger.Debug("qemu: cancelling background monitors")
-		q.runCancel()
+		cancel()
 	}
 }
 
 func (q *Instance) cleanupResources(logger *log.Entry) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	// Close QMP client
 	closeAndLog(logger, "qmp", q.qmpClient)
 	q.qmpClient = nil
@@ -240,7 +276,7 @@ func (q *Instance) cleanupResources(logger *log.Entry) {
 	}
 
 	// Close TAP file descriptors
-	q.closeTAPFiles()
+	q.closeTAPFilesLocked()
 
 	// Release CID lease (allows CID reuse by other VMs)
 	if q.cidLease != nil {
@@ -275,13 +311,20 @@ func (q *Instance) Shutdown(ctx context.Context) error {
 		return nil // Not an error - idempotent shutdown
 	}
 
-	// Phase 1: Cancel background monitors before acquiring lock
+	// Phase 1: Cancel background monitors
 	q.cancelBackgroundMonitors(logger)
 
-	// Phase 2-5: Acquire lock for remainder of shutdown sequence
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
+	// No lock is held across phases 2-5, and that is deliberate. They spend
+	// seconds waiting: an RPC to the guest with a five-second timeout, then up to
+	// four and a half more for the process to die. Holding q.mu across that is
+	// what the root CLAUDE.md says not to do, and it is what made
+	// prepareGuestShutdown unable to look at a field without deadlocking.
+	//
+	// Nothing needs it held. Shutdown is entered through a compare-and-swap out
+	// of vmStateRunning, so only one goroutine is ever inside it, and every
+	// reader that could race - Client, DialClient, CPUHotplugger, StartStream -
+	// requires vmStateRunning, which this function has already left. Each phase
+	// takes the lock where it touches fields.
 	q.prepareGuestShutdown(ctx, logger)
 	q.closeClientConnections(logger)
 	q.shutdownGuest(ctx, logger)

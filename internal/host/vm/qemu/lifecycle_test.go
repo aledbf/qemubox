@@ -268,16 +268,20 @@ func TestCleanupMethodsNilSafety(t *testing.T) {
 			},
 		},
 		{
-			name: "closeTAPFiles with empty nets",
+			name: "closeTAPFilesLocked with empty nets",
 			operation: func(inst *Instance) {
-				inst.closeTAPFiles()
+				inst.mu.Lock()
+				defer inst.mu.Unlock()
+				inst.closeTAPFilesLocked()
 			},
 		},
 		{
-			name: "closeTAPFiles with nil TapFile",
+			name: "closeTAPFilesLocked with nil TapFile",
 			operation: func(inst *Instance) {
+				inst.mu.Lock()
+				defer inst.mu.Unlock()
 				inst.nets = []*NetConfig{{TapName: "tap0", TapFile: nil}}
-				inst.closeTAPFiles()
+				inst.closeTAPFilesLocked()
 			},
 		},
 	}

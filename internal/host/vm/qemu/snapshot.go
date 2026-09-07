@@ -209,13 +209,14 @@ func (q *Instance) RestoreFrom(statePath string) error {
 // with -incoming defer, so it is sitting with no state at all until told where
 // to read it from.
 //
-// It is called from Start, which already holds q.mu, so it reads q.qmpClient
-// directly: QMPClient() takes the same mutex and would deadlock against its
-// caller. That is not hypothetical - it is how this function was written first,
-// and the VM sat paused forever waiting for a migrate-incoming nobody could
-// send.
+// It used to read q.qmpClient directly, because Start held q.mu across its whole
+// body and an accessor that took the same mutex deadlocked against it - the VM
+// sat paused forever waiting for a migrate-incoming nobody could send. Start no
+// longer holds the lock, so this is an ordinary locked read again.
 func (q *Instance) loadTemplate(ctx context.Context) error {
+	q.mu.Lock()
 	c := q.qmpClient
+	q.mu.Unlock()
 	if c == nil {
 		return fmt.Errorf("vm not running: %w", errdefs.ErrFailedPrecondition)
 	}
