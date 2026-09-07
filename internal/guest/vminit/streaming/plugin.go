@@ -31,6 +31,10 @@ func (config *serviceConfig) SetVsock(cid, port uint32) {
 	config.Port = port
 }
 
+// vsockCIDAny is VMADDR_CID_ANY; see the constant of the same name in
+// internal/guest/vminit/service for why the listener binds to it.
+const vsockCIDAny = 0xFFFFFFFF
+
 func init() {
 	registry.Register(&plugin.Registration{
 		Type: vminit.StreamingPlugin,
@@ -48,10 +52,10 @@ func init() {
 			if !ok {
 				return nil, fmt.Errorf("unexpected config type %T", ic.Config)
 			}
-			// Bind to this VM's current CID rather than the one named on the
-			// kernel command line; see the RPC listener in
-			// internal/guest/vminit/service for why they can differ.
-			l, err := vsock.Listen(config.Port, &vsock.Config{})
+			// Bind to every context ID this VM has or comes to have, not to one
+			// of them: a restored VM changes CID under its sockets. See
+			// vsockCIDAny in internal/guest/vminit/service.
+			l, err := vsock.ListenContextID(vsockCIDAny, config.Port, &vsock.Config{})
 			if err != nil {
 				return nil, fmt.Errorf("failed to listen on vsock port %d: %w", config.Port, err)
 			}
