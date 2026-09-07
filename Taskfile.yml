@@ -286,6 +286,12 @@ tasks:
         fi
 
         WORKDIR="$(mktemp -d)"
+        # Every later trap in this script must keep removing WORKDIR. There is one
+        # EXIT trap and setting a new one replaces it, so a `trap 'cleanup_ctr' EXIT`
+        # further down silently dropped this and every run left its unpacked release
+        # tarball - about 294 MB - behind in /tmp. On a runner whose /tmp is a 23 GB
+        # tmpfs that is 58 runs before the linker fails with ENOSPC, which is how it
+        # was found.
         trap 'rm -rf "${WORKDIR}"' EXIT
 
         echo "📦 Verifying QEMU firmware in build output..."
@@ -369,7 +375,7 @@ tasks:
           ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" tasks delete "${CTR_ID}" >/dev/null 2>&1 || true
           ${SUDO} "${CTR_BIN}" --address "${SOCKET}" --namespace "${CTR_NAMESPACE}" containers delete "${CTR_ID}" >/dev/null 2>&1 || true
         }
-        trap 'cleanup_ctr' EXIT
+        trap 'cleanup_ctr; rm -rf "${WORKDIR}"' EXIT
 
         # Everything the VM said about why it did not come up. Defined once and called
         # from both failure paths: a `tasks start` that fails takes the script out through
@@ -434,7 +440,7 @@ tasks:
         fi
 
         cleanup_ctr
-        trap - EXIT
+        trap 'rm -rf "${WORKDIR}"' EXIT
 
         TEST_ID="qbx-ci-$(date +%s)"
         ${SUDO} env \
