@@ -169,7 +169,12 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (clean
 		return nil, nil
 	}
 
-	log.G(ctx).WithField("mounts", mounts).Info("mounting rootfs components")
+	// The full mount spec is ~480 bytes and every byte of it is a PIO exit on
+	// the guest's 8250 (measured: one kvm_pio per byte written to 0x3f8, plus
+	// the driver's LSR poll before each). The count is what a normal run needs;
+	// the spec itself is a debugging detail and moves behind Debug.
+	log.G(ctx).WithField("count", len(mounts)).Info("mounting rootfs components")
+	log.G(ctx).WithField("mounts", mounts).Debug("rootfs mount spec")
 	var active []mount.ActiveMount
 
 	for i, m := range mounts {
@@ -257,7 +262,7 @@ func All(ctx context.Context, rootfs, mdir string, mounts []*types.Mount) (clean
 			"source":  am.Source,
 			"target":  target,
 			"options": am.Options,
-		}).Info("mounted rootfs component")
+		}).Debug("mounted rootfs component")
 		active = append(active, am)
 	}
 
