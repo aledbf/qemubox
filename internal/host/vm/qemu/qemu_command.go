@@ -158,12 +158,17 @@ func (b *qemuCommandBuilder) setCPU(model string, features ...string) *qemuComma
 //
 // Example: setSMP(2, 4) produces "-smp 2,maxcpus=4"
 func (b *qemuCommandBuilder) setSMP(bootCPUs, maxCPUs int) *qemuCommandBuilder {
-	if maxCPUs > 0 && maxCPUs != bootCPUs {
-		b.args = append(b.args, "-smp", fmt.Sprintf("%d,maxcpus=%d", bootCPUs, maxCPUs))
-	} else {
-		b.args = append(b.args, "-smp", fmt.Sprintf("%d", bootCPUs))
-	}
+	b.args = append(b.args, "-smp", smpArg(bootCPUs, maxCPUs))
 	return b
+}
+
+// smpArg formats the -smp value. Shared with MachineIdentity, which has to
+// spell the machine the same way the command line does.
+func smpArg(bootCPUs, maxCPUs int) string {
+	if maxCPUs > 0 && maxCPUs != bootCPUs {
+		return fmt.Sprintf("%d,maxcpus=%d", bootCPUs, maxCPUs)
+	}
+	return fmt.Sprintf("%d", bootCPUs)
 }
 
 // setMemory sets memory configuration (-m option).
@@ -177,12 +182,16 @@ func (b *qemuCommandBuilder) setSMP(bootCPUs, maxCPUs int) *qemuCommandBuilder {
 //   - setMemory(512, 0, 0) produces "-m 512"
 //   - setMemory(512, 4, 2048) produces "-m 512,slots=4,maxmem=2048M"
 func (b *qemuCommandBuilder) setMemory(memoryMB int, slots int, maxMemoryMB int) *qemuCommandBuilder {
-	if slots > 0 && maxMemoryMB > memoryMB {
-		b.args = append(b.args, "-m", fmt.Sprintf("%d,slots=%d,maxmem=%dM", memoryMB, slots, maxMemoryMB))
-	} else {
-		b.args = append(b.args, "-m", fmt.Sprintf("%d", memoryMB))
-	}
+	b.args = append(b.args, "-m", memoryArg(memoryMB, slots, maxMemoryMB))
 	return b
+}
+
+// memoryArg formats the -m value. Shared with MachineIdentity; see smpArg.
+func memoryArg(memoryMB, slots, maxMemoryMB int) string {
+	if slots > 0 && maxMemoryMB > memoryMB {
+		return fmt.Sprintf("%d,slots=%d,maxmem=%dM", memoryMB, slots, maxMemoryMB)
+	}
+	return fmt.Sprintf("%d", memoryMB)
 }
 
 // setMemoryBackendFile backs guest RAM with a file rather than anonymous
@@ -378,4 +387,16 @@ func (b *qemuCommandBuilder) addNIC(index int, id string, nic NICConfig) *qemuCo
 // build returns the complete command-line arguments.
 func (b *qemuCommandBuilder) build() []string {
 	return b.args
+}
+
+// setMachineShape applies the four arguments that decide the shape of the
+// machine, already formatted by machineShape.
+//
+// It takes them ready-made rather than formatting them itself because
+// MachineIdentity needs the same four strings before there is a command line to
+// read them from, and the two must never disagree: a restore loads state into a
+// machine that has to be the same shape, and nothing checks that at runtime.
+func (b *qemuCommandBuilder) setMachineShape(machine, cpu, smp, memory string) *qemuCommandBuilder {
+	b.args = append(b.args, "-machine", machine, "-cpu", cpu, "-smp", smp, "-m", memory)
+	return b
 }

@@ -516,15 +516,12 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 		return nil, fmt.Errorf("failed to get config: %w", err)
 	}
 
-	// Convert memory from bytes to MB
+	// The four arguments that decide the shape of the machine come from
+	// machineShape, which MachineIdentity also uses. A restore requires the
+	// template and the VM to be the same shape and nothing checks it at runtime,
+	// so the two must be spelled in one place. See machineShape.
+	machineArg, cpuArg, smpArg, memoryArg := machineShape(q.resourceCfg, q.memoryFilePath != "")
 	memoryMB := int(q.resourceCfg.MemorySize / (1024 * 1024))
-	memoryMaxMB := int(q.resourceCfg.MemoryHotplugSize / (1024 * 1024))
-
-	// Calculate memory hotplug slots needed
-	memorySlots := defaultMemorySlots
-	if q.resourceCfg.MemoryHotplugSize <= q.resourceCfg.MemorySize {
-		memorySlots = 0 // No hotplug needed if max equals initial
-	}
 
 	// Fixed PCI slots bound how many devices fit on the root complex; check
 	// before building so the failure names the limit instead of surfacing as a
@@ -542,19 +539,13 @@ func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]strin
 		// Seccomp sandbox: cheap hardening around the VM isolation boundary.
 		setSandbox().
 		setBIOSPath(paths.QemuSharePath(cfg.Paths)).
-		// Optimize: use kernel IRQ chip, disable HPET
-		setMachine("q35", "accel=kvm", "kernel-irqchip=on", "hpet=off", "acpi=on", machineMemoryBackend(q.memoryFilePath)).
+		// Chipset, CPU model, vCPU count and memory - kernel IRQ chip on, HPET
+		// off. See machineShape, which a template's fingerprint also reads.
+		setMachineShape(machineArg, cpuArg, smpArg, memoryArg).
 		// Drop S3/S4 from the ACPI tables. A microVM never suspends or
 		// hibernates, and the guest skips the corresponding ACPI setup.
 		addGlobal("ICH9-LPC.disable_s3=1").
 		addGlobal("ICH9-LPC.disable_s4=1").
-		setCPU("host", "migratable=on").
-		// CPU configuration for hotplug:
-		// Simple topology: just specify initial CPUs and max CPUs, let QEMU handle the rest
-		// This creates a single socket with enough capacity for maxcpus
-		setSMP(q.resourceCfg.BootCPUs, q.resourceCfg.MaxCPUs).
-		// Memory configuration - optimize slots based on hotplug needs
-		setMemory(memoryMB, memorySlots, memoryMaxMB).
 		setKernel(q.kernelPath).
 		setInitrd(q.initrdPath).
 		setKernelArgs(cmdlineArgs).
