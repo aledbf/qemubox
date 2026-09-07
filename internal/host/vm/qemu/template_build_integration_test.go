@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,6 +91,7 @@ func TestBuildTemplate(t *testing.T) {
 	cfgStart := time.Now()
 	if _, err := system.NewTTRPCSystemClient(client).Configure(ctx, &system.ConfigureRequest{
 		ExpectedBlockDevices: 1,
+		Restored:             true,
 	}); err != nil {
 		t.Fatalf("configuring the restored guest: %v", err)
 	}
@@ -146,4 +148,81 @@ func restoreFromTemplate(t *testing.T, ctx context.Context, dir string, tmpl Tem
 	}
 	t.Logf("TEMPLATE restored and serving in %d ms", time.Since(start).Milliseconds())
 	return q
+}
+
+// TestRestoredVMClockAndEntropy checks the two things a restored VM inherits
+// from its template that would be wrong in silence.
+//
+// A restore resumes the clock the template was frozen with, and the random pool
+// that was in its memory. Neither is visible from inside the guest - that is
+// what a restore is - and neither fails loudly: a VM hours in the past rejects
+// every TLS certificate as not yet valid, and two VMs sharing a pool produce the
+// same session keys. Both are corrected by Configure, and this is the test that
+// says so.
+//
+// Requires KVM, /dev/vhost-vsock and an installed kernel and initrd; run as root.
+func TestRestoredVMClockAndEntropy(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	store, err := NewTemplateStore(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatalf("NewTemplateStore: %v", err)
+	}
+	resourceCfg := &vm.VMResourceConfig{}
+
+	tmpl, err := BuildTemplate(ctx, store, dir, resourceCfg)
+	if err != nil {
+		t.Fatalf("BuildTemplate: %v", err)
+	}
+
+	// Let the template age past the threshold below which a correction is not
+	// worth making. Building and restoring takes about 600 ms on its own, which
+	// is under it - so without this the guest would read the host clock, decide
+	// the difference did not matter, and the settime path would go untested. The
+	// case that matters in production is a template built at install time and
+	// used for weeks; this is the smallest stand-in for it.
+	time.Sleep(2 * time.Second)
+
+	restored := restoreFromTemplate(t, ctx, dir, tmpl, resourceCfg)
+	client, err := restored.DialClient(ctx)
+	if err != nil {
+		t.Fatalf("dialling the restored guest: %v", err)
+	}
+	defer client.Close()
+
+	if _, err := system.NewTTRPCSystemClient(client).Configure(ctx, &system.ConfigureRequest{
+		ExpectedBlockDevices: 1,
+		Restored:             true,
+	}); err != nil {
+		t.Fatalf("configuring the restored guest: %v", err)
+	}
+
+	console := tailFile(restored.consolePath, 300)
+
+	// Both assertions look for what the guest *said it did*, not for the absence
+	// of a complaint. An earlier version of this test checked that no error
+	// appeared, and passed - it would have passed against a guest with no clock
+	// correction and no vmgenid device at all, because neither says anything when
+	// it is not there.
+	if !strings.Contains(console, "RESTORE clock read from the host over ptp_kvm") {
+		t.Errorf("the restored guest did not read the host clock; it is running at the "+
+			"time its template was frozen:\n%s", console)
+	}
+	// The template aged past clockCorrectionThreshold above, so the guest must
+	// have actually stepped its clock, not merely looked at the host's.
+	if !strings.Contains(console, "corrected the guest clock from the host") {
+		t.Errorf("the restored guest read the host clock but did not set its own:\n%s", console)
+	}
+
+	if !strings.Contains(console, "RESTORE entropy reseeded=true") {
+		t.Errorf("the restored guest did not reseed its random pool; it shares the "+
+			"template's entropy with every other VM restored from it:\n%s", console)
+	}
+
+	for _, line := range strings.Split(console, "\n") {
+		if strings.Contains(line, "RESTORE ") {
+			t.Logf("guest: %s", strings.TrimSpace(line))
+		}
+	}
 }
