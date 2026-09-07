@@ -74,6 +74,19 @@ RUN <<EOT
     grep -q "CONFIG_VIRTIO_PCI=y" .config || (echo "ERROR: CONFIG_VIRTIO_PCI not enabled!" ; exit 1)
     grep -q "CONFIG_NET_CLS_ACT=y" .config || (echo "ERROR: CONFIG_NET_CLS_ACT not enabled!" ; exit 1)
 
+    # The guest boots via the Xen PVH ELF entry and uses ACPI for CPU hotplug
+    # and QMP system_powerdown. Keep these and the container/virtio essentials
+    # explicit: trimming a parent option can silently drop them in olddefconfig.
+    for option in PVH HOTPLUG_CPU ACPI_HOTPLUG_CPU ACPI_BUTTON \
+        VIRTIO_BLK VIRTIO_VSOCKETS HW_RANDOM_VIRTIO \
+        EROFS_FS OVERLAY_FS EXT4_FS CGROUPS SECCOMP SECCOMP_FILTER \
+        NETFILTER IP_NF_IPTABLES SERIAL_8250_CONSOLE; do
+        grep -qx "CONFIG_${option}=y" .config || {
+            echo "ERROR: CONFIG_${option} not enabled after olddefconfig!"
+            exit 1
+        }
+    done
+
     # Memory hotplug, checked here for the same reason the others are: olddefconfig
     # resolves what it cannot satisfy, and a dropped symbol is silent. Without these
     # three the host can add a DIMM, QEMU will accept it, query-memory-devices will
@@ -102,6 +115,9 @@ RUN <<EOT
     grep -E "CONFIG_NETDEVICES|CONFIG_NET_CORE|CONFIG_ETHERNET|CONFIG_VIRTIO_NET" .config | grep -v "^#"
 
     # Verify config against Docker requirements
+    # IPVS matching serves Docker Swarm's in-guest load balancer. Spinbox uses
+    # host CNI and does not run Swarm; keep the remaining networking checks.
+    sed -i '/^[[:space:]]*NETFILTER_XT_MATCH_IPVS[[:space:]\\]*$/d' /usr/local/bin/check-docker-config.sh
     echo "Verifying kernel config for Docker support..."
     /usr/local/bin/check-docker-config.sh /usr/src/linux/.config || (echo "Kernel config verification failed!" ; exit 1)
 
