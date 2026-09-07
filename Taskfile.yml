@@ -512,22 +512,34 @@ tasks:
         MODULE_PATH=$(grep '^module ' go.mod | awk '{print $2}')
         GOPATH_DIR="${HOME}/go/src/${MODULE_PATH}"
 
-        if [ ! -d "${GOPATH_DIR}" ]; then
-          echo "  → Creating GOPATH symlink for protobuild..."
-          mkdir -p "$(dirname "${GOPATH_DIR}")"
-          ln -sfn "$(pwd)" "${GOPATH_DIR}"
-          echo "    ✓ Symlink created: ${GOPATH_DIR} -> $(pwd)"
-        fi
+        # These are remade on every run rather than created when missing. They
+        # point into the module cache, so a guarded "create it once" leaves a
+        # stale link behind after a dependency bump - and a broken symlink is not
+        # a directory, so the guard never fires again and the task fails the same
+        # way forever. Remaking them is a syscall.
+        echo "  → Creating GOPATH symlink for protobuild..."
+        mkdir -p "$(dirname "${GOPATH_DIR}")"
+        ln -sfn "$(pwd)" "${GOPATH_DIR}"
+        echo "    ✓ Symlink created: ${GOPATH_DIR} -> $(pwd)"
 
         # Create symlink for containerd/api dependency (needed for proto imports)
         CONTAINERD_API_DIR="${HOME}/go/src/github.com/containerd/containerd/api"
-        if [ ! -d "${CONTAINERD_API_DIR}" ]; then
-          echo "  → Creating containerd/api symlink for proto imports..."
-          CONTAINERD_API_MOD=$(go list -m -f '{{.Dir}}' github.com/containerd/containerd/api)
-          mkdir -p "$(dirname "${CONTAINERD_API_DIR}")"
-          ln -sfn "${CONTAINERD_API_MOD}" "${CONTAINERD_API_DIR}"
-          echo "    ✓ Symlink created: ${CONTAINERD_API_DIR}"
-        fi
+        echo "  → Creating containerd/api symlink for proto imports..."
+        # -json and sed, not -f '{{.Dir}}': go-task templates the braces away
+        # before the shell sees them, go list falls back to its default output,
+        # and the symlink ends up pointing at the literal string
+        # "github.com/containerd/containerd/api v1.11.1".
+        CONTAINERD_API_MOD=$(go list -m -json github.com/containerd/containerd/api | sed -n 's/.*"Dir": "\(.*\)".*/\1/p')
+        mkdir -p "$(dirname "${CONTAINERD_API_DIR}")"
+        ln -sfn "${CONTAINERD_API_MOD}" "${CONTAINERD_API_DIR}"
+
+        # containerd's event.proto imports "types/fieldpath.proto" - a path
+        # relative to its own module root, which is not an include path here.
+        # protobuild's include list is fixed in api/Protobuild.toml and cannot
+        # name a module cache directory, so the path is made to resolve under the
+        # GOPATH include that protoc already gets.
+        ln -sfn "${CONTAINERD_API_MOD}/types" "${HOME}/go/src/types"
+        echo "    ✓ Symlink created: ${CONTAINERD_API_DIR}"
 
         # Save original directory
         ORIGINAL_DIR="$(pwd)"
@@ -544,6 +556,8 @@ tasks:
         )
 
         # Fix Go acronyms in generated files
+        # The subshell above exported ~/go/bin onto PATH; this runs outside it.
+        export PATH="${HOME}/go/bin:${PATH}"
         go-fix-acronym -w -a '^Os' $(find api/ -name '*.pb.go')
         go-fix-acronym -w -a '(Id|Io|Uuid|Os)$$' $(find api/ -name '*.pb.go')
 
