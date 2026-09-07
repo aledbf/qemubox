@@ -241,7 +241,7 @@ func WaitForBlockDevices(ctx context.Context) {
 		return
 	}
 
-	log.G(ctx).WithField("devices", vdDevices).Info("found virtio block devices in /sys/block")
+	log.G(ctx).WithField("devices", vdDevices).Debug("found virtio block devices in /sys/block")
 
 	// Now wait for /dev nodes to appear
 	if waitForDevNodesInotify(ctx, vdDevices, BlockDeviceTimeout) {
@@ -249,7 +249,7 @@ func WaitForBlockDevices(ctx context.Context) {
 		for _, dev := range vdDevices {
 			devNodes = append(devNodes, "/dev/"+dev)
 		}
-		log.G(ctx).WithField("dev_nodes", devNodes).Info("virtio block device nodes ready")
+		log.G(ctx).WithField("dev_nodes", devNodes).Debug("virtio block device nodes ready")
 	} else {
 		log.G(ctx).Warn("timeout waiting for some device nodes, continuing anyway")
 	}
