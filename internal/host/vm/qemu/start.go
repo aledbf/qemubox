@@ -485,6 +485,7 @@ func (q *Instance) buildKernelCommandLine(startOpts vm.StartOpts) string {
 	cfg.VsockCID = q.guestCID
 	cfg.Network = startOpts.NetworkConfig
 	cfg.InitArgs = startOpts.InitArgs
+	cfg.DiskCount = len(q.disks)
 	cfg.ExtrasDiskIndex = startOpts.ExtrasDiskIndex
 	// Boot profiling is enabled per-VM (via the debug-boot annotation) or
 	// host-wide (SPINBOX_DEBUG_BOOT).

@@ -14,7 +14,7 @@ func TestParseIPConfig(t *testing.T) {
 	tests := []struct {
 		name    string
 		cmdline string
-		want    ipConfig
+		want    NetworkIdentity
 		ok      bool
 	}{
 		{
@@ -25,7 +25,7 @@ func TestParseIPConfig(t *testing.T) {
 		{
 			name:    "full static config with two DNS",
 			cmdline: "console=hvc0 ip=10.88.0.5::10.88.0.1:255.255.255.0::eth0:none:8.8.8.8:8.8.4.4 init=/sbin/vminitd",
-			want: ipConfig{
+			want: NetworkIdentity{
 				IP:      "10.88.0.5",
 				Gateway: "10.88.0.1",
 				Netmask: "255.255.255.0",
@@ -37,7 +37,7 @@ func TestParseIPConfig(t *testing.T) {
 		{
 			name:    "no DNS",
 			cmdline: "ip=10.88.0.5::10.88.0.1:255.255.255.0::eth0:none",
-			want: ipConfig{
+			want: NetworkIdentity{
 				IP:      "10.88.0.5",
 				Gateway: "10.88.0.1",
 				Netmask: "255.255.255.0",
@@ -48,7 +48,7 @@ func TestParseIPConfig(t *testing.T) {
 		{
 			name:    "single DNS",
 			cmdline: "ip=10.88.0.5::10.88.0.1:255.255.255.0::eth0:none:1.1.1.1",
-			want: ipConfig{
+			want: NetworkIdentity{
 				IP:      "10.88.0.5",
 				Gateway: "10.88.0.1",
 				Netmask: "255.255.255.0",
@@ -71,9 +71,9 @@ func TestParseIPConfig(t *testing.T) {
 }
 
 func TestIPConfigDevice(t *testing.T) {
-	assert.Equal(t, "eth0", ipConfig{}.device())
-	assert.Equal(t, "eth0", ipConfig{Device: "eth0"}.device())
-	assert.Equal(t, "ens3", ipConfig{Device: "ens3"}.device())
+	assert.Equal(t, "eth0", NetworkIdentity{}.device())
+	assert.Equal(t, "eth0", NetworkIdentity{Device: "eth0"}.device())
+	assert.Equal(t, "ens3", NetworkIdentity{Device: "ens3"}.device())
 }
 
 func TestParseNetmask(t *testing.T) {

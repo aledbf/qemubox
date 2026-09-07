@@ -18,6 +18,7 @@ type TTRPCSystemService interface {
 	OfflineMemory(context.Context, *OfflineMemoryRequest) (*emptypb.Empty, error)
 	OnlineMemory(context.Context, *OnlineMemoryRequest) (*emptypb.Empty, error)
 	RescanPCI(context.Context, *RescanPCIRequest) (*RescanPCIResponse, error)
+	Configure(context.Context, *ConfigureRequest) (*emptypb.Empty, error)
 }
 
 func RegisterTTRPCSystemService(srv *ttrpc.Server, svc TTRPCSystemService) {
@@ -85,6 +86,13 @@ func RegisterTTRPCSystemService(srv *ttrpc.Server, svc TTRPCSystemService) {
 					return nil, err
 				}
 				return svc.RescanPCI(ctx, &req)
+			},
+			"Configure": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req ConfigureRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Configure(ctx, &req)
 			},
 		},
 	})
@@ -167,6 +175,14 @@ func (c *ttrpcsystemClient) OnlineMemory(ctx context.Context, req *OnlineMemoryR
 func (c *ttrpcsystemClient) RescanPCI(ctx context.Context, req *RescanPCIRequest) (*RescanPCIResponse, error) {
 	var resp RescanPCIResponse
 	if err := c.client.Call(ctx, "containerd.vminitd.services.system.v1.System", "RescanPCI", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *ttrpcsystemClient) Configure(ctx context.Context, req *ConfigureRequest) (*emptypb.Empty, error) {
+	var resp emptypb.Empty
+	if err := c.client.Call(ctx, "containerd.vminitd.services.system.v1.System", "Configure", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

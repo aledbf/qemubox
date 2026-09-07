@@ -11,9 +11,6 @@ import (
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/log"
 	"golang.org/x/sys/unix"
-
-	"github.com/spin-stack/spinbox/internal/guest/vminit/devices"
-	"github.com/spin-stack/spinbox/internal/guest/vminit/extras"
 )
 
 // Filesystem types and mount options used across guest mount setup.
@@ -24,8 +21,14 @@ const (
 	mountOptNodev  = "nodev"
 )
 
-// Initialize performs all system initialization tasks for the VM guest.
-// This includes mounting filesystems, configuring cgroups, and setting up DNS.
+// Initialize performs the system initialization that is the same for every VM:
+// filesystems, device nodes, cgroups.
+//
+// What it deliberately leaves out is everything that depends on which container
+// this VM is going to run - its address, its disks, its extras. That is Apply,
+// and the split is what makes a template possible: a template is frozen after
+// Initialize and after the RPC server is serving, knowing nothing about the
+// container it will become, and Apply is how it is told. See Identity.
 //
 // prof attributes each phase's wall-clock time to a VMINITD_PROFILE line; it is
 // a no-op unless boot profiling is enabled, and may be nil.
@@ -49,19 +52,6 @@ func Initialize(ctx context.Context, prof *BootProfiler) error {
 		log.G(ctx).WithError(err).Error("failed to configure ctrl-alt-del behavior - VM may reboot unexpectedly on CTRL+ALT+DEL")
 	}
 
-	// Wait for virtio block devices to appear
-	// This is necessary because the kernel may not have probed all virtio devices yet
-	// Not fatal if devices don't appear - they might appear later or not be needed
-	devices.WaitForBlockDevices(ctx)
-	prof.Mark(ctx, "wait-block-devices")
-
-	// Extract files from extras disk if configured (spin.extras_disk kernel parameter)
-	// Not fatal if extraction fails - extras may not be configured for this container
-	if err := extras.Extract(ctx); err != nil {
-		log.G(ctx).WithError(err).Warn("failed to extract extras disk, continuing anyway")
-	}
-	prof.Mark(ctx, "extras-extract")
-
 	if err := setupCgroupControl(); err != nil {
 		return err
 	}
@@ -72,45 +62,6 @@ func Initialize(ctx context.Context, prof *BootProfiler) error {
 		return fmt.Errorf("failed to create /etc: %w", err)
 	}
 
-	// Configure networking from the kernel ip= parameter. We dropped
-	// CONFIG_IP_PNP, so the interface is brought up here in userspace (via
-	// netlink) instead of by the kernel's ip_auto_config; ip= is now purely a
-	// config channel that we parse from /proc/cmdline. Each step is best-effort:
-	// a workload without networking should still boot.
-	if err := configureNetworking(ctx); err != nil {
-		log.G(ctx).WithError(err).Warn("failed to read /proc/cmdline, skipping network configuration")
-	}
-	prof.Mark(ctx, "network")
-
-	return nil
-}
-
-// configureNetworking reads the kernel ip= parameter and applies it: brings up
-// the interface, assigns the address and default route, writes /etc/resolv.conf,
-// and adds the metadata-service route. Individual steps log and continue on
-// error so a workload that does not need networking still boots.
-func configureNetworking(ctx context.Context) error {
-	cmdlineBytes, err := os.ReadFile("/proc/cmdline")
-	if err != nil {
-		return fmt.Errorf("read /proc/cmdline: %w", err)
-	}
-	cmdline := string(cmdlineBytes)
-
-	cfg, ok := parseIPConfig(cmdline)
-	if !ok {
-		log.G(ctx).Debug("no ip= parameter in kernel cmdline, skipping network configuration")
-		return nil
-	}
-
-	if err := configureNetwork(ctx, cfg); err != nil {
-		log.G(ctx).WithError(err).Warn("failed to configure network interface, continuing anyway")
-	}
-	if err := configureDNS(ctx, cfg); err != nil {
-		log.G(ctx).WithError(err).Warn("failed to configure DNS, continuing anyway")
-	}
-	if err := configureMetadataRoute(ctx, cmdline, cfg); err != nil {
-		log.G(ctx).WithError(err).Warn("failed to configure metadata route, continuing anyway")
-	}
 	return nil
 }
 
