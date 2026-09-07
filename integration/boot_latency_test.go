@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -82,6 +83,11 @@ func TestBootLatency(t *testing.T) {
 		s := measureBootOnce(t, ctx, client, cfg, image, i)
 		createSamples = append(createSamples, s.createToOutput)
 		execSamples = append(execSamples, s.execToOutput)
+		// The fault count is logged next to the interval because the two move
+		// together and neither explains anything alone. Measured on this host:
+		// booting takes 9 ms and 5 faults, restoring takes 28 ms and 4008.
+		t.Logf("BOOT_METRIC iteration=%d exec_ms=%d exec_minor_faults=%d",
+			i, s.execToOutput.Milliseconds(), s.execFaults)
 	}
 
 	createMin, createMed, createMax := summarize(createSamples)
@@ -172,6 +178,10 @@ func summarize(samples []time.Duration) (minD, medD, maxD time.Duration) {
 type bootSample struct {
 	createToOutput time.Duration
 	execToOutput   time.Duration
+
+	// execFaults is how many minor page faults the QEMU process took while the
+	// container process was starting. See qemuMinorFaults.
+	execFaults uint64
 }
 
 // measureBootOnce boots one container whose entrypoint prints a readiness token
@@ -221,10 +231,62 @@ func measureBootOnce(t *testing.T, ctx context.Context, client *containerd.Clien
 		t.Fatalf("wait for task %s: %v", name, err)
 	}
 
+	faultsBefore := qemuMinorFaults(name)
 	start := time.Now()
 	if err := task.Start(ctx); err != nil {
 		t.Fatalf("start task %s: %v", name, err)
 	}
 	done := waiter.wait(t, 60*time.Second)
-	return bootSample{createToOutput: done.Sub(tCreate), execToOutput: done.Sub(start)}
+	faults := qemuMinorFaults(name) - faultsBefore
+
+	return bootSample{
+		createToOutput: done.Sub(tCreate),
+		execToOutput:   done.Sub(start),
+		execFaults:     faults,
+	}
+}
+
+// qemuMinorFaults returns the minor fault count of the QEMU process serving this
+// container, or 0 if it cannot be found.
+//
+// It exists to test one explanation of a measured regression. A VM restored from
+// a template maps the template's memory copy-on-write, so every page the guest
+// writes faults and is copied; starting a container process writes a lot of
+// pages at once. If that is where exec_to_output's extra milliseconds go, the
+// fault count is where it shows.
+func qemuMinorFaults(containerID string) uint64 {
+	procs, err := filepath.Glob("/proc/[0-9]*")
+	if err != nil {
+		return 0
+	}
+	for _, p := range procs {
+		cmdline, err := os.ReadFile(filepath.Join(p, "cmdline"))
+		if err != nil {
+			continue
+		}
+		// Arguments are NUL-separated; the container id appears in the paths
+		// QEMU was given for its console and monitor socket.
+		if !bytes.Contains(cmdline, []byte("qemu-system")) || !bytes.Contains(cmdline, []byte(containerID)) {
+			continue
+		}
+		stat, err := os.ReadFile(filepath.Join(p, "stat"))
+		if err != nil {
+			return 0
+		}
+		// Field 10 is minflt, counting from 1. The command name in field 2 can
+		// contain spaces, so the fields are counted from after its closing
+		// parenthesis rather than from the start of the line.
+		tail := stat[bytes.LastIndexByte(stat, ')')+1:]
+		fields := strings.Fields(string(tail))
+		const minfltOffsetAfterComm = 7 // state, ppid, pgrp, session, tty, tpgid, flags, minflt
+		if len(fields) <= minfltOffsetAfterComm {
+			return 0
+		}
+		n, err := strconv.ParseUint(fields[minfltOffsetAfterComm], 10, 64)
+		if err != nil {
+			return 0
+		}
+		return n
+	}
+	return 0
 }
