@@ -71,7 +71,7 @@ func (s *service) processExits() {
 
 		for _, cp := range cps {
 			if cp.Process.IsInit() {
-				s.handleInitExit(e, cp.Container, cp.Process.(*process.Init))
+				s.handleInitExit(e, cp.Container, cp.Process)
 			} else {
 				s.handleProcessExit(e, cp.Container, cp.Process)
 			}
@@ -92,12 +92,26 @@ func (s *service) send(evt interface{}) {
 // namespace, otherwise all other processes have been reaped already).
 // - waiting for the container's running exec counter to reach 0.
 // - finally, publishing the init exit.
-func (s *service) handleInitExit(e runcC.Exit, c *runc.Container, p *process.Init) {
+// killAller is a container process that can signal everything it started.
+//
+// It is asked for rather than assumed. This function used to take a
+// *process.Init and be handed one with an unchecked type assertion, which was
+// fine while there was one kind of container process and fatal the moment there
+// were two: the assertion panics, and a panic here is not a failed container -
+// vminitd is PID 1, so the kernel takes it as init dying and reboots the VM.
+// From the host it looked like "guest reset/reboot detected" and nothing else.
+type killAller interface {
+	KillAll(context.Context) error
+}
+
+func (s *service) handleInitExit(e runcC.Exit, c *runc.Container, p process.Process) {
 	// kill all running container processes
 	if runc.ShouldKillAllOnExit(s.context, c.Bundle) {
-		if err := p.KillAll(s.context); err != nil {
-			log.G(s.context).WithError(err).WithField("id", p.ID()).
-				Error("failed to kill init's children")
+		if ka, ok := p.(killAller); ok {
+			if err := ka.KillAll(s.context); err != nil {
+				log.G(s.context).WithError(err).WithField("id", p.ID()).
+					Error("failed to kill init's children")
+			}
 		}
 	}
 

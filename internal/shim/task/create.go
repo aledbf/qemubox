@@ -256,6 +256,16 @@ func (s *service) setupVMInstance(ctx context.Context, state *createState) error
 
 // startVM boots the VM and establishes the event stream connection.
 func (s *service) startVM(ctx context.Context, state *createState) error {
+	// Every container this shim runs is given a network by CNI before it gets
+	// here, and a VM that reached this point without one means CNI did not run.
+	// The VM package used to refuse it, which made a shim policy into a rule
+	// binding every caller of that package - including ones that legitimately
+	// have no NIC, such as the VM a template is built from. The check belongs
+	// here, where whether CNI should have run is known.
+	if state.netResult == nil || state.netResult.Config == nil {
+		return fmt.Errorf("no network configured for %s: CNI did not run", state.request.ID)
+	}
+
 	startOpts := []vm.StartOpt{
 		vm.WithNetworkConfig(state.netResult.Config),
 		vm.WithNetworkNamespace(state.netnsPath),

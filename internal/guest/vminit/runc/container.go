@@ -144,6 +144,16 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 		log.G(ctx).WithError(err).Warn("failed to relax OCI spec")
 	}
 
+	// A container can be run without an OCI runtime at all - chroot and exec,
+	// rather than crun building namespaces and cgroups inside a VM that is
+	// already the isolation boundary. See process.Direct for what that gives up.
+	//
+	// Chosen per container rather than globally while the two paths coexist: the
+	// shim still asks for the runtime, and `spinbox run` asks for this.
+	if directRequested(ctx, r.Bundle) {
+		return newDirectContainer(ctx, r, rootfs, streams, mountCleanup)
+	}
+
 	p := newInit(
 		r.Bundle,
 		filepath.Join(r.Bundle, "work"),
@@ -482,4 +492,49 @@ func (c *Container) HasPid(pid int) bool {
 
 func loadProcessCgroup(ctx context.Context, pid int) (CgroupManager, error) {
 	return LoadProcessCgroup(ctx, pid)
+}
+
+// annotationDirectExec, set on a container's spec, runs it without an OCI
+// runtime. See process.Direct.
+const annotationDirectExec = "io.spin.exec.direct"
+
+// directRequested reports whether this container asked to be run without an OCI
+// runtime.
+func directRequested(ctx context.Context, bundle string) bool {
+	spec, err := readSpec(bundle)
+	if err != nil {
+		log.G(ctx).WithError(err).Debug("cannot read the spec to check for direct exec")
+		return false
+	}
+	switch spec.Annotations[annotationDirectExec] {
+	case "true", "1", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+// newDirectContainer builds a container whose process is started by exec.
+func newDirectContainer(ctx context.Context, r *task.CreateTaskRequest, rootfs string,
+	streams stream.Manager, mountCleanup func(context.Context) error) (*Container, error) {
+	p, err := process.NewDirect(ctx, r.ID, r.Bundle, rootfs, stdio.Stdio{
+		Stdin:    r.Stdin,
+		Stdout:   r.Stdout,
+		Stderr:   r.Stderr,
+		Terminal: r.Terminal,
+	}, streams)
+	if err != nil {
+		if mountCleanup != nil {
+			_ = mountCleanup(context.WithoutCancel(ctx))
+		}
+		return nil, err
+	}
+	return &Container{
+		ID:              r.ID,
+		Bundle:          r.Bundle,
+		process:         p,
+		processes:       make(map[string]process.Process),
+		reservedProcess: make(map[string]struct{}),
+		mountCleanup:    mountCleanup,
+	}, nil
 }

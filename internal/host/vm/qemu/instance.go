@@ -238,3 +238,12 @@ func newInstance(ctx context.Context, containerID, binaryPath, stateDir string, 
 
 	return inst, nil
 }
+
+// QemuBinaryPath returns the QEMU this host runs VMs with.
+//
+// Exported for callers that need to find the tools shipped beside it - creating
+// a copy-on-write overlay needs qemu-img, and the release that carries QEMU is
+// the only thing that knows where it is.
+func QemuBinaryPath() (string, error) {
+	return findQemu()
+}

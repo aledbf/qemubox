@@ -127,17 +127,21 @@ func (q *Instance) validateConfiguration() error {
 		return fmt.Errorf("max CPUs (%d) cannot be less than boot CPUs (%d)", q.resourceCfg.MaxCPUs, q.resourceCfg.BootCPUs)
 	}
 
-	// Require at least one network interface from CNI - except on the VM a
-	// template is made from, which has no NIC by design.
+	// A VM with no NIC is not checked for here any more.
 	//
-	// The rule was written when the guest read its address from the kernel
-	// command line during initialization, so a VM without a NIC was a
-	// misconfiguration. It is not one for a template: a template does not know
-	// which container it will become, and system.Apply skips networking when it
-	// is given no address. The NIC arrives with the VM restored from it.
-	if len(q.nets) == 0 && !q.buildsTemplate() {
-		return fmt.Errorf("no network interface configured: call AddNetwork() before Start()")
-	}
+	// It used to be rejected, because the guest read its address from the kernel
+	// command line during initialization and a VM without a NIC could not finish
+	// coming up. system.Apply skips networking when it is given no address, so
+	// that is no longer true, and three callers legitimately have no NIC: the VM a
+	// template is built from, which does not know which container it will become;
+	// `spinbox run`, which runs a container with no network at all; and any
+	// embedder driving this package as a library.
+	//
+	// What the rule actually guarded was a shim bug - CNI not having run - and
+	// that is the shim's to check, where the answer is known. It does, in
+	// startVM. A VM package that refuses to start a VM because of a policy
+	// belonging to one of its callers is the kind of thing this command was
+	// written to find.
 
 	return nil
 }

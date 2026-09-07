@@ -418,12 +418,3 @@ func nonEmpty(values ...string) []string {
 	}
 	return kept
 }
-
-// buildsTemplate reports whether this VM is the one a template is made from: it
-// writes guest memory into a template's RAM file and loads no state of its own.
-//
-// Derived rather than flagged, because it is exactly what those two fields mean
-// together and a third field could disagree with them.
-func (q *Instance) buildsTemplate() bool {
-	return q.memoryFilePath != "" && q.restoreStatePath == ""
-}

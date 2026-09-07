@@ -12,6 +12,10 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
+// resolvConfPath is the guest's resolver configuration, written by system.Apply from
+// the address this VM was given. A VM given no address does not have one.
+const resolvConfPath = "/etc/resolv.conf"
+
 // ShouldKillAllOnExit reads the bundle's OCI spec and returns true if
 // there is an error reading the spec or if the container has a private PID namespace
 func ShouldKillAllOnExit(ctx context.Context, bundlePath string) bool {
@@ -113,19 +117,29 @@ func RelaxOCISpec(ctx context.Context, bundlePath string) error {
 		}
 	}
 
-	// Add /etc/resolv.conf if not present
+	// Add /etc/resolv.conf if not present.
+	//
+	// Only if this VM has one. It is written by system.Apply from the address the
+	// VM was given, and a VM given no address has no DNS to pass on - which is a
+	// real configuration now that the guest no longer requires a NIC to finish
+	// starting. Bind-mounting a file that is not there fails the container
+	// outright, with "cannot stat /etc/resolv.conf" from the runtime and nothing
+	// saying why it was asked for.
 	hasResolv := false
 	for _, m := range newMounts {
-		if m.Destination == "/etc/resolv.conf" {
+		if m.Destination == resolvConfPath {
 			hasResolv = true
 			break
 		}
 	}
+	if _, err := os.Stat(resolvConfPath); err != nil {
+		hasResolv = true // nothing to bind; leave the container without DNS
+	}
 	if !hasResolv {
 		newMounts = append(newMounts, specs.Mount{
-			Destination: "/etc/resolv.conf",
+			Destination: resolvConfPath,
 			Type:        "bind",
-			Source:      "/etc/resolv.conf",
+			Source:      resolvConfPath,
 			Options:     []string{"rbind", "ro"},
 		})
 	}
