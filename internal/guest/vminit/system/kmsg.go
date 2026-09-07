@@ -94,13 +94,31 @@ func DumpKernelBootProfile(ctx context.Context) {
 		return
 	}
 
+	// Prefer the tracepoint durations where we have them: initcall_debug's own
+	// numbers are quantised to 1 ms for every initcall that runs before the TSC
+	// clocksource is registered. See traceInitcallDurations.
+	refined := 0
+	if traced := traceInitcallDurations(); len(traced) > 0 {
+		for i := range calls {
+			if us, ok := traced[calls[i].name]; ok {
+				calls[i].usec = us
+				refined++
+			}
+		}
+	}
+	source := "initcall_debug"
+	if refined > 0 {
+		source = "tracepoints"
+	}
+
 	sum := 0
 	for _, c := range calls {
 		sum += c.usec
 	}
 	sort.Slice(calls, func(i, j int) bool { return calls[i].usec > calls[j].usec })
 
-	log.G(ctx).Infof("KMSG_PROFILE initcalls=%d sum_us=%d last_ts_us=%d", len(calls), sum, lastTS)
+	log.G(ctx).Infof("KMSG_PROFILE initcalls=%d sum_us=%d last_ts_us=%d source=%s refined=%d/%d",
+		len(calls), sum, lastTS, source, refined, len(calls))
 	for i, c := range calls {
 		if i >= kmsgTopN {
 			break
@@ -251,6 +269,13 @@ const (
 	tracefsTrace = tracefsDir + "/trace"
 )
 
+// traceInitcallRE matches an initcall_start / initcall_finish event in the
+// ftrace text format:
+//
+//	<idle>-1  [000] .....  0.089303: initcall_start: func=acpi_init+0x0/0x460
+//	<idle>-1  [000] .....  0.107303: initcall_finish: func=acpi_init+0x0/0x460 ret=0
+var traceInitcallRE = regexp.MustCompile(`\s(\d+)\.(\d{6}): initcall_(start|finish): func=(\S+)`)
+
 // traceLevelRE matches an initcall_level event in the ftrace text format:
 //
 //	<idle>-1  [000] .....  0.089303: initcall_level: level=early
@@ -275,16 +300,9 @@ type kmsgLevel struct {
 // every non-profiling boot: this must add nothing to a VM that did not ask for
 // it.
 func initcallLevels() []kmsgLevel {
-	data, err := os.ReadFile(tracefsTrace)
-	if err != nil {
-		// tracefs is not mounted on a normal boot; mount it once, here, rather
-		// than making every VM carry a mount it will not read.
-		if err := unix.Mount("tracefs", tracefsDir, "tracefs", 0, ""); err != nil {
-			return nil
-		}
-		if data, err = os.ReadFile(tracefsTrace); err != nil {
-			return nil
-		}
+	data, ok := readTracefsTrace()
+	if !ok {
+		return nil
 	}
 
 	type mark struct {
@@ -292,7 +310,7 @@ func initcallLevels() []kmsgLevel {
 		usec int64
 	}
 	var marks []mark
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(data, "\n") {
 		m := traceLevelRE.FindStringSubmatch(line)
 		if m == nil {
 			continue
@@ -318,4 +336,82 @@ func initcallLevels() []kmsgLevel {
 		levels = append(levels, kmsgLevel{name: marks[i].name, usec: marks[i+1].usec - marks[i].usec})
 	}
 	return levels
+}
+
+// readTracefsTrace returns the contents of the ftrace buffer, mounting tracefs
+// first if it is not there. Empty and false on any boot that did not ask for
+// tracing, which is every non-profiling one: this must add nothing to a VM that
+// did not ask for it.
+func readTracefsTrace() (string, bool) {
+	data, err := os.ReadFile(tracefsTrace)
+	if err != nil {
+		// tracefs is not mounted on a normal boot; mount it once, here, rather
+		// than making every VM carry a mount it will not read.
+		if err := unix.Mount("tracefs", tracefsDir, "tracefs", 0, ""); err != nil {
+			return "", false
+		}
+		if data, err = os.ReadFile(tracefsTrace); err != nil {
+			return "", false
+		}
+	}
+	return string(data), true
+}
+
+// traceInitcallDurations returns per-initcall durations in microseconds, taken
+// from the initcall_start/initcall_finish tracepoints rather than from
+// initcall_debug's own printk.
+//
+// The two do not measure equally well, and the difference is not small. What
+// initcall_debug prints comes from ktime_get(), which until the TSC clocksource
+// is registered is served by the jiffies clocksource - resolution 1/HZ, so 1 ms
+// here (CONFIG_HZ=1000). Every initcall that runs before that registration, and
+// that is all of the core/postcore/arch/subsys levels, is therefore reported
+// rounded to a whole millisecond: across 42 boots this profiler reported
+// acpi_init as 2000, 6000, 7000, 17000, 18000, 19000 or 20000 us and never once
+// anything in between, while device-level initcalls in the same boots came back
+// as 6447, 7003 or 2756. `acpi_init = 18000 us` was never 18000 microseconds
+// measured; it was 18 jiffies.
+//
+// ftrace timestamps come from local_clock(), which is TSC-backed from very
+// early boot, so the tracepoints carry microseconds for the early initcalls too.
+// They are enabled by the same trace_event=initcall:* the level breakdown
+// already needs, so this costs nothing that was not already being paid.
+//
+// Empty when the tracepoints were not enabled; the caller then keeps the
+// initcall_debug numbers, coarse as they are.
+func traceInitcallDurations() map[string]int {
+	data, ok := readTracefsTrace()
+	if !ok {
+		return nil
+	}
+
+	started := make(map[string]int64)
+	out := make(map[string]int)
+	for _, line := range strings.Split(data, "\n") {
+		m := traceInitcallRE.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		sec, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		frac, err := strconv.ParseInt(m[2], 10, 64)
+		if err != nil {
+			continue
+		}
+		us := sec*1_000_000 + frac
+		name := m[4]
+		if m[3] == "start" {
+			started[name] = us
+			continue
+		}
+		// initcall_finish: pair it with the start we saw. Initcalls do not nest,
+		// so one pending start per name is all there ever is.
+		if begin, seen := started[name]; seen {
+			out[name] = int(us - begin)
+			delete(started, name)
+		}
+	}
+	return out
 }

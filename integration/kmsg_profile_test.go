@@ -35,6 +35,8 @@ var kmsgEntryRE = regexp.MustCompile(`KMSG_PROFILE\s+(\d+) us\s+(\S+)`)
 // the kernel-side boot duration; sum_us is the initcall total, and the gap
 // between them is the non-initcall kernel work.
 func TestKernelBootProfileComplete(t *testing.T) {
+	requireQuietHost(t)
+
 	cfg := loadTestConfig()
 
 	client := setupContainerdClient(t, cfg)

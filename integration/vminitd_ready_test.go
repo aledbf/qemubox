@@ -37,6 +37,8 @@ var readyPhaseOrder = []string{"pid1-entry", "system-init", "vsock-listen", "ser
 // This is the clean split BOOT_TIMELINE's guest_boot (tVsock - tQMP) could not
 // give, since that lumps kernel + vminitd + handshake together.
 func TestVminitdReady(t *testing.T) {
+	requireQuietHost(t)
+
 	cfg := loadTestConfig()
 
 	client := setupContainerdClient(t, cfg)

@@ -44,6 +44,8 @@ func bootLatencyCeiling() time.Duration {
 // Absolute numbers reflect the active shim/containerd log level and host load;
 // the MIN over N iterations is the most stable signal, so the guard is on it.
 func TestBootLatency(t *testing.T) {
+	requireQuietHost(t)
+
 	cfg := loadTestConfig()
 
 	client := setupContainerdClient(t, cfg)
