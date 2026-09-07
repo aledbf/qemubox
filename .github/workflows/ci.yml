@@ -4,6 +4,19 @@ on:
   push:
   pull_request:
 
+# A push to a branch with an open pull request fires both triggers, so every
+# push ran CI twice. On a self-hosted runner the two integration jobs install the
+# same release and restart the same containerd, and the loser fails during setup
+# with something unrelated-looking - "ctr: error stating device path: stat
+# /dev/disk/by-label" was the one that led here. One of the pair passed and the
+# other went red, which reads as a flaky test and is not.
+#
+# ref_name and head_ref are the same branch name for the two events, so they
+# share a group and only one survives.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
