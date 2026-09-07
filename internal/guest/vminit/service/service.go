@@ -59,7 +59,7 @@ func New(ctx context.Context, cfg *config.ServiceConfig) (Runnable, error) {
 	log.G(ctx).WithFields(log.Fields{
 		"cid":  cfg.VSockContextID,
 		"port": cfg.RPCPort,
-	}).Info("listening on vsock for RPC connections")
+	}).Debug("listening on vsock for RPC connections")
 	boottime.LogReady(ctx, "vsock-listen")
 	cfg.Shutdown.RegisterCallback(func(ctx context.Context) error {
 		return l.Close()
@@ -88,7 +88,7 @@ func New(ctx context.Context, cfg *config.ServiceConfig) (Runnable, error) {
 			continue
 		}
 
-		log.G(ctx).WithField("plugin_id", id).Info("loading plugin")
+		log.G(ctx).WithField("plugin_id", id).Debug("loading plugin")
 
 		ic := plugin.NewContext(ctx, initializedPlugins, nil)
 

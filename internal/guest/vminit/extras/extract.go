@@ -88,7 +88,7 @@ func Extract(ctx context.Context) error {
 		return err
 	}
 	if cfg.device == "" {
-		log.G(ctx).Info("no extras disk configured (spin.extras_disk not in kernel cmdline)")
+		log.G(ctx).Debug("no extras disk configured (spin.extras_disk not in kernel cmdline)")
 		return nil
 	}
 
