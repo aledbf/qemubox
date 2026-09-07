@@ -165,7 +165,13 @@ type Instance struct {
 	consoleFifoPath string   // Ephemeral FIFO pipe (stateDir) - QEMU writes here, prevents blocking on slow disk I/O
 	qemuLogPath     string   // QEMU stderr log
 	consoleFile     *os.File // Console log file handle
-	consoleFifo     *os.File // FIFO reader handle (closed on shutdown to cancel console goroutine)
+
+	// Snapshot support; both empty on a VM that neither builds a template nor
+	// restores from one. See snapshot.go.
+	memoryFilePath   string // guest RAM lives here, so a snapshot can skip it
+	restoreStatePath string // restore from this template instead of booting
+
+	consoleFifo *os.File // FIFO reader handle (closed on shutdown to cancel console goroutine)
 
 	// Runtime state
 	cmd       *exec.Cmd

@@ -52,9 +52,16 @@ func New(ctx context.Context, cfg *config.ServiceConfig) (Runnable, error) {
 		}
 	}
 
-	l, err := vsock.ListenContextID(uint32(cfg.VSockContextID), uint32(cfg.RPCPort), &vsock.Config{})
+	// Listen on whatever CID this VM currently has, rather than binding to the
+	// one the kernel command line named at boot. The two are the same for a VM
+	// that booted normally, and they are not the same for a VM restored from a
+	// template: the guest carries the template's CID in its command line, while
+	// its vhost-vsock device was given a fresh one. Binding to the stale CID
+	// leaves the listener unreachable, and the host times out waiting for a
+	// guest that is running and healthy.
+	l, err := vsock.Listen(uint32(cfg.RPCPort), &vsock.Config{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to listen on vsock port %d with context id %d: %w", cfg.RPCPort, cfg.VSockContextID, err)
+		return nil, fmt.Errorf("failed to listen on vsock port %d: %w", cfg.RPCPort, err)
 	}
 	log.G(ctx).WithFields(log.Fields{
 		"cid":  cfg.VSockContextID,

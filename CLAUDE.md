@@ -56,6 +56,23 @@ This CLAUDE.md is the **authoritative source** for development guidelines. It is
 - **MUST NOT** hold locks during slow operations (network calls, VM operations)
 - **MUST NOT** mutate global state without synchronization
 
+### Tooling [MUST NOT]
+
+- **MUST NOT** use Python - or Perl, or any other language - as a sophisticated
+  `sed` to edit files in this repository. Rewriting a `.go` file by piping it
+  through a `python3 - <<'PY'` heredoc that does string replacement is
+  forbidden: it fails silently when an anchor stops matching, it mangles
+  escaping, and it leaves no reviewable diff. Edit files with the editor.
+- **MUST NOT** write throwaway scripts in another language for work this
+  repository already does in Go. Benchmarks and experiments belong in `go test`
+  (see `integration/` and the `_test.go` files behind the `integration` build
+  tag), where they get the project's own VM setup, its helpers and its CI. A
+  measurement harness written outside Go re-implements the shim badly and ends
+  up measuring itself - it has already happened here, twice.
+- Shell is right for what shell is for: driving `task`, `systemctl`, `ctr`,
+  `perf`, and inspecting the system. This rule is about *editing sources* and
+  about *code that stays*.
+
 ### Concurrency Patterns [CRITICAL]
 
 This project uses sophisticated concurrency. Follow these patterns:
