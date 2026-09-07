@@ -17,9 +17,15 @@ jobs:
       - name: Check Go installation
         id: check-go
         run: |
-          if command -v go &> /dev/null; then
+          # A pre-installed Go only counts if it is new enough for the language
+          # version go.mod targets. The runner is self-hosted and keeps whatever
+          # it was given, so "go exists" alone let a go1.26 toolchain sit in front
+          # of a `go 1.27` go.mod until something downstream refused to build.
+          WANT="$(awk '/^go /{print $2; exit}' go.mod)"
+          HAVE="$(command -v go >/dev/null 2>&1 && go env GOVERSION | sed 's/^go//' || echo "")"
+          if [ -n "${HAVE}" ] && [ "$(printf '%s\n%s\n' "${WANT}" "${HAVE}" | sort -V | head -n1)" = "${WANT}" ]; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Go already installed: $(go version)"
+            echo "Go already installed: $(go version) (go.mod wants ${WANT})"
             # Ensure Go is in PATH
             GO_BIN_DIR=$(dirname $(command -v go))
             echo "${GO_BIN_DIR}" >> $GITHUB_PATH
@@ -27,7 +33,7 @@ jobs:
             echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Go not found"
+            echo "Go ${HAVE:-not found}; go.mod wants ${WANT}"
           fi
 
       - name: Set up Go
@@ -103,12 +109,20 @@ jobs:
       - name: Check golangci-lint installation
         id: check-golangci-lint
         run: |
-          if command -v golangci-lint &> /dev/null; then
+          # golangci-lint refuses to load a config whose targeted Go version is
+          # newer than the toolchain it was itself built with, so a cached binary
+          # from an older Go fails every run after a go.mod bump:
+          #   can't load config: the Go language version (go1.26) used to build
+          #   golangci-lint is lower than the targeted Go version (1.27)
+          # Reinstalling is the fix, so the existence check has to notice.
+          GO_MINOR="$(go env GOVERSION | cut -d. -f1-2)"
+          if command -v golangci-lint >/dev/null 2>&1 && \
+             golangci-lint --version 2>/dev/null | grep -q "built with ${GO_MINOR}"; then
             echo "exists=true" >> $GITHUB_OUTPUT
             echo "golangci-lint already installed: $(golangci-lint --version)"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "golangci-lint not found"
+            echo "golangci-lint missing or not built with ${GO_MINOR}"
           fi
 
       - name: Install golangci-lint
@@ -162,9 +176,15 @@ jobs:
       - name: Check Go installation
         id: check-go
         run: |
-          if command -v go &> /dev/null; then
+          # A pre-installed Go only counts if it is new enough for the language
+          # version go.mod targets. The runner is self-hosted and keeps whatever
+          # it was given, so "go exists" alone let a go1.26 toolchain sit in front
+          # of a `go 1.27` go.mod until something downstream refused to build.
+          WANT="$(awk '/^go /{print $2; exit}' go.mod)"
+          HAVE="$(command -v go >/dev/null 2>&1 && go env GOVERSION | sed 's/^go//' || echo "")"
+          if [ -n "${HAVE}" ] && [ "$(printf '%s\n%s\n' "${WANT}" "${HAVE}" | sort -V | head -n1)" = "${WANT}" ]; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Go already installed: $(go version)"
+            echo "Go already installed: $(go version) (go.mod wants ${WANT})"
             # Ensure Go is in PATH
             GO_BIN_DIR=$(dirname $(command -v go))
             echo "${GO_BIN_DIR}" >> $GITHUB_PATH
@@ -172,7 +192,7 @@ jobs:
             echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Go not found"
+            echo "Go ${HAVE:-not found}; go.mod wants ${WANT}"
           fi
 
       - name: Set up Go
