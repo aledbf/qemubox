@@ -71,6 +71,19 @@ service System {
 	//   - FAILED_PRECONDITION: memory block is already online
 	//   - INTERNAL: failed to write to sysfs
 	rpc OnlineMemory(OnlineMemoryRequest) returns (google.protobuf.Empty);
+
+	// RescanPCI re-enumerates the PCI bus and waits for the expected number of
+	// virtio block devices to appear.
+	//
+	// A VM restored from a template enumerated its PCI bus when the template
+	// booted, before any of this container's disks existed. They are cold-plugged
+	// onto the restored VM's command line, so QEMU has them from the first
+	// instruction, but the guest has never looked. This makes it look.
+	//
+	// Returns:
+	//   - INTERNAL: the rescan could not be triggered
+	//   - DEADLINE_EXCEEDED: fewer devices than expected appeared in time
+	rpc RescanPCI(RescanPCIRequest) returns (RescanPCIResponse);
 }
 
 message InfoResponse {
@@ -108,4 +121,17 @@ message OnlineMemoryRequest {
 	// memory_id is the memory block ID to online (zero-indexed).
 	// This corresponds to the QMP memory slot number.
 	uint32 memory_id = 1;
+}
+
+message RescanPCIRequest {
+	// expected_block_devices is how many virtio block devices the host attached
+	// to this VM. The guest waits for that many rather than for a timeout to
+	// expire: it is told what to expect instead of guessing.
+	uint32 expected_block_devices = 1;
+}
+
+message RescanPCIResponse {
+	// block_devices lists the virtio block device names found after the rescan
+	// (e.g. "vda", "vdb").
+	repeated string block_devices = 1;
 }

@@ -271,6 +271,26 @@ file {
       json_name: "memoryId"
     }
   }
+  message_type {
+    name: "RescanPCIRequest"
+    field {
+      name: "expected_block_devices"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT32
+      json_name: "expectedBlockDevices"
+    }
+  }
+  message_type {
+    name: "RescanPCIResponse"
+    field {
+      name: "block_devices"
+      number: 1
+      label: LABEL_REPEATED
+      type: TYPE_STRING
+      json_name: "blockDevices"
+    }
+  }
   service {
     name: "System"
     method {
@@ -313,36 +333,14 @@ file {
       input_type: ".containerd.vminitd.services.system.v1.OnlineMemoryRequest"
       output_type: ".google.protobuf.Empty"
     }
+    method {
+      name: "RescanPCI"
+      input_type: ".containerd.vminitd.services.system.v1.RescanPCIRequest"
+      output_type: ".containerd.vminitd.services.system.v1.RescanPCIResponse"
+    }
   }
   options {
     go_package: "github.com/spin-stack/spinbox/api/services/system/v1;system"
-  }
-  syntax: "proto3"
-}
-file {
-  name: "github.com/containerd/containerd/api/types/fieldpath.proto"
-  package: "containerd.types"
-  dependency: "google/protobuf/descriptor.proto"
-  extension {
-    name: "fieldpath_all"
-    extendee: ".google.protobuf.FileOptions"
-    number: 63300
-    label: LABEL_OPTIONAL
-    type: TYPE_BOOL
-    json_name: "fieldpathAll"
-    proto3_optional: true
-  }
-  extension {
-    name: "fieldpath"
-    extendee: ".google.protobuf.MessageOptions"
-    number: 64400
-    label: LABEL_OPTIONAL
-    type: TYPE_BOOL
-    json_name: "fieldpath"
-    proto3_optional: true
-  }
-  options {
-    go_package: "github.com/containerd/containerd/api/types;types"
   }
   syntax: "proto3"
 }
@@ -408,11 +406,38 @@ file {
   syntax: "proto3"
 }
 file {
+  name: "types/fieldpath.proto"
+  package: "containerd.types"
+  dependency: "google/protobuf/descriptor.proto"
+  extension {
+    name: "fieldpath_all"
+    extendee: ".google.protobuf.FileOptions"
+    number: 63300
+    label: LABEL_OPTIONAL
+    type: TYPE_BOOL
+    json_name: "fieldpathAll"
+    proto3_optional: true
+  }
+  extension {
+    name: "fieldpath"
+    extendee: ".google.protobuf.MessageOptions"
+    number: 64400
+    label: LABEL_OPTIONAL
+    type: TYPE_BOOL
+    json_name: "fieldpath"
+    proto3_optional: true
+  }
+  options {
+    go_package: "github.com/containerd/containerd/api/types;types"
+  }
+  syntax: "proto3"
+}
+file {
   name: "github.com/containerd/containerd/api/types/event.proto"
   package: "containerd.types"
-  dependency: "github.com/containerd/containerd/api/types/fieldpath.proto"
   dependency: "google/protobuf/any.proto"
   dependency: "google/protobuf/timestamp.proto"
+  dependency: "types/fieldpath.proto"
   message_type {
     name: "Envelope"
     field {

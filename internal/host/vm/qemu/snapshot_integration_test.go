@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	system "github.com/spin-stack/spinbox/api/services/system/v1"
 	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
@@ -97,6 +98,20 @@ func TestTemplateRestore(t *testing.T) {
 	if err := restInst.UseMemoryFile(ramPath); err != nil {
 		t.Fatalf("UseMemoryFile: %v", err)
 	}
+	// A disk the template never had. The whole design rests on this working: a
+	// template cannot know which container it will become, so it is frozen with
+	// none of the container's disks, and they are cold-plugged onto the restored
+	// VM's command line instead. QEMU accepts a destination with devices the
+	// stream carries no state for; the guest is the question, because it
+	// enumerated its PCI bus inside the template, when these slots were empty.
+	diskPath := filepath.Join(dir, "container.raw")
+	if err := os.WriteFile(diskPath, make([]byte, 1<<20), 0600); err != nil {
+		t.Fatalf("creating the container disk: %v", err)
+	}
+	if err := restInst.AddDisk(ctx, "container", diskPath, vm.WithReadOnly()); err != nil {
+		t.Fatalf("AddDisk: %v", err)
+	}
+
 	if err := restInst.RestoreFrom(statePath); err != nil {
 		t.Fatalf("RestoreFrom: %v", err)
 	}
@@ -139,6 +154,26 @@ func TestTemplateRestore(t *testing.T) {
 	// fail if it had happened to be the same CID, so the log is checked too.
 	if logged := tailFile(restInst.qemuLogPath, 200); strings.Contains(logged, "missed transport reset") {
 		t.Errorf("guest never received the transport reset event:\n%s", logged)
+	}
+
+	// The guest has never looked at the slot its disk sits in. This is the host
+	// telling it to look, and it is the step that replaces a PCIe hot-plug - which
+	// would cost about 100 ms of link training and driver probe.
+	client, err := restInst.DialClient(ctx)
+	if err != nil {
+		t.Fatalf("dialling the restored guest: %v", err)
+	}
+	defer client.Close()
+
+	rescanStart := time.Now()
+	resp, err := system.NewTTRPCSystemClient(client).RescanPCI(ctx, &system.RescanPCIRequest{ExpectedBlockDevices: 1})
+	if err != nil {
+		t.Fatalf("SNAPSHOT the restored guest never saw its disk: %v", err)
+	}
+	t.Logf("SNAPSHOT guest found %v after a PCI rescan, %d ms after the restore",
+		resp.GetBlockDevices(), time.Since(rescanStart).Milliseconds())
+	if len(resp.GetBlockDevices()) != 1 {
+		t.Errorf("expected exactly the one disk that was attached, got %v", resp.GetBlockDevices())
 	}
 
 	t.Logf("SNAPSHOT restored VM resident memory: %.1f MB (template RAM file is 512 MB, mapped copy-on-write)",

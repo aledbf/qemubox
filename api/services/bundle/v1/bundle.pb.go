@@ -34,7 +34,6 @@ type CreateRequest struct {
 	//   - Absolute paths (starting with /) are rejected
 	//   - Path separators (/ or \) are rejected - only simple filenames allowed
 	//   - "." and ".." are rejected
-	//
 	// Invalid filenames result in INVALID_ARGUMENT error.
 	Files         map[string][]byte `protobuf:"bytes,2,rep,name=files,proto3" json:"files,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields

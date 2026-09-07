@@ -305,6 +305,99 @@ func (x *OnlineMemoryRequest) GetMemoryID() uint32 {
 	return 0
 }
 
+type RescanPCIRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// expected_block_devices is how many virtio block devices the host attached
+	// to this VM. The guest waits for that many rather than for a timeout to
+	// expire: it is told what to expect instead of guessing.
+	ExpectedBlockDevices uint32 `protobuf:"varint,1,opt,name=expected_block_devices,json=expectedBlockDevices,proto3" json:"expected_block_devices,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *RescanPCIRequest) Reset() {
+	*x = RescanPCIRequest{}
+	mi := &file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RescanPCIRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RescanPCIRequest) ProtoMessage() {}
+
+func (x *RescanPCIRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RescanPCIRequest.ProtoReflect.Descriptor instead.
+func (*RescanPCIRequest) Descriptor() ([]byte, []int) {
+	return file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RescanPCIRequest) GetExpectedBlockDevices() uint32 {
+	if x != nil {
+		return x.ExpectedBlockDevices
+	}
+	return 0
+}
+
+type RescanPCIResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// block_devices lists the virtio block device names found after the rescan
+	// (e.g. "vda", "vdb").
+	BlockDevices  []string `protobuf:"bytes,1,rep,name=block_devices,json=blockDevices,proto3" json:"block_devices,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RescanPCIResponse) Reset() {
+	*x = RescanPCIResponse{}
+	mi := &file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RescanPCIResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RescanPCIResponse) ProtoMessage() {}
+
+func (x *RescanPCIResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RescanPCIResponse.ProtoReflect.Descriptor instead.
+func (*RescanPCIResponse) Descriptor() ([]byte, []int) {
+	return file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *RescanPCIResponse) GetBlockDevices() []string {
+	if x != nil {
+		return x.BlockDevices
+	}
+	return nil
+}
+
 var File_github_com_spin_stack_spinbox_api_services_system_v1_info_proto protoreflect.FileDescriptor
 
 const file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDesc = "" +
@@ -322,7 +415,11 @@ const file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDe
 	"\x14OfflineMemoryRequest\x12\x1b\n" +
 	"\tmemory_id\x18\x01 \x01(\rR\bmemoryId\"2\n" +
 	"\x13OnlineMemoryRequest\x12\x1b\n" +
-	"\tmemory_id\x18\x01 \x01(\rR\bmemoryId2\xda\x05\n" +
+	"\tmemory_id\x18\x01 \x01(\rR\bmemoryId\"H\n" +
+	"\x10RescanPCIRequest\x124\n" +
+	"\x16expected_block_devices\x18\x01 \x01(\rR\x14expectedBlockDevices\"8\n" +
+	"\x11RescanPCIResponse\x12#\n" +
+	"\rblock_devices\x18\x01 \x03(\tR\fblockDevices2\xda\x06\n" +
 	"\x06System\x12S\n" +
 	"\x04Info\x12\x16.google.protobuf.Empty\x1a3.containerd.vminitd.services.system.v1.InfoResponse\x12A\n" +
 	"\x0fPrepareShutdown\x12\x16.google.protobuf.Empty\x1a\x16.google.protobuf.Empty\x12m\n" +
@@ -332,7 +429,8 @@ const file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDe
 	"OfflineCPU\x128.containerd.vminitd.services.system.v1.OfflineCPURequest\x1a\x16.google.protobuf.Empty\x12\\\n" +
 	"\tOnlineCPU\x127.containerd.vminitd.services.system.v1.OnlineCPURequest\x1a\x16.google.protobuf.Empty\x12d\n" +
 	"\rOfflineMemory\x12;.containerd.vminitd.services.system.v1.OfflineMemoryRequest\x1a\x16.google.protobuf.Empty\x12b\n" +
-	"\fOnlineMemory\x12:.containerd.vminitd.services.system.v1.OnlineMemoryRequest\x1a\x16.google.protobuf.EmptyB=Z;github.com/spin-stack/spinbox/api/services/system/v1;systemb\x06proto3"
+	"\fOnlineMemory\x12:.containerd.vminitd.services.system.v1.OnlineMemoryRequest\x1a\x16.google.protobuf.Empty\x12~\n" +
+	"\tRescanPCI\x127.containerd.vminitd.services.system.v1.RescanPCIRequest\x1a8.containerd.vminitd.services.system.v1.RescanPCIResponseB=Z;github.com/spin-stack/spinbox/api/services/system/v1;systemb\x06proto3"
 
 var (
 	file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDescOnce sync.Once
@@ -346,7 +444,7 @@ func file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDes
 	return file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDescData
 }
 
-var file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_goTypes = []any{
 	(*InfoResponse)(nil),              // 0: containerd.vminitd.services.system.v1.InfoResponse
 	(*FreezeFilesystemsResponse)(nil), // 1: containerd.vminitd.services.system.v1.FreezeFilesystemsResponse
@@ -354,27 +452,31 @@ var file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_goTypes
 	(*OnlineCPURequest)(nil),          // 3: containerd.vminitd.services.system.v1.OnlineCPURequest
 	(*OfflineMemoryRequest)(nil),      // 4: containerd.vminitd.services.system.v1.OfflineMemoryRequest
 	(*OnlineMemoryRequest)(nil),       // 5: containerd.vminitd.services.system.v1.OnlineMemoryRequest
-	(*emptypb.Empty)(nil),             // 6: google.protobuf.Empty
+	(*RescanPCIRequest)(nil),          // 6: containerd.vminitd.services.system.v1.RescanPCIRequest
+	(*RescanPCIResponse)(nil),         // 7: containerd.vminitd.services.system.v1.RescanPCIResponse
+	(*emptypb.Empty)(nil),             // 8: google.protobuf.Empty
 }
 var file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_depIdxs = []int32{
-	6, // 0: containerd.vminitd.services.system.v1.System.Info:input_type -> google.protobuf.Empty
-	6, // 1: containerd.vminitd.services.system.v1.System.PrepareShutdown:input_type -> google.protobuf.Empty
-	6, // 2: containerd.vminitd.services.system.v1.System.FreezeFilesystems:input_type -> google.protobuf.Empty
-	6, // 3: containerd.vminitd.services.system.v1.System.ThawFilesystems:input_type -> google.protobuf.Empty
+	8, // 0: containerd.vminitd.services.system.v1.System.Info:input_type -> google.protobuf.Empty
+	8, // 1: containerd.vminitd.services.system.v1.System.PrepareShutdown:input_type -> google.protobuf.Empty
+	8, // 2: containerd.vminitd.services.system.v1.System.FreezeFilesystems:input_type -> google.protobuf.Empty
+	8, // 3: containerd.vminitd.services.system.v1.System.ThawFilesystems:input_type -> google.protobuf.Empty
 	2, // 4: containerd.vminitd.services.system.v1.System.OfflineCPU:input_type -> containerd.vminitd.services.system.v1.OfflineCPURequest
 	3, // 5: containerd.vminitd.services.system.v1.System.OnlineCPU:input_type -> containerd.vminitd.services.system.v1.OnlineCPURequest
 	4, // 6: containerd.vminitd.services.system.v1.System.OfflineMemory:input_type -> containerd.vminitd.services.system.v1.OfflineMemoryRequest
 	5, // 7: containerd.vminitd.services.system.v1.System.OnlineMemory:input_type -> containerd.vminitd.services.system.v1.OnlineMemoryRequest
-	0, // 8: containerd.vminitd.services.system.v1.System.Info:output_type -> containerd.vminitd.services.system.v1.InfoResponse
-	6, // 9: containerd.vminitd.services.system.v1.System.PrepareShutdown:output_type -> google.protobuf.Empty
-	1, // 10: containerd.vminitd.services.system.v1.System.FreezeFilesystems:output_type -> containerd.vminitd.services.system.v1.FreezeFilesystemsResponse
-	6, // 11: containerd.vminitd.services.system.v1.System.ThawFilesystems:output_type -> google.protobuf.Empty
-	6, // 12: containerd.vminitd.services.system.v1.System.OfflineCPU:output_type -> google.protobuf.Empty
-	6, // 13: containerd.vminitd.services.system.v1.System.OnlineCPU:output_type -> google.protobuf.Empty
-	6, // 14: containerd.vminitd.services.system.v1.System.OfflineMemory:output_type -> google.protobuf.Empty
-	6, // 15: containerd.vminitd.services.system.v1.System.OnlineMemory:output_type -> google.protobuf.Empty
-	8, // [8:16] is the sub-list for method output_type
-	0, // [0:8] is the sub-list for method input_type
+	6, // 8: containerd.vminitd.services.system.v1.System.RescanPCI:input_type -> containerd.vminitd.services.system.v1.RescanPCIRequest
+	0, // 9: containerd.vminitd.services.system.v1.System.Info:output_type -> containerd.vminitd.services.system.v1.InfoResponse
+	8, // 10: containerd.vminitd.services.system.v1.System.PrepareShutdown:output_type -> google.protobuf.Empty
+	1, // 11: containerd.vminitd.services.system.v1.System.FreezeFilesystems:output_type -> containerd.vminitd.services.system.v1.FreezeFilesystemsResponse
+	8, // 12: containerd.vminitd.services.system.v1.System.ThawFilesystems:output_type -> google.protobuf.Empty
+	8, // 13: containerd.vminitd.services.system.v1.System.OfflineCPU:output_type -> google.protobuf.Empty
+	8, // 14: containerd.vminitd.services.system.v1.System.OnlineCPU:output_type -> google.protobuf.Empty
+	8, // 15: containerd.vminitd.services.system.v1.System.OfflineMemory:output_type -> google.protobuf.Empty
+	8, // 16: containerd.vminitd.services.system.v1.System.OnlineMemory:output_type -> google.protobuf.Empty
+	7, // 17: containerd.vminitd.services.system.v1.System.RescanPCI:output_type -> containerd.vminitd.services.system.v1.RescanPCIResponse
+	9, // [9:18] is the sub-list for method output_type
+	0, // [0:9] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -391,7 +493,7 @@ func file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_init()
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDesc), len(file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
