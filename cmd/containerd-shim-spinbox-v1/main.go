@@ -30,5 +30,5 @@ func main() {
 
 	// Log level is controlled by containerd configuration, not the shim
 	ctx := context.Background()
-	shim.Run(ctx, manager.NewShimManager("io.containerd.spinbox.v1"))
+	shim.RunShim(ctx, manager.NewShimManager("io.containerd.spinbox.v1"))
 }

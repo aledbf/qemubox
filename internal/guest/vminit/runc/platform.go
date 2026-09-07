@@ -33,9 +33,9 @@ func NewPlatform(m stream.Manager) (stdio.Platform, error) {
 		return nil, fmt.Errorf("failed to initialize epoller: %w", err)
 	}
 	go func() {
-		if err := epoller.Wait(); err != nil {
-			log.L.WithError(err).Error("epoller wait failed")
-		}
+		// Wait loops until a fatal epoll error occurs (including when the
+		// epoller is closed during shutdown), so it never returns nil.
+		log.L.WithError(epoller.Wait()).Error("epoller wait failed")
 	}()
 	return &linuxPlatform{
 		epoller: epoller,
