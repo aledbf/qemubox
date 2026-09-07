@@ -131,7 +131,21 @@ RUN <<EOT
         exit 1
     fi
 
+    # Strip the ELF symbol table before handing the image to QEMU. QEMU's
+    # load_elf() reads and qsort()s the symbol table of every kernel it loads -
+    # 42k entries here - and nothing in this stack ever asks it for a symbol:
+    # the guest resolves its own names through CONFIG_KALLSYMS, which lives in
+    # the loaded image data and is untouched by this.
+    #
+    # PT_LOAD is byte-identical either way (30.68 MB), so the guest boots the
+    # same bits; what goes away is 5.1 MB of file and the parse and sort of it.
+    # The PVH ELF notes this machine boots from are in the program headers and
+    # survive the strip - verified with readelf -n, and the integration suite
+    # boots on the result.
+    #
+    # Measured: qemu_launch 36.1 ms -> 24.3 ms, guest boot unchanged.
     cp vmlinux /build/kernel
+    strip -s /build/kernel
 EOT
 
 # ============================================================================

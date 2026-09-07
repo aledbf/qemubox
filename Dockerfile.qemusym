@@ -1,0 +1,198 @@
+# Dockerfile for building a static qemu-system-x86_64 binary (libc-compatible)
+# Target: microvm development environments
+
+FROM ubuntu:26.04 AS builder
+
+# Build arguments
+ARG QEMU_VERSION=11.1.1
+ARG JOBS=8
+# Bump when the configure flags or build/qemu/devices.mak change: the build directory lives
+# in a cache mount and configure only runs when it holds no config.status, so without this
+# a flag change would silently reuse the previous configuration.
+ARG QEMU_CONFIG_REV=2
+ARG DEBIAN_FRONTEND=noninteractive
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Configure apt to keep downloaded packages for cache mounts
+RUN rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
+# Install build dependencies
+RUN --mount=type=cache,sharing=locked,id=qemu-aptlib,target=/var/lib/apt \
+    --mount=type=cache,sharing=locked,id=qemu-aptcache,target=/var/cache/apt \
+    apt-get update && apt-get upgrade -y && \
+    apt-get --no-install-recommends install -y \
+        # Core build tools
+        build-essential \
+        meson \
+        ninja-build \
+        pkg-config \
+        python3 \
+        python3-venv \
+        python3-tomli \
+        bash \
+        coreutils \
+        curl \
+        ca-certificates \
+        xz-utils \
+        # Required libraries (dev packages for static linking)
+        libglib2.0-dev \
+        libglib2.0-0 \
+        zlib1g-dev \
+        libpixman-1-dev \
+        # For virtio and networking
+        linux-libc-dev \
+        libcap-ng-dev \
+        libseccomp-dev \
+        libseccomp2 \
+        # Additional useful dependencies
+        librdmacm-dev \
+        acpica-tools \
+        libbpf-dev \
+        libpmem-dev \
+        libaio-dev \
+        liburing-dev \
+        git \
+        flex \
+        bison \
+        autoconf \
+        automake \
+        libtool \
+        libffi-dev \
+        libelf-dev \
+        libdw-dev \
+        valgrind \
+        linux-libc-dev \
+        patch && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Download and extract QEMU source (cached across builds)
+# Store both tarball and extracted source in cache mount for maximum reuse
+RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
+    if [ ! -f "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz" ]; then \
+        echo "Downloading QEMU ${QEMU_VERSION} source..."; \
+        curl -fsSL "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" -o "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz"; \
+    else \
+        echo "Using cached QEMU ${QEMU_VERSION} source tarball"; \
+    fi && \
+    if [ ! -d "/var/cache/qemu/qemu-${QEMU_VERSION}" ]; then \
+        echo "Extracting QEMU source..."; \
+        tar -xf "/var/cache/qemu/qemu-${QEMU_VERSION}.tar.xz" -C /var/cache/qemu; \
+    else \
+        echo "Using cached extracted QEMU source"; \
+    fi
+
+# The device set (see build/qemu/devices.mak) and the flags.
+COPY build/qemu/devices.mak /build/spin-devices.mak
+
+# Configure, build, and install QEMU.
+#
+# The guard is config.status and not Makefile, and the directory is emptied before a
+# configure runs: configure writes the Makefile early and config.status only once it has
+# finished, so a configure that failed leaves a build directory that looks configured and a
+# `make` that dies at `./config.status: No such file or directory` — in a cache mount, on
+# every later build, until somebody prunes it.
+#
+# --disable-tcg, and nothing here needs the other half: every VM is started with accel=kvm
+# (internal/host/vm/qemu/start.go) and CI runs on self-hosted machines that have /dev/kvm.
+# A binary that cannot emulate fails at start-up on a host without KVM instead of running a
+# tenant's VM at a tenth of the speed.
+#
+# --disable-tools: qemu-img, qemu-nbd and the storage daemon are built by it and nothing in
+# this repository extracts or runs one.
+# Identico al build normal salvo por los simbolos: se compila fuera del cache
+# para no tocar el arbol ni el build directory compartidos.
+RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
+    set -e && \
+    cp -a /var/cache/qemu/qemu-${QEMU_VERSION} /build/qemu-src-sym && \
+    cp /build/spin-devices.mak /build/qemu-src-sym/configs/devices/x86_64-softmmu/spin.mak && \
+    mkdir -p /build/qemu-build-sym && cd /build/qemu-build-sym && \
+    /build/qemu-src-sym/configure --prefix=/opt/qemu --target-list=x86_64-softmmu --with-devices-x86_64=spin --enable-system --disable-user --disable-tools --enable-kvm --disable-tcg --enable-lto --enable-linux-aio --enable-linux-io-uring --enable-cap-ng --enable-seccomp --disable-containers --disable-docs --disable-werror --disable-plugins --disable-xen --disable-xen-pci-passthrough --disable-whpx --disable-hvf --disable-nvmm --disable-vhost-user-blk-server --disable-sdl --disable-gtk --disable-curses --disable-opengl --disable-virglrenderer --disable-spice --disable-vnc --disable-png --disable-vte --disable-xkbcommon --disable-brlapi --disable-alsa --disable-coreaudio --disable-oss --disable-pa --disable-jack --disable-sndio --disable-pipewire --disable-slirp --disable-passt --disable-vde --disable-netmap --disable-gio --disable-curl --disable-libssh --disable-libnfs --disable-libiscsi --disable-rbd --disable-vvfat --disable-vdi --disable-qed --disable-qcow1 --disable-bochs --disable-cloop --disable-dmg --disable-parallels --disable-vhdx --disable-vpc --disable-tpm --disable-libusb --disable-usb-redir --disable-smartcard --disable-u2f --disable-canokey --disable-guest-agent --disable-guest-agent-msi --disable-capstone --disable-fuse --disable-fuse-lseek --disable-multiprocess --disable-replication --disable-rdma --disable-libdw --disable-gettext --disable-virtfs --disable-hv-balloon --disable-strip --enable-debug-info && \
+    make -j${JOBS} && \
+    make install
+
+# The firmware this VM boots with, and not `pc-bios/*`: that directory is 331 MB, of which
+# 317 MB is edk2 for aarch64, arm, riscv and loongarch, in a build whose target list is
+# x86_64-softmmu — and it was being copied into the image and out again on every build.
+#
+# Four files. pvh.bin is the one that matters: the kernel is an ELF with Xen PVH notes and
+# QEMU enters it through this ROM, with no real mode and no bzImage protocol. No
+# vgabios-stdvga.bin, because the VM starts with -nodefaults and -nographic and no display
+# adapter is built any more (build/qemu/devices.mak); no efi-virtio.rom, because the NIC is
+# started with `romfile=`. A caller that changes either has to add the file back — a device
+# whose option ROM is missing does not slow the VM down, it stops it from starting.
+RUN --mount=type=cache,sharing=locked,id=qemu-src-${QEMU_VERSION},target=/var/cache/qemu \
+    mkdir -p /build/pc-bios && \
+    for f in bios.bin bios-256k.bin pvh.bin kvmvapic.bin; do \
+        install -m 0644 "/var/cache/qemu/qemu-${QEMU_VERSION}/pc-bios/$f" "/build/pc-bios/$f"; \
+    done && \
+    mkdir -p /opt/qemu/share/qemu && \
+    cp /build/pc-bios/* /opt/qemu/share/qemu/
+
+# Fail the build here, not in a lane three phases later, if this configuration did not
+# produce the devices and the accelerator this VM needs. The last two lines are the split
+# that matters: virtio-net must be there and the cards whose option ROMs are no longer
+# shipped must not, and a binary that could emulate would hide a host with no /dev/kvm.
+RUN /opt/qemu/bin/qemu-system-x86_64 -device help 2>&1 | grep -q 'virtio-blk-pci' && \
+    /opt/qemu/bin/qemu-system-x86_64 -device help 2>&1 | grep -q 'virtio-net-pci' && \
+    /opt/qemu/bin/qemu-system-x86_64 -device help 2>&1 | grep -q 'vhost-vsock-pci' && \
+    /opt/qemu/bin/qemu-system-x86_64 -device help 2>&1 | grep -q 'virtconsole' && \
+    ! /opt/qemu/bin/qemu-system-x86_64 -device help 2>&1 | grep -qE '^name "(e1000e?|rtl8139|pcnet|vmxnet3|igb|ne2k_pci|tulip)"' && \
+    /opt/qemu/bin/qemu-system-x86_64 -machine help | grep -q '^q35 ' && \
+    ! /opt/qemu/bin/qemu-system-x86_64 -machine help | grep -q '^pc-i440fx' && \
+    ! /opt/qemu/bin/qemu-system-x86_64 -accel help | grep -qx tcg && \
+    /opt/qemu/bin/qemu-system-x86_64 --version
+
+# Verify binary type and show dynamic library dependencies
+RUN file /opt/qemu/bin/qemu-system-x86_64 && \
+    echo "Dynamic library dependencies:" && \
+    ldd /opt/qemu/bin/qemu-system-x86_64
+
+# ============================================
+# Final minimal image with binary and dependencies
+# ============================================
+FROM ubuntu:26.04 AS runtime
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Configure apt to keep downloaded packages for cache mounts
+RUN rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
+# Install only runtime libraries required by QEMU
+RUN --mount=type=cache,sharing=locked,id=qemu-runtime-aptlib,target=/var/lib/apt \
+    --mount=type=cache,sharing=locked,id=qemu-runtime-aptcache,target=/var/cache/apt \
+    apt-get update && \
+    apt-get --no-install-recommends install -y \
+        libglib2.0-0 \
+        libpixman-1-0 \
+        libcap-ng0 \
+        libseccomp2 \
+        libaio1t64 \
+        liburing2 \
+        libpmem1 \
+        librdmacm1t64 \
+        zlib1g && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Copy QEMU binaries
+COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64
+
+# Copy BIOS/firmware files needed for boot
+COPY --from=builder /build/pc-bios/ /usr/share/spin-stack/qemu/
+
+ENTRYPOINT ["/usr/local/bin/qemu-system-x86_64"]
+
+# ============================================
+# Alternative: Extract binaries to host
+# ============================================
+FROM scratch AS extract
+
+# Copy QEMU binaries
+COPY --from=builder /opt/qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
+
+# Copy BIOS/firmware files needed for boot
+COPY --from=builder /build/pc-bios/ /share/spin-stack/qemu/
