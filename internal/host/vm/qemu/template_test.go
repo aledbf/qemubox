@@ -355,3 +355,78 @@ func TestMachineIdentityIsFileBacked(t *testing.T) {
 		t.Errorf("plain machine string ends in a comma, which QEMU rejects: %q", without)
 	}
 }
+
+// TestFingerprintCacheAvoidsRehashing checks the memo returns the same answer
+// the hash would, and stops returning it when a file changes.
+func TestFingerprintCacheAvoidsRehashing(t *testing.T) {
+	t.Parallel()
+
+	id := testIdentity(t)
+	dir := t.TempDir()
+	cache := newFingerprintCache(dir)
+
+	want := fingerprint(t, id)
+	got, err := cache.fingerprint(id)
+	if err != nil {
+		t.Fatalf("cached fingerprint: %v", err)
+	}
+	if got != want {
+		t.Fatalf("cache returned %s, the hash says %s", got, want)
+	}
+
+	// A second cache over the same directory must read what the first wrote,
+	// which is the case that matters: the shim is one process per container, so
+	// every lookup is a cold one.
+	if got, err := newFingerprintCache(dir).fingerprint(id); err != nil || got != want {
+		t.Errorf("a fresh cache returned %s (err %v), want %s", got, err, want)
+	}
+
+	// Rewriting a file must miss: the whole point of hashing contents is that a
+	// QEMU upgraded in place is a different machine.
+	if err := os.WriteFile(id.QEMU, []byte("a different qemu"), 0600); err != nil {
+		t.Fatalf("rewriting the qemu binary: %v", err)
+	}
+	after, err := newFingerprintCache(dir).fingerprint(id)
+	if err != nil {
+		t.Fatalf("fingerprint after the upgrade: %v", err)
+	}
+	if after == want {
+		t.Error("the cache returned the old fingerprint for an upgraded binary")
+	}
+	if expected := fingerprint(t, id); after != expected {
+		t.Errorf("cache returned %s, the hash says %s", after, expected)
+	}
+}
+
+// TestFingerprintCacheSurvivesGarbage checks that an unreadable cache costs a
+// rehash rather than a wrong answer or a failure.
+func TestFingerprintCacheSurvivesGarbage(t *testing.T) {
+	t.Parallel()
+
+	id := testIdentity(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, fingerprintCacheName), []byte("not\x00a cache\n\n  "), 0600); err != nil {
+		t.Fatalf("writing a corrupt cache: %v", err)
+	}
+
+	got, err := newFingerprintCache(dir).fingerprint(id)
+	if err != nil {
+		t.Fatalf("fingerprint with a corrupt cache: %v", err)
+	}
+	if want := fingerprint(t, id); got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}
+
+// TestFingerprintCacheReportsAMissingFile checks the cache does not turn a
+// missing kernel into a hit or a silent zero.
+func TestFingerprintCacheReportsAMissingFile(t *testing.T) {
+	t.Parallel()
+
+	id := testIdentity(t)
+	id.Initrd = filepath.Join(t.TempDir(), "absent")
+
+	if _, err := newFingerprintCache(t.TempDir()).fingerprint(id); err == nil {
+		t.Fatal("fingerprinting an identity with no initrd should fail")
+	}
+}

@@ -121,9 +121,15 @@ func (q *Instance) validateConfiguration() error {
 		return fmt.Errorf("max CPUs (%d) cannot be less than boot CPUs (%d)", q.resourceCfg.MaxCPUs, q.resourceCfg.BootCPUs)
 	}
 
-	// Require at least one network interface from CNI.
-	// spinbox currently assumes a configured NIC during guest initialization.
-	if len(q.nets) == 0 {
+	// Require at least one network interface from CNI - except on the VM a
+	// template is made from, which has no NIC by design.
+	//
+	// The rule was written when the guest read its address from the kernel
+	// command line during initialization, so a VM without a NIC was a
+	// misconfiguration. It is not one for a template: a template does not know
+	// which container it will become, and system.Apply skips networking when it
+	// is given no address. The NIC arrives with the VM restored from it.
+	if len(q.nets) == 0 && !q.buildsTemplate() {
 		return fmt.Errorf("no network interface configured: call AddNetwork() before Start()")
 	}
 
