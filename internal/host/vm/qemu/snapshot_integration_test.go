@@ -156,24 +156,37 @@ func TestTemplateRestore(t *testing.T) {
 		t.Errorf("guest never received the transport reset event:\n%s", logged)
 	}
 
-	// The guest has never looked at the slot its disk sits in. This is the host
-	// telling it to look, and it is the step that replaces a PCIe hot-plug - which
-	// would cost about 100 ms of link training and driver probe.
+	// Configure is the whole point of the restore-first shape: the guest inside
+	// the template knows nothing about this container, and this is the host
+	// telling it. Its disks sit in PCI slots the guest has never looked at, and
+	// the rescan Configure performs is what replaces a PCIe hot-plug - which would
+	// cost about 100 ms of link training and driver probe.
+	//
+	// The second call re-reads the result rather than trusting the first: what is
+	// being asserted is that the guest can see the disk, not that the RPC
+	// returned. It is also the idempotency check - Configure ran a moment ago.
 	client, err := restInst.DialClient(ctx)
 	if err != nil {
 		t.Fatalf("dialling the restored guest: %v", err)
 	}
 	defer client.Close()
 
-	rescanStart := time.Now()
-	resp, err := system.NewTTRPCSystemClient(client).RescanPCI(ctx, &system.RescanPCIRequest{ExpectedBlockDevices: 1})
+	cfgStart := time.Now()
+	if _, err := system.NewTTRPCSystemClient(client).Configure(ctx, &system.ConfigureRequest{
+		ExpectedBlockDevices: 1,
+	}); err != nil {
+		t.Fatalf("SNAPSHOT configuring the restored guest: %v", err)
+	}
+	configured := time.Since(cfgStart)
+
+	found, err := system.NewTTRPCSystemClient(client).RescanPCI(ctx, &system.RescanPCIRequest{ExpectedBlockDevices: 1})
 	if err != nil {
 		t.Fatalf("SNAPSHOT the restored guest never saw its disk: %v", err)
 	}
-	t.Logf("SNAPSHOT guest found %v after a PCI rescan, %d ms after the restore",
-		resp.GetBlockDevices(), time.Since(rescanStart).Milliseconds())
-	if len(resp.GetBlockDevices()) != 1 {
-		t.Errorf("expected exactly the one disk that was attached, got %v", resp.GetBlockDevices())
+	t.Logf("SNAPSHOT guest configured in %d ms and has %v",
+		configured.Milliseconds(), found.GetBlockDevices())
+	if len(found.GetBlockDevices()) != 1 {
+		t.Errorf("expected exactly the one disk that was attached, got %v", found.GetBlockDevices())
 	}
 
 	t.Logf("SNAPSHOT restored VM resident memory: %.1f MB (template RAM file is 512 MB, mapped copy-on-write)",

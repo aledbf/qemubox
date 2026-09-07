@@ -3,6 +3,7 @@
 package system
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -21,7 +22,7 @@ import (
 // when the supervisor is enabled (spin.metadata_addr present).
 var metadataServiceIP = net.IPv4(169, 254, 169, 254)
 
-// ipConfig holds the network settings parsed from the kernel ip= parameter.
+// NetworkIdentity holds the network settings parsed from the kernel ip= parameter.
 //
 // Format (kernel nfsroot style):
 //
@@ -33,17 +34,29 @@ var metadataServiceIP = net.IPv4(169, 254, 169, 254)
 // (configureNetwork) and treat ip= purely as a config channel: the same string
 // still describes the address, gateway, netmask, device and DNS - it is just
 // parsed here instead of by ip_auto_config.
-type ipConfig struct {
+type NetworkIdentity struct {
 	IP      string
 	Gateway string
 	Netmask string
 	Device  string
 	DNS     []string
+
+	// MAC is the hardware address to take, empty to keep the one the NIC has.
+	//
+	// A restored VM needs this where it does not need a CID: virtio-net carries
+	// its MAC in the migration stream (VMSTATE_UINT8_ARRAY(mac, VirtIONet,
+	// ETH_ALEN)), so the restored guest comes up believing it is the template's
+	// NIC, while vhost-vsock does not carry guest-cid and the CID sorts itself out.
+	MAC string
+
+	// MetadataRoute asks for the host route to the metadata service via Gateway.
+	// The boot path sets it from spin.metadata_addr on the kernel command line.
+	MetadataRoute bool
 }
 
 // device returns the interface name, defaulting to eth0 (the kernel names the
 // single virtio-net device eth0 because of net.ifnames=0).
-func (c ipConfig) device() string {
+func (c NetworkIdentity) device() string {
 	if c.Device == "" {
 		return "eth0"
 	}
@@ -52,7 +65,7 @@ func (c ipConfig) device() string {
 
 // parseIPConfig extracts the ip= parameter from a kernel command line. The
 // second return is false when no ip= parameter is present.
-func parseIPConfig(cmdline string) (ipConfig, bool) {
+func parseIPConfig(cmdline string) (NetworkIdentity, bool) {
 	for param := range strings.FieldsSeq(cmdline) {
 		v, ok := strings.CutPrefix(param, "ip=")
 		if !ok {
@@ -65,7 +78,7 @@ func parseIPConfig(cmdline string) (ipConfig, bool) {
 			}
 			return ""
 		}
-		cfg := ipConfig{
+		cfg := NetworkIdentity{
 			IP:      field(0),
 			Gateway: field(2),
 			Netmask: field(3),
@@ -79,7 +92,7 @@ func parseIPConfig(cmdline string) (ipConfig, bool) {
 		}
 		return cfg, true
 	}
-	return ipConfig{}, false
+	return NetworkIdentity{}, false
 }
 
 // configureNetwork brings up the guest network interface and assigns its
@@ -90,7 +103,7 @@ func parseIPConfig(cmdline string) (ipConfig, bool) {
 // and carrier-wait delays (~12 ms in the boot profile) and overlaps with the
 // rest of vminitd startup; the virtio-net carrier is up immediately with a TAP
 // backend, so there is nothing to wait for.
-func configureNetwork(ctx context.Context, cfg ipConfig) error {
+func configureNetwork(ctx context.Context, cfg NetworkIdentity) error {
 	if cfg.IP == "" {
 		log.G(ctx).Debug("no IP in kernel ip= parameter, skipping interface configuration")
 		return nil
@@ -109,6 +122,21 @@ func configureNetwork(ctx context.Context, cfg ipConfig) error {
 	link, err := linkByNameWait(ctx, dev)
 	if err != nil {
 		return fmt.Errorf("find link %q: %w", dev, err)
+	}
+
+	// Take the MAC before bringing the link up. A restored VM inherits the
+	// template's, because virtio-net carries it in the migration stream, and the
+	// address it is about to claim belongs to a different machine on the wire.
+	if cfg.MAC != "" {
+		mac, err := net.ParseMAC(cfg.MAC)
+		if err != nil {
+			return fmt.Errorf("invalid MAC %q: %w", cfg.MAC, err)
+		}
+		if !bytes.Equal(link.Attrs().HardwareAddr, mac) {
+			if err := netlink.LinkSetHardwareAddr(link, mac); err != nil {
+				return fmt.Errorf("set MAC %s on %q: %w", mac, dev, err)
+			}
+		}
 	}
 
 	// Bring the interface up first, then assign the address. Adding the address
@@ -143,7 +171,7 @@ func configureNetwork(ctx context.Context, cfg ipConfig) error {
 }
 
 // configureDNS writes /etc/resolv.conf from the DNS servers in the ip= config.
-func configureDNS(ctx context.Context, cfg ipConfig) error {
+func configureDNS(ctx context.Context, cfg NetworkIdentity) error {
 	if len(cfg.DNS) == 0 {
 		log.G(ctx).Debug("no DNS servers in kernel ip= parameter")
 		return nil
@@ -168,14 +196,14 @@ func configureDNS(ctx context.Context, cfg ipConfig) error {
 // supervisor is enabled (spin.metadata_addr present in the cmdline). The
 // interface is already up (configureNetwork ran first), so the route installs
 // directly via netlink.
-func configureMetadataRoute(ctx context.Context, cmdline string, cfg ipConfig) error {
+func configureMetadataRoute(ctx context.Context, cfg NetworkIdentity) error {
 	if cfg.Gateway == "" {
-		log.G(ctx).Debug("no gateway in kernel ip= parameter, skipping metadata route")
+		log.G(ctx).Debug("no gateway, skipping metadata route")
 		return nil
 	}
 
-	if !hasParam(cmdline, "spin.metadata_addr=") {
-		log.G(ctx).Debug("spin.metadata_addr not found in kernel cmdline, skipping metadata route")
+	if !cfg.MetadataRoute {
+		log.G(ctx).Debug("no metadata route requested, skipping")
 		return nil
 	}
 

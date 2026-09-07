@@ -291,6 +291,83 @@ file {
       json_name: "blockDevices"
     }
   }
+  message_type {
+    name: "ConfigureRequest"
+    field {
+      name: "network"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_MESSAGE
+      type_name: ".containerd.vminitd.services.system.v1.NetworkConfig"
+      json_name: "network"
+    }
+    field {
+      name: "expected_block_devices"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT32
+      json_name: "expectedBlockDevices"
+    }
+    field {
+      name: "extras_disk"
+      number: 3
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "extrasDisk"
+    }
+  }
+  message_type {
+    name: "NetworkConfig"
+    field {
+      name: "device"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "device"
+    }
+    field {
+      name: "mac"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "mac"
+    }
+    field {
+      name: "ip"
+      number: 3
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "ip"
+    }
+    field {
+      name: "netmask"
+      number: 4
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "netmask"
+    }
+    field {
+      name: "gateway"
+      number: 5
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "gateway"
+    }
+    field {
+      name: "dns"
+      number: 6
+      label: LABEL_REPEATED
+      type: TYPE_STRING
+      json_name: "dns"
+    }
+    field {
+      name: "metadata_route"
+      number: 7
+      label: LABEL_OPTIONAL
+      type: TYPE_BOOL
+      json_name: "metadataRoute"
+    }
+  }
   service {
     name: "System"
     method {
@@ -337,6 +414,11 @@ file {
       name: "RescanPCI"
       input_type: ".containerd.vminitd.services.system.v1.RescanPCIRequest"
       output_type: ".containerd.vminitd.services.system.v1.RescanPCIResponse"
+    }
+    method {
+      name: "Configure"
+      input_type: ".containerd.vminitd.services.system.v1.ConfigureRequest"
+      output_type: ".google.protobuf.Empty"
     }
   }
   options {

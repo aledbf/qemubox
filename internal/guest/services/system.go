@@ -455,3 +455,35 @@ func (s *systemService) RescanPCI(ctx context.Context, req *api.RescanPCIRequest
 	}
 	return &api.RescanPCIResponse{BlockDevices: found}, nil
 }
+
+// Configure gives this VM the identity it cannot read for itself.
+//
+// A VM restored from a template carries the template's kernel command line, and
+// every line of it describes a different machine. This is the host saying who
+// this VM actually is, over the channel that is already up 3 ms after the
+// restore resumes.
+func (s *systemService) Configure(ctx context.Context, req *api.ConfigureRequest) (*emptypb.Empty, error) {
+	id := guestsystem.Identity{
+		BlockDevices: int(req.GetExpectedBlockDevices()),
+		ExtrasDisk:   req.GetExtrasDisk(),
+	}
+	if n := req.GetNetwork(); n != nil {
+		id.Network = &guestsystem.NetworkIdentity{
+			Device:        n.GetDevice(),
+			MAC:           n.GetMac(),
+			IP:            n.GetIp(),
+			Netmask:       n.GetNetmask(),
+			Gateway:       n.GetGateway(),
+			DNS:           n.GetDns(),
+			MetadataRoute: n.GetMetadataRoute(),
+		}
+	}
+
+	if err := guestsystem.Apply(ctx, id); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, errgrpc.ToGRPC(fmt.Errorf("%w: %w", errdefs.ErrUnavailable, err))
+		}
+		return nil, errgrpc.ToGRPC(err)
+	}
+	return &emptypb.Empty{}, nil
+}

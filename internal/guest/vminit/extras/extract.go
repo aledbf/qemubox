@@ -37,17 +37,12 @@ type extrasConfig struct {
 }
 
 // parseExtrasConfig parses spin.extras_* parameters from kernel cmdline.
-func parseExtrasConfig(ctx context.Context) (*extrasConfig, error) {
-	cmdline, err := os.ReadFile("/proc/cmdline")
-	if err != nil {
-		return nil, fmt.Errorf("read cmdline: %w", err)
-	}
-
-	log.G(ctx).WithField("cmdline", string(cmdline)).Debug("parsing kernel cmdline for extras config")
+func parseExtrasConfig(ctx context.Context, cmdline string) (*extrasConfig, error) {
+	log.G(ctx).WithField("cmdline", cmdline).Debug("parsing kernel cmdline for extras config")
 
 	cfg := &extrasConfig{}
 
-	for param := range strings.FieldsSeq(string(cmdline)) {
+	for param := range strings.FieldsSeq(cmdline) {
 		if indexStr, ok := strings.CutPrefix(param, "spin.extras_disk="); ok {
 			index, err := strconv.Atoi(indexStr)
 			if err != nil {
@@ -69,38 +64,38 @@ func parseExtrasConfig(ctx context.Context) (*extrasConfig, error) {
 	return cfg, nil
 }
 
-// GetDeviceFromCmdline parses spin.extras_disk=N from kernel cmdline.
-// Returns device path (e.g., "/dev/vdb") or empty string if not configured.
-func GetDeviceFromCmdline(ctx context.Context) (string, error) {
-	cfg, err := parseExtrasConfig(ctx)
+// DeviceFromCmdline parses spin.extras_disk=N from a kernel command line and
+// returns the device path it names (e.g. "/dev/vdb"), or empty if the container
+// has no extras disk.
+// The second return is spin.extras_force, which re-extracts over the marker.
+func DeviceFromCmdline(ctx context.Context, cmdline string) (string, bool, error) {
+	cfg, err := parseExtrasConfig(ctx, cmdline)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	return cfg.device, nil
+	return cfg.device, cfg.force, nil
 }
 
-// Extract is the main entry point called during system init.
-// It checks for extras disk and extracts files if present.
-// Extraction is idempotent - it only runs once per boot unless force=true.
-func Extract(ctx context.Context) error {
-	cfg, err := parseExtrasConfig(ctx)
-	if err != nil {
-		return err
-	}
-	if cfg.device == "" {
-		log.G(ctx).Debug("no extras disk configured (spin.extras_disk not in kernel cmdline)")
+// ExtractDevice unpacks the extras archive from device.
+//
+// It is idempotent: a marker file records that it has run, so calling it again
+// - which the host does whenever it configures a VM, without knowing whether
+// that VM booted or was restored - does nothing the second time, unless force
+// says otherwise (spin.extras_force on the kernel command line).
+func ExtractDevice(ctx context.Context, device string, force bool) error {
+	if device == "" {
+		log.G(ctx).Debug("no extras disk configured")
 		return nil
 	}
 
-	// Check if already extracted (idempotency)
-	if !cfg.force {
+	if !force {
 		if _, err := os.Stat(markerFile); err == nil {
 			log.G(ctx).Debug("extras already extracted, skipping")
 			return nil
 		}
 	}
 
-	if err := ExtractFromDevice(ctx, cfg.device); err != nil {
+	if err := ExtractFromDevice(ctx, device); err != nil {
 		return err
 	}
 

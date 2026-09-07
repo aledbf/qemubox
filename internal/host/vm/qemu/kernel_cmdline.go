@@ -32,6 +32,13 @@ type KernelCmdlineConfig struct {
 	// Log level (0-7, lower is more verbose)
 	LogLevel int
 
+	// DiskCount is how many virtio block devices this VM is given.
+	//
+	// The guest waits for exactly that many instead of waiting to see what turns
+	// up: waiting to see costs the whole 5 s devices.BlockDeviceTimeout whenever a
+	// VM has fewer disks than the guess, and all of it for a VM that has none.
+	DiskCount int
+
 	// ExtrasDiskIndex is the 0-based index of the extras disk (nil if none).
 	// The guest parses spin.extras_disk=N to locate the block device.
 	ExtrasDiskIndex *int
@@ -200,6 +207,8 @@ func BuildKernelCmdline(cfg KernelCmdlineConfig) string {
 	}
 
 	// Extras disk index for guest to locate the extras block device
+	parts = append(parts, fmt.Sprintf("spin.disks=%d", cfg.DiskCount))
+
 	if cfg.ExtrasDiskIndex != nil {
 		parts = append(parts, fmt.Sprintf("spin.extras_disk=%d", *cfg.ExtrasDiskIndex))
 	}

@@ -107,6 +107,24 @@ func run(ctx context.Context, cfg *config.ServiceConfig) error {
 	}
 	boottime.LogReady(ctx, "system-init")
 
+	// Take this VM's identity from the kernel command line. A VM that boots is
+	// the only kind that can: a VM restored from a template inherits the
+	// template's command line, which names another VM's address, another VM's
+	// disks and another VM's CID, and is told who it is over RPC instead - see
+	// the Configure call in api/services/system/v1.
+	//
+	// Being told is the normal case now and this is the exception, so it is
+	// best-effort in the same way the steps inside it always were: a VM that
+	// cannot read its command line should still come up and serve RPC, because
+	// serving RPC is how it can be told anything at all.
+	if id, err := system.FromCmdline(ctx); err != nil {
+		log.G(ctx).WithError(err).Warn("cannot read this VM's identity from the kernel command line")
+	} else if err := system.Apply(ctx, id); err != nil {
+		log.G(ctx).WithError(err).Error("failed to apply this VM's identity")
+	}
+	prof.Mark(ctx, "identity")
+	boottime.LogReady(ctx, "identity")
+
 	if cfg.Debug {
 		systools.DumpInfo(ctx)
 	}

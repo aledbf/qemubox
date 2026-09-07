@@ -398,6 +398,178 @@ func (x *RescanPCIResponse) GetBlockDevices() []string {
 	return nil
 }
 
+type ConfigureRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// network is this VM's address and routing. Absent leaves networking alone,
+	// which is what a workload without a NIC wants.
+	Network *NetworkConfig `protobuf:"bytes,1,opt,name=network,proto3" json:"network,omitempty"`
+	// expected_block_devices is how many virtio block devices the host attached.
+	// The guest triggers a PCI rescan and waits for that many: a restored VM
+	// enumerated its bus inside the template, before these disks existed.
+	ExpectedBlockDevices uint32 `protobuf:"varint,2,opt,name=expected_block_devices,json=expectedBlockDevices,proto3" json:"expected_block_devices,omitempty"`
+	// extras_disk is the block device holding the extras archive (e.g. "/dev/vdb"),
+	// empty when this container has none. It corresponds to what the boot path
+	// derives from spin.extras_disk.
+	ExtrasDisk    string `protobuf:"bytes,3,opt,name=extras_disk,json=extrasDisk,proto3" json:"extras_disk,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigureRequest) Reset() {
+	*x = ConfigureRequest{}
+	mi := &file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigureRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigureRequest) ProtoMessage() {}
+
+func (x *ConfigureRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigureRequest.ProtoReflect.Descriptor instead.
+func (*ConfigureRequest) Descriptor() ([]byte, []int) {
+	return file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ConfigureRequest) GetNetwork() *NetworkConfig {
+	if x != nil {
+		return x.Network
+	}
+	return nil
+}
+
+func (x *ConfigureRequest) GetExpectedBlockDevices() uint32 {
+	if x != nil {
+		return x.ExpectedBlockDevices
+	}
+	return 0
+}
+
+func (x *ConfigureRequest) GetExtrasDisk() string {
+	if x != nil {
+		return x.ExtrasDisk
+	}
+	return ""
+}
+
+type NetworkConfig struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// device is the interface to configure. Empty means eth0, which is what the
+	// kernel names the single virtio-net device under net.ifnames=0.
+	Device string `protobuf:"bytes,1,opt,name=device,proto3" json:"device,omitempty"`
+	// mac is the hardware address this VM should use.
+	//
+	// Unlike the vsock CID, a NIC's MAC *is* carried in the migration stream
+	// (VMSTATE_UINT8_ARRAY(mac, VirtIONet, ETH_ALEN)), so a restored guest comes
+	// up believing it is the template's NIC. Empty leaves it untouched.
+	Mac string `protobuf:"bytes,2,opt,name=mac,proto3" json:"mac,omitempty"`
+	// ip, netmask and gateway are this VM's address, in the same form the ip=
+	// kernel parameter carries them.
+	Ip      string `protobuf:"bytes,3,opt,name=ip,proto3" json:"ip,omitempty"`
+	Netmask string `protobuf:"bytes,4,opt,name=netmask,proto3" json:"netmask,omitempty"`
+	Gateway string `protobuf:"bytes,5,opt,name=gateway,proto3" json:"gateway,omitempty"`
+	// dns lists the nameservers to write to /etc/resolv.conf.
+	Dns []string `protobuf:"bytes,6,rep,name=dns,proto3" json:"dns,omitempty"`
+	// metadata_route asks for the host route to the metadata service via the
+	// gateway. It corresponds to spin.metadata_addr on the boot path.
+	MetadataRoute bool `protobuf:"varint,7,opt,name=metadata_route,json=metadataRoute,proto3" json:"metadata_route,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NetworkConfig) Reset() {
+	*x = NetworkConfig{}
+	mi := &file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NetworkConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NetworkConfig) ProtoMessage() {}
+
+func (x *NetworkConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NetworkConfig.ProtoReflect.Descriptor instead.
+func (*NetworkConfig) Descriptor() ([]byte, []int) {
+	return file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *NetworkConfig) GetDevice() string {
+	if x != nil {
+		return x.Device
+	}
+	return ""
+}
+
+func (x *NetworkConfig) GetMac() string {
+	if x != nil {
+		return x.Mac
+	}
+	return ""
+}
+
+func (x *NetworkConfig) GetIp() string {
+	if x != nil {
+		return x.Ip
+	}
+	return ""
+}
+
+func (x *NetworkConfig) GetNetmask() string {
+	if x != nil {
+		return x.Netmask
+	}
+	return ""
+}
+
+func (x *NetworkConfig) GetGateway() string {
+	if x != nil {
+		return x.Gateway
+	}
+	return ""
+}
+
+func (x *NetworkConfig) GetDns() []string {
+	if x != nil {
+		return x.Dns
+	}
+	return nil
+}
+
+func (x *NetworkConfig) GetMetadataRoute() bool {
+	if x != nil {
+		return x.MetadataRoute
+	}
+	return false
+}
+
 var File_github_com_spin_stack_spinbox_api_services_system_v1_info_proto protoreflect.FileDescriptor
 
 const file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDesc = "" +
@@ -419,7 +591,20 @@ const file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDe
 	"\x10RescanPCIRequest\x124\n" +
 	"\x16expected_block_devices\x18\x01 \x01(\rR\x14expectedBlockDevices\"8\n" +
 	"\x11RescanPCIResponse\x12#\n" +
-	"\rblock_devices\x18\x01 \x03(\tR\fblockDevices2\xda\x06\n" +
+	"\rblock_devices\x18\x01 \x03(\tR\fblockDevices\"\xb9\x01\n" +
+	"\x10ConfigureRequest\x12N\n" +
+	"\anetwork\x18\x01 \x01(\v24.containerd.vminitd.services.system.v1.NetworkConfigR\anetwork\x124\n" +
+	"\x16expected_block_devices\x18\x02 \x01(\rR\x14expectedBlockDevices\x12\x1f\n" +
+	"\vextras_disk\x18\x03 \x01(\tR\n" +
+	"extrasDisk\"\xb6\x01\n" +
+	"\rNetworkConfig\x12\x16\n" +
+	"\x06device\x18\x01 \x01(\tR\x06device\x12\x10\n" +
+	"\x03mac\x18\x02 \x01(\tR\x03mac\x12\x0e\n" +
+	"\x02ip\x18\x03 \x01(\tR\x02ip\x12\x18\n" +
+	"\anetmask\x18\x04 \x01(\tR\anetmask\x12\x18\n" +
+	"\agateway\x18\x05 \x01(\tR\agateway\x12\x10\n" +
+	"\x03dns\x18\x06 \x03(\tR\x03dns\x12%\n" +
+	"\x0emetadata_route\x18\a \x01(\bR\rmetadataRoute2\xb8\a\n" +
 	"\x06System\x12S\n" +
 	"\x04Info\x12\x16.google.protobuf.Empty\x1a3.containerd.vminitd.services.system.v1.InfoResponse\x12A\n" +
 	"\x0fPrepareShutdown\x12\x16.google.protobuf.Empty\x1a\x16.google.protobuf.Empty\x12m\n" +
@@ -430,7 +615,8 @@ const file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDe
 	"\tOnlineCPU\x127.containerd.vminitd.services.system.v1.OnlineCPURequest\x1a\x16.google.protobuf.Empty\x12d\n" +
 	"\rOfflineMemory\x12;.containerd.vminitd.services.system.v1.OfflineMemoryRequest\x1a\x16.google.protobuf.Empty\x12b\n" +
 	"\fOnlineMemory\x12:.containerd.vminitd.services.system.v1.OnlineMemoryRequest\x1a\x16.google.protobuf.Empty\x12~\n" +
-	"\tRescanPCI\x127.containerd.vminitd.services.system.v1.RescanPCIRequest\x1a8.containerd.vminitd.services.system.v1.RescanPCIResponseB=Z;github.com/spin-stack/spinbox/api/services/system/v1;systemb\x06proto3"
+	"\tRescanPCI\x127.containerd.vminitd.services.system.v1.RescanPCIRequest\x1a8.containerd.vminitd.services.system.v1.RescanPCIResponse\x12\\\n" +
+	"\tConfigure\x127.containerd.vminitd.services.system.v1.ConfigureRequest\x1a\x16.google.protobuf.EmptyB=Z;github.com/spin-stack/spinbox/api/services/system/v1;systemb\x06proto3"
 
 var (
 	file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDescOnce sync.Once
@@ -444,7 +630,7 @@ func file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDes
 	return file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDescData
 }
 
-var file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_goTypes = []any{
 	(*InfoResponse)(nil),              // 0: containerd.vminitd.services.system.v1.InfoResponse
 	(*FreezeFilesystemsResponse)(nil), // 1: containerd.vminitd.services.system.v1.FreezeFilesystemsResponse
@@ -454,32 +640,37 @@ var file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_goTypes
 	(*OnlineMemoryRequest)(nil),       // 5: containerd.vminitd.services.system.v1.OnlineMemoryRequest
 	(*RescanPCIRequest)(nil),          // 6: containerd.vminitd.services.system.v1.RescanPCIRequest
 	(*RescanPCIResponse)(nil),         // 7: containerd.vminitd.services.system.v1.RescanPCIResponse
-	(*emptypb.Empty)(nil),             // 8: google.protobuf.Empty
+	(*ConfigureRequest)(nil),          // 8: containerd.vminitd.services.system.v1.ConfigureRequest
+	(*NetworkConfig)(nil),             // 9: containerd.vminitd.services.system.v1.NetworkConfig
+	(*emptypb.Empty)(nil),             // 10: google.protobuf.Empty
 }
 var file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_depIdxs = []int32{
-	8, // 0: containerd.vminitd.services.system.v1.System.Info:input_type -> google.protobuf.Empty
-	8, // 1: containerd.vminitd.services.system.v1.System.PrepareShutdown:input_type -> google.protobuf.Empty
-	8, // 2: containerd.vminitd.services.system.v1.System.FreezeFilesystems:input_type -> google.protobuf.Empty
-	8, // 3: containerd.vminitd.services.system.v1.System.ThawFilesystems:input_type -> google.protobuf.Empty
-	2, // 4: containerd.vminitd.services.system.v1.System.OfflineCPU:input_type -> containerd.vminitd.services.system.v1.OfflineCPURequest
-	3, // 5: containerd.vminitd.services.system.v1.System.OnlineCPU:input_type -> containerd.vminitd.services.system.v1.OnlineCPURequest
-	4, // 6: containerd.vminitd.services.system.v1.System.OfflineMemory:input_type -> containerd.vminitd.services.system.v1.OfflineMemoryRequest
-	5, // 7: containerd.vminitd.services.system.v1.System.OnlineMemory:input_type -> containerd.vminitd.services.system.v1.OnlineMemoryRequest
-	6, // 8: containerd.vminitd.services.system.v1.System.RescanPCI:input_type -> containerd.vminitd.services.system.v1.RescanPCIRequest
-	0, // 9: containerd.vminitd.services.system.v1.System.Info:output_type -> containerd.vminitd.services.system.v1.InfoResponse
-	8, // 10: containerd.vminitd.services.system.v1.System.PrepareShutdown:output_type -> google.protobuf.Empty
-	1, // 11: containerd.vminitd.services.system.v1.System.FreezeFilesystems:output_type -> containerd.vminitd.services.system.v1.FreezeFilesystemsResponse
-	8, // 12: containerd.vminitd.services.system.v1.System.ThawFilesystems:output_type -> google.protobuf.Empty
-	8, // 13: containerd.vminitd.services.system.v1.System.OfflineCPU:output_type -> google.protobuf.Empty
-	8, // 14: containerd.vminitd.services.system.v1.System.OnlineCPU:output_type -> google.protobuf.Empty
-	8, // 15: containerd.vminitd.services.system.v1.System.OfflineMemory:output_type -> google.protobuf.Empty
-	8, // 16: containerd.vminitd.services.system.v1.System.OnlineMemory:output_type -> google.protobuf.Empty
-	7, // 17: containerd.vminitd.services.system.v1.System.RescanPCI:output_type -> containerd.vminitd.services.system.v1.RescanPCIResponse
-	9, // [9:18] is the sub-list for method output_type
-	0, // [0:9] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	9,  // 0: containerd.vminitd.services.system.v1.ConfigureRequest.network:type_name -> containerd.vminitd.services.system.v1.NetworkConfig
+	10, // 1: containerd.vminitd.services.system.v1.System.Info:input_type -> google.protobuf.Empty
+	10, // 2: containerd.vminitd.services.system.v1.System.PrepareShutdown:input_type -> google.protobuf.Empty
+	10, // 3: containerd.vminitd.services.system.v1.System.FreezeFilesystems:input_type -> google.protobuf.Empty
+	10, // 4: containerd.vminitd.services.system.v1.System.ThawFilesystems:input_type -> google.protobuf.Empty
+	2,  // 5: containerd.vminitd.services.system.v1.System.OfflineCPU:input_type -> containerd.vminitd.services.system.v1.OfflineCPURequest
+	3,  // 6: containerd.vminitd.services.system.v1.System.OnlineCPU:input_type -> containerd.vminitd.services.system.v1.OnlineCPURequest
+	4,  // 7: containerd.vminitd.services.system.v1.System.OfflineMemory:input_type -> containerd.vminitd.services.system.v1.OfflineMemoryRequest
+	5,  // 8: containerd.vminitd.services.system.v1.System.OnlineMemory:input_type -> containerd.vminitd.services.system.v1.OnlineMemoryRequest
+	6,  // 9: containerd.vminitd.services.system.v1.System.RescanPCI:input_type -> containerd.vminitd.services.system.v1.RescanPCIRequest
+	8,  // 10: containerd.vminitd.services.system.v1.System.Configure:input_type -> containerd.vminitd.services.system.v1.ConfigureRequest
+	0,  // 11: containerd.vminitd.services.system.v1.System.Info:output_type -> containerd.vminitd.services.system.v1.InfoResponse
+	10, // 12: containerd.vminitd.services.system.v1.System.PrepareShutdown:output_type -> google.protobuf.Empty
+	1,  // 13: containerd.vminitd.services.system.v1.System.FreezeFilesystems:output_type -> containerd.vminitd.services.system.v1.FreezeFilesystemsResponse
+	10, // 14: containerd.vminitd.services.system.v1.System.ThawFilesystems:output_type -> google.protobuf.Empty
+	10, // 15: containerd.vminitd.services.system.v1.System.OfflineCPU:output_type -> google.protobuf.Empty
+	10, // 16: containerd.vminitd.services.system.v1.System.OnlineCPU:output_type -> google.protobuf.Empty
+	10, // 17: containerd.vminitd.services.system.v1.System.OfflineMemory:output_type -> google.protobuf.Empty
+	10, // 18: containerd.vminitd.services.system.v1.System.OnlineMemory:output_type -> google.protobuf.Empty
+	7,  // 19: containerd.vminitd.services.system.v1.System.RescanPCI:output_type -> containerd.vminitd.services.system.v1.RescanPCIResponse
+	10, // 20: containerd.vminitd.services.system.v1.System.Configure:output_type -> google.protobuf.Empty
+	11, // [11:21] is the sub-list for method output_type
+	1,  // [1:11] is the sub-list for method input_type
+	1,  // [1:1] is the sub-list for extension type_name
+	1,  // [1:1] is the sub-list for extension extendee
+	0,  // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_init() }
@@ -493,7 +684,7 @@ func file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_init()
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDesc), len(file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

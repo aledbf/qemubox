@@ -84,6 +84,24 @@ service System {
 	//   - INTERNAL: the rescan could not be triggered
 	//   - DEADLINE_EXCEEDED: fewer devices than expected appeared in time
 	rpc RescanPCI(RescanPCIRequest) returns (RescanPCIResponse);
+
+	// Configure hands a VM the identity it cannot read for itself.
+	//
+	// A VM that boots reads who it is from its kernel command line: which address
+	// to take, which disks to expect, where its extras disk is. A VM restored from
+	// a template has a kernel command line too - the template's - and it describes
+	// a different VM. Every field in it is a lie by the time the restore resumes.
+	//
+	// So the host says it instead, over the channel that is already up: the guest
+	// answers RPC 3 ms after the restore resumes, long before any of this matters.
+	// The call is idempotent, and applying it to a VM that booted normally is
+	// harmless - it sets what is already set.
+	//
+	// Returns:
+	//   - INVALID_ARGUMENT: an address, netmask or gateway does not parse
+	//   - UNAVAILABLE: the expected block devices did not appear
+	//   - INTERNAL: a netlink or filesystem operation failed
+	rpc Configure(ConfigureRequest) returns (google.protobuf.Empty);
 }
 
 message InfoResponse {
@@ -134,4 +152,46 @@ message RescanPCIResponse {
 	// block_devices lists the virtio block device names found after the rescan
 	// (e.g. "vda", "vdb").
 	repeated string block_devices = 1;
+}
+
+message ConfigureRequest {
+	// network is this VM's address and routing. Absent leaves networking alone,
+	// which is what a workload without a NIC wants.
+	NetworkConfig network = 1;
+
+	// expected_block_devices is how many virtio block devices the host attached.
+	// The guest triggers a PCI rescan and waits for that many: a restored VM
+	// enumerated its bus inside the template, before these disks existed.
+	uint32 expected_block_devices = 2;
+
+	// extras_disk is the block device holding the extras archive (e.g. "/dev/vdb"),
+	// empty when this container has none. It corresponds to what the boot path
+	// derives from spin.extras_disk.
+	string extras_disk = 3;
+}
+
+message NetworkConfig {
+	// device is the interface to configure. Empty means eth0, which is what the
+	// kernel names the single virtio-net device under net.ifnames=0.
+	string device = 1;
+
+	// mac is the hardware address this VM should use.
+	//
+	// Unlike the vsock CID, a NIC's MAC *is* carried in the migration stream
+	// (VMSTATE_UINT8_ARRAY(mac, VirtIONet, ETH_ALEN)), so a restored guest comes
+	// up believing it is the template's NIC. Empty leaves it untouched.
+	string mac = 2;
+
+	// ip, netmask and gateway are this VM's address, in the same form the ip=
+	// kernel parameter carries them.
+	string ip = 3;
+	string netmask = 4;
+	string gateway = 5;
+
+	// dns lists the nameservers to write to /etc/resolv.conf.
+	repeated string dns = 6;
+
+	// metadata_route asks for the host route to the metadata service via the
+	// gateway. It corresponds to spin.metadata_addr on the boot path.
+	bool metadata_route = 7;
 }
