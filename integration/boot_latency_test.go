@@ -35,14 +35,29 @@ func bootLatencyCeiling() time.Duration {
 	return 5 * time.Second
 }
 
-// TestBootLatency measures the wall-clock time from task.Start() to the
-// container's entrypoint producing output (i.e. VM boot + vminitd + crun +
-// exec) across several iterations, logs min/median/max as a BOOT_METRIC line
-// (grep-able for tracking over time), and fails if the FASTEST boot exceeds a
-// generous ceiling - a regression guard that does not depend on manual timing.
+// TestBootLatency measures cold start across several iterations, logs
+// min/median/max as BOOT_METRIC lines (grep-able for tracking over time), and
+// fails if the typical boot exceeds a generous ceiling - a regression guard that
+// does not depend on manual timing.
 //
-// Absolute numbers reflect the active shim/containerd log level and host load;
-// the MIN over N iterations is the most stable signal, so the guard is on it.
+// Two intervals are reported, because they are not the same thing and only one
+// of them is cold start:
+//
+//	create_to_output - client.NewContainer's task creation through the
+//	                   entrypoint's first output. NewTask is where the shim runs
+//	                   Create, and Create is where the VM boots, so this is the
+//	                   number a cold-start change has to move. ~209 ms here.
+//	exec_to_output   - task.Start() through that same output: crun exec inside a
+//	                   guest that is already up. ~12 ms here.
+//
+// The second used to be reported alone, under the name boot_to_output_ms and
+// documented as "VM boot + vminitd + crun + exec". It never contained the VM
+// boot: the timer started after NewTask had already returned. Paired with the
+// 100 ms poll in waitForOutput it read 105-108 ms for everything, and no boot
+// improvement of this year - jitterentropy (-3.7 ms), the guest console writes,
+// the driver trim (-4.4 ms) - was visible in it.
+//
+// Absolute numbers reflect the active shim/containerd log level and host load.
 func TestBootLatency(t *testing.T) {
 	requireQuietHost(t)
 
@@ -60,33 +75,48 @@ func TestBootLatency(t *testing.T) {
 		t.Fatalf("get image %s: %v", cfg.Image, err)
 	}
 
-	samples := make([]time.Duration, 0, bootLatencyIterations)
+	createSamples := make([]time.Duration, 0, bootLatencyIterations)
+	execSamples := make([]time.Duration, 0, bootLatencyIterations)
 	for i := range bootLatencyIterations {
-		samples = append(samples, measureBootOnce(t, ctx, client, cfg, image, i))
+		s := measureBootOnce(t, ctx, client, cfg, image, i)
+		createSamples = append(createSamples, s.createToOutput)
+		execSamples = append(execSamples, s.execToOutput)
 	}
 
-	sort.Slice(samples, func(a, b int) bool { return samples[a] < samples[b] })
-	minD := samples[0]
-	maxD := samples[len(samples)-1]
-	medD := samples[len(samples)/2]
+	createMin, createMed, createMax := summarize(createSamples)
+	execMin, execMed, execMax := summarize(execSamples)
 
-	// Single grep-able metrics line for tracking across runs.
-	t.Logf("BOOT_METRIC boot_to_output_ms min=%d median=%d max=%d iterations=%d",
-		minD.Milliseconds(), medD.Milliseconds(), maxD.Milliseconds(), bootLatencyIterations)
+	// One grep-able line per interval, so each keeps its own history.
+	t.Logf("BOOT_METRIC create_to_output_ms min=%d median=%d max=%d iterations=%d",
+		createMin.Milliseconds(), createMed.Milliseconds(), createMax.Milliseconds(), bootLatencyIterations)
+	t.Logf("BOOT_METRIC exec_to_output_ms min=%d median=%d max=%d iterations=%d",
+		execMin.Milliseconds(), execMed.Milliseconds(), execMax.Milliseconds(), bootLatencyIterations)
 
-	// Guard on the MEDIAN, not the min: task.Start can occasionally return
-	// before the boot fully overlaps the measured window, producing an
-	// unrealistically fast outlier that would mask a real regression. The
-	// median tracks the typical boot and shifts up if boots get slower.
-	if ceiling := bootLatencyCeiling(); medD > ceiling {
-		t.Fatalf("boot latency regression: median boot %v exceeds ceiling %v (min %v, max %v)",
-			medD, ceiling, minD, maxD)
+	// Guard on the MEDIAN of cold start, not the min: an individual boot can
+	// finish unusually fast and mask a real regression. The median tracks the
+	// typical boot and shifts up if boots get slower.
+	if ceiling := bootLatencyCeiling(); createMed > ceiling {
+		t.Fatalf("boot latency regression: median cold start %v exceeds ceiling %v (min %v, max %v)",
+			createMed, ceiling, createMin, createMax)
 	}
 }
 
+// summarize sorts samples in place and returns min, median and max.
+func summarize(samples []time.Duration) (minD, medD, maxD time.Duration) {
+	sort.Slice(samples, func(a, b int) bool { return samples[a] < samples[b] })
+	return samples[0], samples[len(samples)/2], samples[len(samples)-1]
+}
+
+// bootSample is one boot timed at both boundaries; see TestBootLatency for what
+// each interval contains.
+type bootSample struct {
+	createToOutput time.Duration
+	execToOutput   time.Duration
+}
+
 // measureBootOnce boots one container whose entrypoint prints a readiness token
-// immediately, returning the time from Start() to that token appearing.
-func measureBootOnce(t *testing.T, ctx context.Context, client *containerd.Client, cfg testConfig, image containerd.Image, i int) time.Duration {
+// immediately, returning both intervals described on TestBootLatency.
+func measureBootOnce(t *testing.T, ctx context.Context, client *containerd.Client, cfg testConfig, image containerd.Image, i int) bootSample {
 	t.Helper()
 	name := fmt.Sprintf("qbx-boot-%d-%s", i, strings.ReplaceAll(time.Now().Format("150405.000"), ".", ""))
 
@@ -117,6 +147,9 @@ func measureBootOnce(t *testing.T, ctx context.Context, client *containerd.Clien
 		}
 	}()
 
+	// Before NewTask, not after: the shim runs Create from here, and Create is
+	// where QEMU is launched and the guest boots.
+	tCreate := time.Now()
 	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStreams(nil, stdoutFile, nil)))
 	if err != nil {
 		t.Fatalf("create task for %s: %v", name, err)
@@ -138,5 +171,6 @@ func measureBootOnce(t *testing.T, ctx context.Context, client *containerd.Clien
 		t.Fatalf("start task %s: %v", name, err)
 	}
 	waitForOutput(t, stdoutPath, "BOOTED", 60*time.Second)
-	return time.Since(start)
+	done := time.Now()
+	return bootSample{createToOutput: done.Sub(tCreate), execToOutput: done.Sub(start)}
 }
