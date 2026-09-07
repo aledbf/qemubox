@@ -207,3 +207,20 @@ type Instance interface {
 	// Metadata
 	VMInfo() VMInfo
 }
+
+// Restorer is implemented by VMM backends that can start a VM from a template
+// instead of booting it: a guest frozen once, and resumed by every later VM.
+//
+// It is a separate interface rather than part of Instance because restoring is
+// not something every backend can do, and a caller that finds a backend does not
+// implement it should boot rather than fail. Both methods must be called before
+// Start.
+type Restorer interface {
+	// UseMemoryFile backs guest RAM with a file, which is what lets a template
+	// leave memory out of its state and be mapped copy-on-write by many VMs.
+	UseMemoryFile(path string) error
+
+	// RestoreFrom starts this VM from the template's state instead of booting a
+	// kernel. The instance must be given the matching memory file too.
+	RestoreFrom(statePath string) error
+}
