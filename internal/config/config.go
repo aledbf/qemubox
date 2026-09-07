@@ -41,6 +41,18 @@ type PathsConfig struct {
 // RuntimeConfig defines runtime behavior settings
 type RuntimeConfig struct {
 	VMM string `json:"vmm"` // VMM backend (currently only "qemu" supported)
+
+	// DisableTemplateRestore makes every VM boot instead of restoring from a
+	// template.
+	//
+	// Restoring is the normal path: a guest is booted once per machine shape and
+	// every later VM resumes from it, which is 27 ms against 145. Booting is the
+	// fallback, taken automatically when no template can be built or the machine
+	// does not match one - so this is not needed to recover from a broken
+	// template, only to opt out of the mechanism entirely.
+	//
+	// The zero value restores, which is the intended default.
+	DisableTemplateRestore bool `json:"disable_template_restore"`
 }
 
 // TimeoutsConfig defines timeout durations for various lifecycle operations.

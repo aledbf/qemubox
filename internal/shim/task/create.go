@@ -272,19 +272,35 @@ func (s *service) startVM(ctx context.Context, state *createState) error {
 		log.G(ctx).Debug("kernel boot profiling enabled (initcall_debug)")
 	}
 
+	// Resume a frozen guest rather than boot one, when this host has a template
+	// for this machine. Falls back to booting on its own; see restore.go.
+	restored := prepareRestore(ctx, state.vmInstance, state.resourceCfg, state.debugBoot)
+
 	prestart := time.Now()
 	if err := state.vmInstance.Start(ctx, startOpts...); err != nil {
 		return err
 	}
 
 	bootTime := time.Since(prestart)
-	log.G(ctx).WithField("bootTime", bootTime).Debug("VM boot completed")
+	log.G(ctx).WithFields(log.Fields{"bootTime": bootTime, "restored": restored}).Debug("VM start completed")
 	s.stateMachine.SetIntentionalShutdown(false)
 
 	// Get VM client for event stream
 	vmc, err := s.vmLifecycle.Client()
 	if err != nil {
 		return err
+	}
+
+	// Tell the guest who it is. A restored guest carries the template's kernel
+	// command line, which names another VM's address, another VM's MAC and disks
+	// it has never looked for.
+	if err := configureGuest(ctx, vmc, state, restored); err != nil {
+		if restored {
+			return err
+		}
+		// A booted guest already read all of this from its command line, so a
+		// guest too old to know the RPC is not a reason to fail the container.
+		log.G(ctx).WithError(err).Debug("guest did not accept Configure; it booted with its own settings")
 	}
 
 	// Start forwarding events

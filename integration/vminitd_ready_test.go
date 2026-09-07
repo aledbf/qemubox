@@ -63,6 +63,11 @@ func TestVminitdReady(t *testing.T) {
 		containerd.WithNewSpec(
 			oci.WithImageConfig(image),
 			oci.WithProcessArgs("/bin/echo", "BOOTED"),
+			// This test reads the phases of a boot, so it has to ask for one.
+			// A VM restored from a template - the normal path - executes no
+			// initcalls and runs no vminitd startup, and emits none of these
+			// lines, which is the point of restoring.
+			oci.WithAnnotations(map[string]string{annotationDebugBoot: "true"}),
 		),
 	)
 	if err != nil {
