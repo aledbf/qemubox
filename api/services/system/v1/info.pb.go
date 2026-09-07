@@ -410,7 +410,15 @@ type ConfigureRequest struct {
 	// extras_disk is the block device holding the extras archive (e.g. "/dev/vdb"),
 	// empty when this container has none. It corresponds to what the boot path
 	// derives from spin.extras_disk.
-	ExtrasDisk    string `protobuf:"bytes,3,opt,name=extras_disk,json=extrasDisk,proto3" json:"extras_disk,omitempty"`
+	ExtrasDisk string `protobuf:"bytes,3,opt,name=extras_disk,json=extrasDisk,proto3" json:"extras_disk,omitempty"`
+	// restored says this VM was restored from a template rather than booted.
+	//
+	// Only the host knows. The guest cannot tell from the inside - that is the
+	// whole point of a restore - and two things depend on it: its clock resumes
+	// at the time the template was frozen, and its random pool is the template's
+	// until the vmgenid device reseeds it. Both are corrected either way; this
+	// says whether failing to is an error or the expected answer.
+	Restored      bool `protobuf:"varint,4,opt,name=restored,proto3" json:"restored,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -464,6 +472,13 @@ func (x *ConfigureRequest) GetExtrasDisk() string {
 		return x.ExtrasDisk
 	}
 	return ""
+}
+
+func (x *ConfigureRequest) GetRestored() bool {
+	if x != nil {
+		return x.Restored
+	}
+	return false
 }
 
 type NetworkConfig struct {
@@ -591,12 +606,13 @@ const file_github_com_spin_stack_spinbox_api_services_system_v1_info_proto_rawDe
 	"\x10RescanPCIRequest\x124\n" +
 	"\x16expected_block_devices\x18\x01 \x01(\rR\x14expectedBlockDevices\"8\n" +
 	"\x11RescanPCIResponse\x12#\n" +
-	"\rblock_devices\x18\x01 \x03(\tR\fblockDevices\"\xb9\x01\n" +
+	"\rblock_devices\x18\x01 \x03(\tR\fblockDevices\"\xd5\x01\n" +
 	"\x10ConfigureRequest\x12N\n" +
 	"\anetwork\x18\x01 \x01(\v24.containerd.vminitd.services.system.v1.NetworkConfigR\anetwork\x124\n" +
 	"\x16expected_block_devices\x18\x02 \x01(\rR\x14expectedBlockDevices\x12\x1f\n" +
 	"\vextras_disk\x18\x03 \x01(\tR\n" +
-	"extrasDisk\"\xb6\x01\n" +
+	"extrasDisk\x12\x1a\n" +
+	"\brestored\x18\x04 \x01(\bR\brestored\"\xb6\x01\n" +
 	"\rNetworkConfig\x12\x16\n" +
 	"\x06device\x18\x01 \x01(\tR\x06device\x12\x10\n" +
 	"\x03mac\x18\x02 \x01(\tR\x03mac\x12\x0e\n" +

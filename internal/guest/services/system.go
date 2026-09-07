@@ -466,6 +466,7 @@ func (s *systemService) Configure(ctx context.Context, req *api.ConfigureRequest
 	id := guestsystem.Identity{
 		BlockDevices: int(req.GetExpectedBlockDevices()),
 		ExtrasDisk:   req.GetExtrasDisk(),
+		Restored:     req.GetRestored(),
 	}
 	if n := req.GetNetwork(); n != nil {
 		id.Network = &guestsystem.NetworkIdentity{

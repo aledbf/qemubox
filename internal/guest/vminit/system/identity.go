@@ -47,6 +47,15 @@ type Identity struct {
 	// ExtrasForce re-extracts over the marker that makes extraction idempotent.
 	// A debug knob, set from spin.extras_force; a restore never asks for it.
 	ExtrasForce bool
+
+	// Restored says this VM came from a template rather than a boot.
+	//
+	// The guest cannot tell from the inside - that is what a restore is - and two
+	// things it cannot see depend on it: its clock resumed at the time the
+	// template was frozen, and its random pool is the template's until vmgenid
+	// reseeds it. Both are put right either way; this decides whether failing to
+	// is an error or simply does not apply.
+	Restored bool
 }
 
 // unknownDiskCount asks Apply to wait and see rather than for a stated number.
@@ -61,6 +70,8 @@ const unknownDiskCount = -1
 // still run. The disks do not get that treatment - a container whose rootfs
 // never appeared is not going to work.
 func Apply(ctx context.Context, id Identity) error {
+	applyRestoreCorrections(ctx, id.Restored)
+
 	if err := applyDisks(ctx, id.BlockDevices); err != nil {
 		return err
 	}
@@ -155,4 +166,47 @@ func cmdlineValue(cmdline, prefix string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// applyRestoreCorrections puts right the two things a VM inherits from the
+// template it was restored from, neither of which it can see for itself.
+//
+// Both emit a RESTORE line whether they succeed or fail. That is not noise: a VM
+// hours in the past and a VM sharing another's random pool both behave perfectly
+// until something depends on them, and a check that only speaks up on failure is
+// indistinguishable from a check that is not running. There is a test that
+// asserts these lines appear, and it would have passed against no
+// implementation at all without them.
+func applyRestoreCorrections(ctx context.Context, restored bool) {
+	// The clock first, because everything after it is timestamped: a restored VM
+	// resumes the time its template was frozen at, and would otherwise extract
+	// files, configure an interface and start a container in the past.
+	//
+	// Best-effort, like the network steps. A VM whose clock is wrong is worth
+	// running; a VM that refuses to start because it has no PTP device is not.
+	skew, err := CorrectClock(ctx)
+	switch {
+	case err != nil:
+		log.G(ctx).WithError(err).Warn("RESTORE clock could not be read from the host")
+	case restored:
+		log.G(ctx).WithField("skew_us", skew.Microseconds()).
+			Info("RESTORE clock read from the host over ptp_kvm")
+	}
+
+	if !restored {
+		return
+	}
+
+	// A restored VM inherits the template's random pool along with its memory, so
+	// two containers from one template would produce the same "random" bytes -
+	// the same session keys, the same nonces - until something reseeded them. The
+	// vmgenid device is what does it, and this is the only place that would
+	// notice if any link in that chain broke.
+	if CheckEntropyReseed(ctx) {
+		log.G(ctx).Info("RESTORE entropy reseeded=true")
+		return
+	}
+	log.G(ctx).Error("RESTORE entropy reseeded=false: this VM kept the template's " +
+		"random pool and shares it with every other VM restored from the same template. " +
+		"Check that the VM has a vmgenid device and the guest kernel has CONFIG_VMGENID")
 }

@@ -168,6 +168,15 @@ message ConfigureRequest {
 	// empty when this container has none. It corresponds to what the boot path
 	// derives from spin.extras_disk.
 	string extras_disk = 3;
+
+	// restored says this VM was restored from a template rather than booted.
+	//
+	// Only the host knows. The guest cannot tell from the inside - that is the
+	// whole point of a restore - and two things depend on it: its clock resumes
+	// at the time the template was frozen, and its random pool is the template's
+	// until the vmgenid device reseeds it. Both are corrected either way; this
+	// says whether failing to is an error or the expected answer.
+	bool restored = 4;
 }
 
 message NetworkConfig {
