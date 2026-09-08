@@ -219,6 +219,19 @@ tasks:
         set -eou pipefail
         echo "🔍 Running golangci-lint with config: .golangci.yml"
         GOOS=linux golangci-lint run --config .golangci.yml ./...
+        # The tagged files, compiled.
+        #
+        # Neither the lint above nor `go test ./...` looks at them, so a rename
+        # that misses one is green here and fails in CI as `[build failed]`,
+        # after five minutes of setting up a VM — the slowest lane in the
+        # repository reporting the fastest kind of error there is. That happened.
+        #
+        # `go vet` and not golangci-lint with the tags: the break to catch is a
+        # build break, and turning the full linter loose on files it has never
+        # seen reports seven pre-existing style findings that have nothing to do
+        # with whoever is running this.
+        echo "🔍 Type-checking the tagged tests"
+        GOOS=linux go vet -tags=integration,e2e ./...
         echo "✓ Linting passed"
 
   integration:
