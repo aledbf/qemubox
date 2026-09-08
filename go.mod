@@ -26,7 +26,7 @@ require (
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runc v1.5.1
 	github.com/opencontainers/runtime-spec v1.3.0
-	github.com/spin-stack/spin-machine v0.0.0-20260908021448-4a006f3f2f33
+	github.com/spin-stack/spin-machine v0.0.0-20260908023615-58d404efedaf
 	github.com/stretchr/testify v1.11.1
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
