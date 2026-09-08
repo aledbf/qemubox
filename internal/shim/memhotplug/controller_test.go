@@ -12,40 +12,32 @@ import (
 
 // mockQMPClient simulates QEMU QMP client for testing
 type mockQMPClient struct {
-	mu               sync.Mutex
-	baseMemory       int64
-	pluggedMemory    int64
-	hotplugErr       error
-	unplugErr        error
-	querySummaryErr  error
-	hotplugCallCount int
-	unplugCallCount  int
+	mu              sync.Mutex
+	baseMemory      int64
+	pluggedMemory   int64
+	resizeErr       error
+	querySummaryErr error
+	resizeCallCount int
+	// grantedFloor is the least the guest will give back, in bytes above the boot
+	// size. A virtio-mem device can only unplug what the guest has released, so a
+	// request below this settles here instead of where it was aimed — which is
+	// the case the controller has to survive without believing the number it
+	// asked for.
+	grantedFloor int64
 }
 
-func (m *mockQMPClient) HotplugMemory(ctx context.Context, slotID int, sizeBytes int64) error {
+func (m *mockQMPClient) SetPluggedMemory(ctx context.Context, sizeBytes int64) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.hotplugCallCount++
-	if m.hotplugErr != nil {
-		return m.hotplugErr
+	m.resizeCallCount++
+	if m.resizeErr != nil {
+		return 0, m.resizeErr
 	}
-	m.pluggedMemory += sizeBytes
-	return nil
-}
-
-func (m *mockQMPClient) UnplugMemory(ctx context.Context, slotID int) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.unplugCallCount++
-	if m.unplugErr != nil {
-		return m.unplugErr
+	if sizeBytes < m.grantedFloor {
+		sizeBytes = m.grantedFloor
 	}
-	// Assume each slot is 128MB
-	m.pluggedMemory -= 128 * 1024 * 1024
-	if m.pluggedMemory < 0 {
-		m.pluggedMemory = 0
-	}
-	return nil
+	m.pluggedMemory = sizeBytes
+	return m.pluggedMemory, nil
 }
 
 func (m *mockQMPClient) QueryMemorySizeSummary(ctx context.Context) (*qemu.MemorySizeSummary, error) {
@@ -74,33 +66,6 @@ func (m *mockStatsProvider) getStats(ctx context.Context) (int64, error) {
 		return 0, m.returnError
 	}
 	return m.usageBytes, nil
-}
-
-// mockMemoryManager simulates guest memory online/offline
-type mockMemoryManager struct {
-	mu           sync.Mutex
-	offlineErr   error
-	onlineErr    error
-	offlineCalls int
-	onlineCalls  int
-	offlineIDs   []int
-	onlineIDs    []int
-}
-
-func (m *mockMemoryManager) offline(ctx context.Context, memoryID int) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.offlineCalls++
-	m.offlineIDs = append(m.offlineIDs, memoryID)
-	return m.offlineErr
-}
-
-func (m *mockMemoryManager) online(ctx context.Context, memoryID int) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.onlineCalls++
-	m.onlineIDs = append(m.onlineIDs, memoryID)
-	return m.onlineErr
 }
 
 func TestDefaultConfig(t *testing.T) {
@@ -133,7 +98,6 @@ func TestNewController(t *testing.T) {
 		baseMemory: 512 * 1024 * 1024,
 	}
 	mockStats := &mockStatsProvider{}
-	mockMem := &mockMemoryManager{}
 
 	config := DefaultConfig()
 	config.MonitorInterval = 100 * time.Millisecond // Fast for testing
@@ -142,8 +106,6 @@ func TestNewController(t *testing.T) {
 		"test-container",
 		mockQMP,
 		mockStats.getStats,
-		mockMem.offline,
-		mockMem.online,
 		512*1024*1024,  // boot memory
 		1024*1024*1024, // max memory
 		config,
@@ -174,7 +136,6 @@ func TestNewControllerNoopWhenNoHotplug(t *testing.T) {
 		baseMemory: 512 * 1024 * 1024,
 	}
 	mockStats := &mockStatsProvider{}
-	mockMem := &mockMemoryManager{}
 
 	config := DefaultConfig()
 
@@ -183,8 +144,6 @@ func TestNewControllerNoopWhenNoHotplug(t *testing.T) {
 		"test-container",
 		mockQMP,
 		mockStats.getStats,
-		mockMem.offline,
-		mockMem.online,
 		512*1024*1024, // boot memory
 		512*1024*1024, // max memory (same as boot)
 		config,
@@ -215,7 +174,6 @@ func TestControllerScaleUp(t *testing.T) {
 	mockStats := &mockStatsProvider{
 		usageBytes: 450 * 1024 * 1024, // 450MB of 512MB = 87.9% usage
 	}
-	mockMem := &mockMemoryManager{}
 
 	config := DefaultConfig()
 	config.MonitorInterval = 50 * time.Millisecond
@@ -226,8 +184,6 @@ func TestControllerScaleUp(t *testing.T) {
 		"test-container",
 		mockQMP,
 		mockStats.getStats,
-		mockMem.offline,
-		mockMem.online,
 		512*1024*1024,  // boot memory
 		1024*1024*1024, // max memory
 		config,
@@ -244,19 +200,11 @@ func TestControllerScaleUp(t *testing.T) {
 	controller.Stop()
 
 	mockQMP.mu.Lock()
-	hotplugCalls := mockQMP.hotplugCallCount
+	hotplugCalls := mockQMP.resizeCallCount
 	mockQMP.mu.Unlock()
 
 	if hotplugCalls == 0 {
 		t.Error("expected at least one hotplug call due to high memory usage")
-	}
-
-	mockMem.mu.Lock()
-	onlineCalls := mockMem.onlineCalls
-	mockMem.mu.Unlock()
-
-	if onlineCalls == 0 {
-		t.Error("expected at least one online call after hotplug")
 	}
 }
 
@@ -267,7 +215,6 @@ func TestControllerNoScaleUpBelowThreshold(t *testing.T) {
 	mockStats := &mockStatsProvider{
 		usageBytes: 300 * 1024 * 1024, // 300MB of 512MB = 58.6% usage (below 85%)
 	}
-	mockMem := &mockMemoryManager{}
 
 	config := DefaultConfig()
 	config.MonitorInterval = 50 * time.Millisecond
@@ -276,8 +223,6 @@ func TestControllerNoScaleUpBelowThreshold(t *testing.T) {
 		"test-container",
 		mockQMP,
 		mockStats.getStats,
-		mockMem.offline,
-		mockMem.online,
 		512*1024*1024,  // boot memory
 		1024*1024*1024, // max memory
 		config,
@@ -291,7 +236,7 @@ func TestControllerNoScaleUpBelowThreshold(t *testing.T) {
 	controller.Stop()
 
 	mockQMP.mu.Lock()
-	hotplugCalls := mockQMP.hotplugCallCount
+	hotplugCalls := mockQMP.resizeCallCount
 	mockQMP.mu.Unlock()
 
 	if hotplugCalls > 0 {
@@ -307,7 +252,6 @@ func TestControllerScaleDown(t *testing.T) {
 	mockStats := &mockStatsProvider{
 		usageBytes: 200 * 1024 * 1024, // 200MB of 640MB = 31.25% usage (below 60%)
 	}
-	mockMem := &mockMemoryManager{}
 
 	config := DefaultConfig()
 	config.MonitorInterval = 50 * time.Millisecond
@@ -319,8 +263,6 @@ func TestControllerScaleDown(t *testing.T) {
 		"test-container",
 		mockQMP,
 		mockStats.getStats,
-		mockMem.offline,
-		mockMem.online,
 		512*1024*1024, // boot memory
 		768*1024*1024, // max memory
 		config,
@@ -332,7 +274,6 @@ func TestControllerScaleDown(t *testing.T) {
 		t.Fatal("NewController returned non-Controller implementation")
 	}
 	ctrl.currentMemory = 640 * 1024 * 1024 // Set current memory to include plugged
-	ctrl.usedSlots[0] = true               // Mark slot 0 as used
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -345,19 +286,11 @@ func TestControllerScaleDown(t *testing.T) {
 	controller.Stop()
 
 	mockQMP.mu.Lock()
-	unplugCalls := mockQMP.unplugCallCount
+	unplugCalls := mockQMP.resizeCallCount
 	mockQMP.mu.Unlock()
 
 	if unplugCalls == 0 {
 		t.Error("expected at least one unplug call due to low memory usage")
-	}
-
-	mockMem.mu.Lock()
-	offlineCalls := mockMem.offlineCalls
-	mockMem.mu.Unlock()
-
-	if offlineCalls == 0 {
-		t.Error("expected at least one offline call before unplug")
 	}
 }
 
@@ -369,7 +302,6 @@ func TestControllerScaleDownDisabled(t *testing.T) {
 	mockStats := &mockStatsProvider{
 		usageBytes: 200 * 1024 * 1024, // Low usage
 	}
-	mockMem := &mockMemoryManager{}
 
 	config := DefaultConfig()
 	config.MonitorInterval = 50 * time.Millisecond
@@ -379,8 +311,6 @@ func TestControllerScaleDownDisabled(t *testing.T) {
 		"test-container",
 		mockQMP,
 		mockStats.getStats,
-		mockMem.offline,
-		mockMem.online,
 		512*1024*1024,
 		768*1024*1024,
 		config,
@@ -394,7 +324,7 @@ func TestControllerScaleDownDisabled(t *testing.T) {
 	controller.Stop()
 
 	mockQMP.mu.Lock()
-	unplugCalls := mockQMP.unplugCallCount
+	unplugCalls := mockQMP.resizeCallCount
 	mockQMP.mu.Unlock()
 
 	if unplugCalls > 0 {
@@ -410,7 +340,6 @@ func TestControllerOOMSafetyMargin(t *testing.T) {
 	mockStats := &mockStatsProvider{
 		usageBytes: 450 * 1024 * 1024,
 	}
-	mockMem := &mockMemoryManager{}
 
 	config := DefaultConfig()
 	config.MonitorInterval = 50 * time.Millisecond
@@ -421,8 +350,6 @@ func TestControllerOOMSafetyMargin(t *testing.T) {
 		"test-container",
 		mockQMP,
 		mockStats.getStats,
-		mockMem.offline,
-		mockMem.online,
 		512*1024*1024,
 		1024*1024*1024,
 		config,
@@ -436,7 +363,7 @@ func TestControllerOOMSafetyMargin(t *testing.T) {
 	controller.Stop()
 
 	mockQMP.mu.Lock()
-	hotplugCalls := mockQMP.hotplugCallCount
+	hotplugCalls := mockQMP.resizeCallCount
 	mockQMP.mu.Unlock()
 
 	if hotplugCalls == 0 {
@@ -451,7 +378,6 @@ func TestControllerMaxMemoryLimit(t *testing.T) {
 	mockStats := &mockStatsProvider{
 		usageBytes: 500 * 1024 * 1024, // Very high usage
 	}
-	mockMem := &mockMemoryManager{}
 
 	config := DefaultConfig()
 	config.MonitorInterval = 50 * time.Millisecond
@@ -462,8 +388,6 @@ func TestControllerMaxMemoryLimit(t *testing.T) {
 		"test-container",
 		mockQMP,
 		mockStats.getStats,
-		mockMem.offline,
-		mockMem.online,
 		512*1024*1024, // boot memory
 		512*1024*1024, // max memory (same as boot, no hotplug possible)
 		config,
@@ -477,7 +401,7 @@ func TestControllerMaxMemoryLimit(t *testing.T) {
 	controller.Stop()
 
 	mockQMP.mu.Lock()
-	hotplugCalls := mockQMP.hotplugCallCount
+	hotplugCalls := mockQMP.resizeCallCount
 	mockQMP.mu.Unlock()
 
 	if hotplugCalls > 0 {
@@ -488,12 +412,11 @@ func TestControllerMaxMemoryLimit(t *testing.T) {
 func TestControllerErrorHandling(t *testing.T) {
 	mockQMP := &mockQMPClient{
 		baseMemory: 512 * 1024 * 1024,
-		hotplugErr: errors.New("simulated hotplug error"),
+		resizeErr:  errors.New("simulated resize error"),
 	}
 	mockStats := &mockStatsProvider{
 		usageBytes: 450 * 1024 * 1024, // High usage to trigger scale-up
 	}
-	mockMem := &mockMemoryManager{}
 
 	config := DefaultConfig()
 	config.MonitorInterval = 50 * time.Millisecond
@@ -503,8 +426,6 @@ func TestControllerErrorHandling(t *testing.T) {
 		"test-container",
 		mockQMP,
 		mockStats.getStats,
-		mockMem.offline,
-		mockMem.online,
 		512*1024*1024,
 		1024*1024*1024,
 		config,
@@ -518,87 +439,39 @@ func TestControllerErrorHandling(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	controller.Stop()
 
-	// Test should pass if controller doesn't crash
+	// Test should pass if controller does not crash
 }
 
-func TestFindFreeSlot(t *testing.T) {
-	tests := []struct {
-		name      string
-		usedSlots map[int]bool
-		want      int
-	}{
-		{
-			name:      "all slots free",
-			usedSlots: map[int]bool{},
-			want:      0,
-		},
-		{
-			name:      "first slot used",
-			usedSlots: map[int]bool{0: true},
-			want:      1,
-		},
-		{
-			name:      "first two slots used",
-			usedSlots: map[int]bool{0: true, 1: true},
-			want:      2,
-		},
-		{
-			name:      "all slots used",
-			usedSlots: map[int]bool{0: true, 1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true},
-			want:      -1,
-		},
+// TestResizeBelievesTheDeviceAndNotTheRequest is the test the virtio-mem switch
+// exists for.
+//
+// A request is a negotiation: the device plugs memory as the guest accepts it,
+// and unplugs only what the guest has already released. So asking for a size and
+// recording it is wrong in a way nothing reports — the controller would go on
+// believing in memory the VM does not have, and every threshold after that is
+// computed against a number that is not real.
+func TestResizeBelievesTheDeviceAndNotTheRequest(t *testing.T) {
+	const boot = 512 * 1024 * 1024
+	const granted = 256 * 1024 * 1024
+
+	// The guest will not give back below 256 MB of the 512 that were plugged.
+	mockQMP := &mockQMPClient{baseMemory: boot, pluggedMemory: 512 * 1024 * 1024, grantedFloor: granted}
+	c := &Controller{
+		containerID:   "test-container",
+		qmpClient:     mockQMP,
+		bootMemory:    boot,
+		maxMemory:     4 * boot,
+		currentMemory: boot + 512*1024*1024,
+		config:        DefaultConfig(),
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			controller := &Controller{
-				usedSlots: tt.usedSlots,
-				config:    Config{MaxSlots: 8},
-			}
-			if got := controller.findFreeSlot(); got != tt.want {
-				t.Errorf("findFreeSlot() = %d, want %d", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestFindUsedSlot(t *testing.T) {
-	tests := []struct {
-		name      string
-		usedSlots map[int]bool
-		want      int
-	}{
-		{
-			name:      "no slots used",
-			usedSlots: map[int]bool{},
-			want:      -1,
-		},
-		{
-			name:      "single slot used",
-			usedSlots: map[int]bool{3: true},
-			want:      3,
-		},
-		{
-			name:      "multiple slots used returns highest",
-			usedSlots: map[int]bool{2: true, 5: true},
-			want:      5,
-		},
-		{
-			name:      "first slot only",
-			usedSlots: map[int]bool{0: true},
-			want:      0,
-		},
+	// Aim all the way back at the boot size, which the guest will not allow.
+	if err := c.resize(context.Background(), boot, "down"); err != nil {
+		t.Fatalf("resize: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			controller := &Controller{
-				usedSlots: tt.usedSlots,
-				config:    Config{MaxSlots: 8},
-			}
-			if got := controller.findUsedSlot(); got != tt.want {
-				t.Errorf("findUsedSlot() = %d, want %d", got, tt.want)
-			}
-		})
+	if want := int64(boot + granted); c.currentMemory != want {
+		t.Errorf("currentMemory = %d, want %d — the controller recorded what it asked for, not what it got",
+			c.currentMemory, want)
 	}
 }

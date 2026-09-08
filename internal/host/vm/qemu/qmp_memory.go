@@ -25,111 +25,57 @@ func (q *qmpClient) QueryMemorySizeSummary(ctx context.Context) (*MemorySizeSumm
 	return qmpQuery[*MemorySizeSummary](q, ctx, "query-memory-size-summary")
 }
 
-// HotplugMemory adds memory to the VM using pc-dimm.
-// slotID: memory slot index (0-7 based on -m slots=8)
-// sizeBytes: memory size in bytes (must be 128MB aligned)
-func (q *qmpClient) HotplugMemory(ctx context.Context, slotID int, sizeBytes int64) error {
-	// Validate 128MB alignment
-	const alignmentMB = 128
-	const alignmentBytes = alignmentMB * 1024 * 1024
-	if sizeBytes%alignmentBytes != 0 {
-		return fmt.Errorf("memory size must be %dMB aligned, got %d bytes", alignmentMB, sizeBytes)
+// SetPluggedMemory asks the machine's virtio-mem device for a total amount of
+// memory beyond the boot size, in bytes, and reports what the device says it has
+// after the request.
+//
+// One call, one number, in both directions. It replaces adding and removing
+// pc-dimm devices in fixed slots, which cost this package a backend object and a
+// device per step, a slot table to say which of the eight were in use, LIFO
+// ordering so that unplug removed the newest, an online RPC into the guest after
+// every add and an offline RPC before every remove, and a rollback path for each
+// of the four ways that could half-fail. None of it exists here: the guest
+// onlines what arrives by itself (memhp_default_state=online), and shrinking is
+// the same call with a smaller number.
+//
+// **The answer is advisory and the request is not a promise.** virtio-mem is a
+// negotiation with the guest: it plugs memory in blocks as the guest accepts
+// them, and on the way down it can only take back what the guest has released.
+// Asking for less than the guest is using is not an error and does not fail — it
+// simply does not arrive, which is why the size afterwards is read back rather
+// than assumed.
+func (q *qmpClient) SetPluggedMemory(ctx context.Context, sizeBytes int64) (int64, error) {
+	if sizeBytes < 0 {
+		return 0, fmt.Errorf("negative memory request: %d bytes", sizeBytes)
 	}
 
-	backendID := fmt.Sprintf("mem%d", slotID)
-	dimmID := fmt.Sprintf("dimm%d", slotID)
+	log.G(ctx).WithFields(log.Fields{
+		"requested_bytes": sizeBytes,
+		"requested_mb":    sizeBytes / (1024 * 1024),
+	}).Debug("qemu: asking virtio-mem for a new size")
 
-	// Query current state before adding
-	beforeSummary, err := q.QueryMemorySizeSummary(ctx)
+	if err := q.QOMSet(ctx, virtioMemQOMPath, "requested-size", sizeBytes); err != nil {
+		return 0, fmt.Errorf("requesting %d bytes from virtio-mem: %w", sizeBytes, err)
+	}
+
+	summary, err := q.QueryMemorySizeSummary(ctx)
 	if err != nil {
-		log.G(ctx).WithError(err).Warn("qemu: failed to query memory before hotplug")
-	}
-
-	// Step 1: Create memory backend object
-	backendArgs := map[string]any{
-		"size": sizeBytes,
-	}
-
-	log.G(ctx).WithFields(log.Fields{
-		fieldSlotID:  slotID,
-		"size_bytes": sizeBytes,
-		"size_mb":    sizeBytes / (1024 * 1024),
-		"backend_id": backendID,
-	}).Debug("qemu: creating memory backend")
-
-	if err := q.ObjectAdd(ctx, "memory-backend-ram", backendID, backendArgs); err != nil {
-		return fmt.Errorf("failed to create memory backend: %w", err)
-	}
-
-	// Step 2: Hotplug pc-dimm device
-	dimmArgs := map[string]any{
-		"id":     dimmID,
-		"memdev": backendID,
+		// The request went through; only the confirmation did not. Reporting the
+		// requested size here would be inventing a measurement, so the caller is
+		// told it does not know rather than told a number.
+		return 0, fmt.Errorf("reading back the memory size after requesting %d bytes: %w", sizeBytes, err)
 	}
 
 	log.G(ctx).WithFields(log.Fields{
-		fieldSlotID: slotID,
-		"dimm_id":   dimmID,
-	}).Debug("qemu: hotplugging memory device")
+		"requested_mb": sizeBytes / (1024 * 1024),
+		"plugged_mb":   summary.PluggedMemory / (1024 * 1024),
+		"total_mb":     (summary.BaseMemory + summary.PluggedMemory) / (1024 * 1024),
+	}).Info("qemu: virtio-mem size set")
 
-	if err := q.DeviceAdd(ctx, "pc-dimm", dimmArgs); err != nil {
-		// Cleanup backend on failure
-		if delErr := q.ObjectDel(ctx, backendID); delErr != nil {
-			log.G(ctx).WithError(delErr).Warn("qemu: failed to cleanup memory backend after device_add failure")
-		}
-		return fmt.Errorf("failed to hotplug memory device: %w", err)
-	}
-
-	// Verify memory was added
-	if beforeSummary != nil {
-		afterSummary, err := q.QueryMemorySizeSummary(ctx)
-		if err == nil {
-			if afterSummary.BaseMemory+afterSummary.PluggedMemory <= beforeSummary.BaseMemory+beforeSummary.PluggedMemory {
-				log.G(ctx).WithFields(log.Fields{
-					fieldSlotID:     slotID,
-					"before_total":  beforeSummary.BaseMemory + beforeSummary.PluggedMemory,
-					"after_total":   afterSummary.BaseMemory + afterSummary.PluggedMemory,
-					"expected_size": sizeBytes,
-				}).Warn("qemu: device_add did not increase memory size")
-				return fmt.Errorf("device_add did not increase memory size")
-			}
-			log.G(ctx).WithFields(log.Fields{
-				fieldSlotID:  slotID,
-				"added_mb":   sizeBytes / (1024 * 1024),
-				"total_mb":   (afterSummary.BaseMemory + afterSummary.PluggedMemory) / (1024 * 1024),
-				"plugged_mb": afterSummary.PluggedMemory / (1024 * 1024),
-			}).Info("qemu: memory hotplug successful")
-		}
-	}
-
-	return nil
+	return summary.PluggedMemory, nil
 }
 
-// UnplugMemory removes memory from the VM.
-// slotID: memory slot to remove
-// Note: Memory hot-unplug requires guest kernel support (CONFIG_MEMORY_HOTREMOVE=y)
-// and the memory must be offline in the guest before removal.
-func (q *qmpClient) UnplugMemory(ctx context.Context, slotID int) error {
-	dimmID := fmt.Sprintf("dimm%d", slotID)
-	backendID := fmt.Sprintf("mem%d", slotID)
-
-	log.G(ctx).WithFields(log.Fields{
-		fieldSlotID: slotID,
-		"dimm_id":   dimmID,
-	}).Debug("qemu: unplugging memory device")
-
-	// Step 1: Remove device
-	if err := q.DeviceDelete(ctx, dimmID); err != nil {
-		return fmt.Errorf("failed to unplug memory device: %w", err)
-	}
-
-	// Step 2: Remove backend object
-	// Note: QEMU may need time to complete device removal before backend deletion
-	// We'll attempt to delete the backend, but it's not critical if it fails
-	if err := q.ObjectDel(ctx, backendID); err != nil {
-		log.G(ctx).WithError(err).WithField("backend_id", backendID).
-			Warn("qemu: failed to delete memory backend (non-fatal)")
-	}
-
-	return nil
-}
+// virtioMemQOMPath is where the machine puts its virtio-mem device. The id comes
+// from machine.Spec.Args, which names it vmem0; QEMU exposes anything with an id
+// under /machine/peripheral.
+const virtioMemQOMPath = "/machine/peripheral/vmem0"

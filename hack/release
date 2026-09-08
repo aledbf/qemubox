@@ -44,7 +44,7 @@ mkdir -p "${RELEASE_DIR}/usr/share/spin-stack/config"
 echo "Copying artifacts to release structure..."
 
 artifacts=(
-  "${OUTPUT_DIR}/vmlinux:kernel:vmlinux"
+  "${OUTPUT_DIR}/kernel/vmlinux:kernel:vmlinux"
   "${OUTPUT_DIR}/spinbox-initrd:kernel:spinbox-initrd"
   "${OUTPUT_DIR}/containerd-shim-spinbox-v1:bin:containerd-shim-spinbox-v1"
   "${OUTPUT_DIR}/spinbox-commit:bin:spinbox-commit"
@@ -77,16 +77,16 @@ for binary in qemu-system-x86_64 qemu-img; do
   fi
 done
 
-if [ -d "${OUTPUT_DIR}/share/spin-stack/qemu" ]; then
+if [ -d "${OUTPUT_DIR}/qemu" ]; then
   mkdir -p "${RELEASE_DIR}/usr/share/spin-stack/qemu"
-  cp -r "${OUTPUT_DIR}/share/spin-stack/qemu/"* "${RELEASE_DIR}/usr/share/spin-stack/qemu/"
+  cp -r "${OUTPUT_DIR}/qemu/"* "${RELEASE_DIR}/usr/share/spin-stack/qemu/"
   echo "  ok: QEMU firmware files"
 else
   echo "  warn: QEMU firmware files not found - skipping"
 fi
 
 # The firmware a q35 started with -nodefaults -nographic and a PVH kernel needs, which is
-# what Dockerfile.qemu ships. vgabios-stdvga.bin is not on the list any more because no
+# what a spin-machine release ships. vgabios-stdvga.bin is not on the list any more because no
 # display adapter is built or created; pvh.bin is, and it was missing from this check while
 # being the one file a direct kernel boot cannot start without — QEMU has no entry point
 # into a PVH ELF kernel otherwise, and it fails as a rom-open error that reads like a
@@ -100,9 +100,9 @@ for firmware in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom; do
 done
 
 if [ "${missing_qemu_firmware}" -ne 0 ]; then
-  if [ -d "${OUTPUT_DIR}/share/spin-stack/qemu" ]; then
-    echo "Contents of ${OUTPUT_DIR}/share/spin-stack/qemu:"
-    ls -la "${OUTPUT_DIR}/share/spin-stack/qemu" || true
+  if [ -d "${OUTPUT_DIR}/qemu" ]; then
+    echo "Contents of ${OUTPUT_DIR}/qemu:"
+    ls -la "${OUTPUT_DIR}/qemu" || true
   fi
   exit 1
 fi

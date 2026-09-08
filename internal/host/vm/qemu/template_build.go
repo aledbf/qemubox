@@ -47,12 +47,12 @@ func BuildTemplate(ctx context.Context, store *TemplateStore, stateDir string, r
 	ctx, cancel := context.WithTimeout(ctx, templateBuildTimeout)
 	defer cancel()
 
-	id, err := MachineIdentityFor(resourceCfg)
+	spec, err := specFor(resourceCfg)
 	if err != nil {
 		return Template{}, fmt.Errorf("identifying this machine: %w", err)
 	}
 
-	if existing, err := store.Lookup(id); err == nil {
+	if existing, err := store.Lookup(spec); err == nil {
 		log.G(ctx).WithField("fingerprint", existing.Fingerprint).
 			Debug("qemu: template already built for this machine")
 		return existing, nil
@@ -60,7 +60,7 @@ func BuildTemplate(ctx context.Context, store *TemplateStore, stateDir string, r
 		return Template{}, err
 	}
 
-	staged, err := store.Stage(id)
+	staged, err := store.Stage(spec)
 	if err != nil {
 		return Template{}, err
 	}
