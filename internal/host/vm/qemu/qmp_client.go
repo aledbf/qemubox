@@ -288,6 +288,21 @@ func (q *qmpClient) ObjectAdd(ctx context.Context, qomType, objID string, args m
 	return err
 }
 
+// QOMSet writes one property of one device in the machine's object model.
+//
+// It is how a device that is already there is asked to change, as against
+// device_add and device_del, which are how a device arrives and leaves. Memory
+// growth is the first thing here that works the first way: the virtio-mem device
+// is on the command line from the start and its size is a property of it.
+func (q *qmpClient) QOMSet(ctx context.Context, path, property string, value any) error {
+	_, err := q.execute(ctx, "qom-set", map[string]any{
+		"path":     path,
+		"property": property,
+		"value":    value,
+	})
+	return err
+}
+
 // ObjectDel removes a QEMU object.
 func (q *qmpClient) ObjectDel(ctx context.Context, objID string) error {
 	_, err := q.execute(ctx, "object-del", map[string]any{

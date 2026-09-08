@@ -23,8 +23,6 @@ type HotplugCallbacks struct {
 	OfflineCPU     func(ctx context.Context, cpuID int) error
 	OnlineCPU      func(ctx context.Context, cpuID int) error
 	GetMemoryStats func(ctx context.Context, containerID string) (int64, error)
-	OfflineMemory  func(ctx context.Context, memoryID int) error
-	OnlineMemory   func(ctx context.Context, memoryID int) error
 }
 
 // StartCPUHotplug starts the CPU hotplug controller for QEMU VMs.
@@ -218,8 +216,6 @@ func StartMemoryHotplug(
 		func(ctx context.Context) (int64, error) {
 			return callbacks.GetMemoryStats(ctx, containerID)
 		},
-		callbacks.OfflineMemory,
-		callbacks.OnlineMemory,
 		resourceCfg.MemorySize,
 		resourceCfg.MemoryHotplugSize,
 		memConfig,
@@ -256,12 +252,6 @@ func CreateVMClientCallbacks(dialClient func(context.Context) (*ttrpc.Client, er
 		},
 		GetMemoryStats: func(ctx context.Context, containerID string) (int64, error) {
 			return getMemoryStats(ctx, dialClient, containerID)
-		},
-		OfflineMemory: func(ctx context.Context, memoryID int) error {
-			return offlineMemory(ctx, dialClient, memoryID)
-		},
-		OnlineMemory: func(ctx context.Context, memoryID int) error {
-			return onlineMemory(ctx, dialClient, memoryID)
 		},
 	}
 }

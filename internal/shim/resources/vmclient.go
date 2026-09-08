@@ -103,30 +103,12 @@ func getMemoryStats(ctx context.Context, dialClient func(context.Context) (*ttrp
 	return int64(mem.GetUsage()), nil
 }
 
-// offlineMemory takes memory offline in the guest VM.
+// The two calls that used to be here — offlineMemory and onlineMemory — are
+// gone with the DIMM slots they served. virtio-mem hands memory to a guest that
+// onlines it itself (memhp_default_state=online) and takes back only what the
+// guest has already released, so there is nothing for the host to ask the guest
+// to do in either direction.
 //
-// The dialClient function should return a managed TTRPC client. The caller
-// (ConnectionManager) owns the client lifecycle.
-func offlineMemory(ctx context.Context, dialClient func(context.Context) (*ttrpc.Client, error), memoryID int) error {
-	vmc, err := dialClient(ctx)
-	if err != nil {
-		return err
-	}
-	client := systemAPI.NewTTRPCSystemClient(vmc)
-	_, err = client.OfflineMemory(ctx, &systemAPI.OfflineMemoryRequest{MemoryID: uint32(memoryID)})
-	return err
-}
-
-// onlineMemory brings memory online in the guest VM.
-//
-// The dialClient function should return a managed TTRPC client. The caller
-// (ConnectionManager) owns the client lifecycle.
-func onlineMemory(ctx context.Context, dialClient func(context.Context) (*ttrpc.Client, error), memoryID int) error {
-	vmc, err := dialClient(ctx)
-	if err != nil {
-		return err
-	}
-	client := systemAPI.NewTTRPCSystemClient(vmc)
-	_, err = client.OnlineMemory(ctx, &systemAPI.OnlineMemoryRequest{MemoryID: uint32(memoryID)})
-	return err
-}
+// The System service still carries the two RPCs and the guest still implements
+// them. Removing them is a proto change and belongs in its own commit; nothing
+// on this side calls them.

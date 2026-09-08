@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/spin-stack/spin-machine/machine"
 )
 
 // Memoising the fingerprint.
@@ -53,20 +55,20 @@ func newFingerprintCache(dir string) *fingerprintCache {
 	}
 }
 
-// fingerprint returns the identity's fingerprint, reading the cache first.
-func (c *fingerprintCache) fingerprint(id MachineIdentity) (string, error) {
-	key, err := statKey(id)
+// fingerprint returns the machine's fingerprint, reading the cache first.
+func (c *fingerprintCache) fingerprint(spec machine.Spec) (string, error) {
+	key, err := statKey(spec)
 	if err != nil {
-		// The files cannot be stat'ed, so they cannot be hashed either; let
-		// Fingerprint produce the real error.
-		return id.Fingerprint()
+		// The files cannot be stat'ed, so they cannot be hashed either; let the
+		// fingerprint produce the real error.
+		return fingerprintOf(spec)
 	}
 
 	if fp, ok := c.lookup(key); ok {
 		return fp, nil
 	}
 
-	fp, err := id.Fingerprint()
+	fp, err := fingerprintOf(spec)
 	if err != nil {
 		return "", err
 	}
@@ -136,11 +138,17 @@ func (c *fingerprintCache) store(key, fp string) {
 }
 
 // statKey identifies the inputs of a fingerprint without reading them: each
-// file's size, modification time and inode, plus the machine arguments, which
-// are cheap enough to include verbatim.
-func statKey(id MachineIdentity) (string, error) {
+// file's size, modification time and inode, plus everything else the fingerprint
+// hashes.
+//
+// That second part is machine.Spec.Identity and not a list spelled here. A list
+// spelled here is a list that goes out of date the next time a device is added
+// to the machine, and the way it fails is a cache hit returning the fingerprint
+// of a machine this is not — which is a template restored into hardware it did
+// not come from, silently.
+func statKey(spec machine.Spec) (string, error) {
 	h := sha256.New()
-	for _, path := range []string{id.QEMU, id.Kernel, id.Initrd} {
+	for _, path := range []string{spec.QEMU, spec.Kernel, spec.Initrd} {
 		fi, err := os.Stat(path)
 		if err != nil {
 			return "", err
@@ -152,6 +160,10 @@ func statKey(id MachineIdentity) (string, error) {
 		// Discarded: hash.Hash's Write never returns an error, by contract.
 		_, _ = fmt.Fprintf(h, "%s|%d|%d|%d\n", path, fi.Size(), fi.ModTime().UnixNano(), ino)
 	}
-	_, _ = fmt.Fprintf(h, "%s|%s|%s|%s|%s\n", id.Machine, id.CPU, id.SMP, id.Memory, id.HostCPU)
+	ident, err := spec.Identity()
+	if err != nil {
+		return "", err
+	}
+	_, _ = fmt.Fprintf(h, "%s\n", ident)
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

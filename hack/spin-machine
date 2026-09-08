@@ -51,9 +51,14 @@ want=(
 
 # place <root-of-a-release-tree>
 #
-# Copies the wanted files into _output/ in the layout the rest of the build and
-# hack/release expect: binaries in bin/, firmware in share/spin-stack/qemu/, the
-# kernel at the top.
+# Copies the wanted files into _output/ at the paths they already have.
+#
+# It used to rearrange them — binaries here, firmware under another prefix, the
+# kernel moved to the top — which meant the same four files had one layout in the
+# release, a second here, and a third wherever they were installed, with a
+# translation between each pair and a discovery function on the Go side guessing
+# which one it had been handed. The release layout is the layout now, everywhere,
+# so this is a copy.
 place() {
   local root="$1" missing=0
   for rel in "${want[@]}"; do
@@ -63,11 +68,7 @@ place() {
       missing=1
       continue
     fi
-    case "${rel}" in
-      bin/*)    dest="${OUTPUT_DIR}/${rel}" ;;
-      qemu/*)   dest="${OUTPUT_DIR}/share/spin-stack/${rel}" ;;
-      kernel/*) dest="${OUTPUT_DIR}/$(basename "${rel}")" ;;
-    esac
+    dest="${OUTPUT_DIR}/${rel}"
     mkdir -p "$(dirname "${dest}")"
     # Removed first: _output may hold files from when this repository built the
     # machine itself, and those were written by a container running as root.
@@ -93,22 +94,15 @@ place() {
 # through to a download or, worse, reported success. It did both before this split.
 have_sibling() {
   local out="${SIBLING}/_output"
-  [ -f "${out}/bin/qemu-system-x86_64" ] && [ -f "${out}/vmlinux" ]
+  [ -f "${out}/bin/qemu-system-x86_64" ] && [ -f "${out}/kernel/vmlinux" ]
 }
 
 from_sibling() {
-  local out="${SIBLING}/_output"
   echo "Using the machine built in ${SIBLING}"
-  # A built tree, not an unpacked release: same files, different shape.
-  local staged
-  staged="$(mktemp -d)"
-  trap 'rm -rf "${staged}"' RETURN
-  mkdir -p "${staged}/bin" "${staged}/kernel" "${staged}/qemu"
-  cp "${out}/bin/qemu-system-x86_64" "${out}/bin/qemu-img" "${staged}/bin/"
-  cp "${out}/vmlinux" "${staged}/kernel/vmlinux"
-  cp "${out}/kernel-config" "${staged}/kernel/kernel-config"
-  cp "${out}"/share/spin-stack/qemu/* "${staged}/qemu/"
-  place "${staged}"
+  # A built tree and an unpacked release are now the same shape, so this is the
+  # same copy the release path does. It used to stage the files into a third
+  # layout first, because they were not.
+  place "${SIBLING}/_output"
 }
 
 from_release() {
@@ -165,4 +159,4 @@ else
   from_release
 fi
 
-echo "✓ machine ${VERSION}: qemu $("${OUTPUT_DIR}/bin/qemu-system-x86_64" --version | head -1 | awk '{print $4}'), kernel $(stat -c%s "${OUTPUT_DIR}/vmlinux") bytes"
+echo "✓ machine ${VERSION}: qemu $("${OUTPUT_DIR}/bin/qemu-system-x86_64" --version | head -1 | awk '{print $4}'), kernel $(stat -c%s "${OUTPUT_DIR}/kernel/vmlinux") bytes"

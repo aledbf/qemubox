@@ -43,15 +43,7 @@ func createTestConfigEnv(t *testing.T, baseDir string) testConfigEnv {
 		t.Fatalf("failed to create log dir: %v", err)
 	}
 
-	// Create dummy kernel and initrd files
-	kernelPath := filepath.Join(env.shareDir, "kernel", "spinbox-kernel-x86_64")
-	initrdPath := filepath.Join(env.shareDir, "kernel", "spinbox-initrd")
-	if err := os.WriteFile(kernelPath, []byte("dummy"), 0644); err != nil {
-		t.Fatalf("failed to create dummy kernel: %v", err)
-	}
-	if err := os.WriteFile(initrdPath, []byte("dummy"), 0644); err != nil {
-		t.Fatalf("failed to create dummy initrd: %v", err)
-	}
+	writeMachine(t, env.shareDir)
 
 	// Create and write config
 	cfg := DefaultConfig()
@@ -159,15 +151,7 @@ func TestLoadFrom_ValidConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create dummy kernel and initrd
-	kernelPath := filepath.Join(kernelDir, "spinbox-kernel-x86_64")
-	initrdPath := filepath.Join(kernelDir, "spinbox-initrd")
-	if err := os.WriteFile(kernelPath, []byte("dummy"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(initrdPath, []byte("dummy"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writeMachine(t, shareDir)
 
 	cfg := &Config{
 		Paths: PathsConfig{
@@ -333,15 +317,7 @@ func TestValidate_Comprehensive(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Create dummy kernel and initrd
-		kernelPath := filepath.Join(kernelDir, "spinbox-kernel-x86_64")
-		initrdPath := filepath.Join(kernelDir, "spinbox-initrd")
-		if err := os.WriteFile(kernelPath, []byte("dummy"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(initrdPath, []byte("dummy"), 0600); err != nil {
-			t.Fatal(err)
-		}
+		writeMachine(t, shareDir)
 
 		cfg.Paths.ShareDir = shareDir
 		cfg.Paths.StateDir = stateDir
@@ -684,5 +660,32 @@ func TestReset(t *testing.T) {
 	}
 	if env1.shareDir == env2.shareDir {
 		t.Fatal("test setup error: directories should be different")
+	}
+}
+
+// writeMachine fills a share directory with a whole spin-machine release plus
+// the initrd this repository builds, which together are what validatePaths
+// requires.
+//
+// It writes all four release files and not just a kernel: validation opens the
+// release rather than stating one path, because a host with three of the four is
+// a host that cannot start a guest and should be told so once, by name, instead
+// of finding out from whichever file something happened to ask for first.
+func writeMachine(t *testing.T, shareDir string) {
+	t.Helper()
+	for _, f := range []string{
+		"bin/qemu-system-x86_64",
+		"bin/qemu-img",
+		"kernel/vmlinux",
+		"kernel/spinbox-initrd",
+		"qemu/pvh.bin",
+	} {
+		p := filepath.Join(shareDir, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(f), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

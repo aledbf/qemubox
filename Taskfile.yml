@@ -253,10 +253,10 @@ tasks:
         trap 'rm -rf "${WORKDIR}"' EXIT
 
         echo "📦 Verifying QEMU firmware in build output..."
-        if [ -d "{{.OUTPUT_DIR}}/share/spin-stack/qemu" ]; then
-          ls -la "{{.OUTPUT_DIR}}/share/spin-stack/qemu"
+        if [ -d "{{.OUTPUT_DIR}}/qemu" ]; then
+          ls -la "{{.OUTPUT_DIR}}/qemu"
         else
-          echo "👹 Error: {{.OUTPUT_DIR}}/share/spin-stack/qemu not found"
+          echo "👹 Error: {{.OUTPUT_DIR}}/qemu not found"
           exit 1
         fi
 

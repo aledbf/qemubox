@@ -15,9 +15,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 
-	"github.com/spin-stack/spinbox/internal/config"
 	"github.com/spin-stack/spinbox/internal/host/vm"
-	"github.com/spin-stack/spinbox/internal/paths"
 )
 
 func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
@@ -469,13 +467,14 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	// Build kernel command line
 	cmdlineArgs := q.buildKernelCommandLine(startOpts)
 
-	// Boot profiling routes the console through virtio-console (see
-	// buildKernelCommandLine / buildQemuCommandLine); compute the flag once so
-	// the cmdline and the QEMU device list stay in agreement.
-	debugBoot := startOpts.DebugBoot || bootDebugEnabled()
-
-	// Build QEMU command line (now uses the renamed TAP names)
-	qemuArgs, err := q.buildQemuCommandLine(cmdlineArgs, debugBoot)
+	// The machine, and its command line. Both come from one machine.Spec, so the
+	// thing QEMU is given and the thing a template's fingerprint describes cannot
+	// be different machines. See spec.go.
+	spec, err := q.spec(cmdlineArgs)
+	if err != nil {
+		return err
+	}
+	qemuArgs, err := spec.Args()
 	if err != nil {
 		return err
 	}
@@ -578,124 +577,6 @@ func bootDebugEnabled() bool {
 	default:
 		return false
 	}
-}
-
-// buildQemuCommandLine constructs the QEMU command line arguments.
-// When debug is set, the kernel is asked for initcall_debug and a printk ring big
-// enough to hold the result; the VM itself is the same one a production boot gets,
-// which is the point — a profile of a different machine measures a different boot.
-func (q *Instance) buildQemuCommandLine(cmdlineArgs string, debug bool) ([]string, error) {
-	cfg, err := config.Get()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get config: %w", err)
-	}
-
-	// The four arguments that decide the shape of the machine come from
-	// machineShape, which MachineIdentity also uses. A restore requires the
-	// template and the VM to be the same shape and nothing checks it at runtime,
-	// so the two must be spelled in one place. See machineShape.
-	machineArg, cpuArg, smpArg, memoryArg := machineShape(q.resourceCfg, q.memoryFilePath != "")
-	memoryMB := int(q.resourceCfg.MemorySize / (1024 * 1024))
-
-	// Fixed PCI slots bound how many devices fit on the root complex; check
-	// before building so the failure names the limit instead of surfacing as a
-	// QEMU slot collision at exec time.
-	if len(q.disks) > maxDisks {
-		return nil, fmt.Errorf("too many disks: %d configured, %d PCI slots available", len(q.disks), maxDisks)
-	}
-	if len(q.nets) > maxNICs {
-		return nil, fmt.Errorf("too many NICs: %d configured, %d PCI slots available", len(q.nets), maxNICs)
-	}
-
-	// Build QEMU command using fluent builder pattern
-	builder := newQemuCommandBuilder().
-		setNoDefaults(). // Disable default devices (prevents e1000e NIC needing ROM files)
-		// Seccomp sandbox: cheap hardening around the VM isolation boundary.
-		setSandbox().
-		setBIOSPath(paths.QemuSharePath(cfg.Paths)).
-		// Chipset, CPU model, vCPU count and memory - kernel IRQ chip on, HPET
-		// off. See machineShape, which a template's fingerprint also reads.
-		setMachineShape(machineArg, cpuArg, smpArg, memoryArg).
-		// Drop S3/S4 from the ACPI tables. A microVM never suspends or
-		// hibernates, and the guest skips the corresponding ACPI setup.
-		addGlobal("ICH9-LPC.disable_s3=1").
-		addGlobal("ICH9-LPC.disable_s4=1").
-		setKernel(q.kernelPath).
-		setInitrd(q.initrdPath).
-		setNoGraphic().
-		// Serial console → FIFO pipe (producer side)
-		// QEMU writes VM console output here; background goroutine reads and streams to log file
-		// See setupConsoleFIFO() for the producer-consumer pipeline details
-		setSerial(fmt.Sprintf("file:%s", q.consoleFifoPath)).
-		// QMP for VM control
-		setQMPUnixSocket(q.qmpSocketPath).
-		// RNG device for entropy
-		addVirtioRNG()
-
-	// No virtio-console for profiling any more: the profile is read from /dev/kmsg
-	// and the console is silent (BuildKernelCmdline), so the device the debug boot
-	// used to add existed only to carry output nobody reads. Removing it also takes
-	// the 24 ms `virtio_console_init` out of the profile — which was the console
-	// registering and replaying the ring, not work a production boot does.
-
-	// Vsock for guest communication (using vhost-vsock kernel module). It sits on
-	// the root complex, cold-plugged, on a restored VM exactly as on a booted one:
-	// a restore is handed its own CID on the command line and the guest picks it
-	// up by itself. See below.
-	builder.addVsockDevice(int(q.guestCID))
-
-	// A restored VM is given no kernel command line.
-	//
-	// It would be inert twice over. The VM never executes the kernel - its memory
-	// arrives from the template already booted - so nothing parses what is in
-	// -append; and the guest's own /proc/cmdline comes from that restored memory,
-	// which is the template's command line, not this one. Passing a container's
-	// address and disk layout here would write them into a process command line
-	// that nothing reads and `ps` shows to everyone.
-	//
-	// A VM that boots still takes its identity from here; that is what
-	// system.FromCmdline reads, and booting is the fallback whenever restoring is
-	// not possible.
-	if q.restoreStatePath == "" {
-		builder.setKernelArgs(cmdlineArgs)
-	}
-
-	// Snapshot plumbing. All of it is skipped on a VM that neither builds a
-	// template nor restores from one, which is every VM today.
-	if q.memoryFilePath != "" {
-		// A restoring VM maps the template's RAM privately (copy-on-write); a
-		// template writes into it and must share.
-		builder.setMemoryBackendFile(q.memoryFilePath, memoryMB, q.restoreStatePath == "").
-			// Every restore inherits the template's random pool along with its
-			// memory; this is how the guest learns it is a new VM and reseeds.
-			addVMGenID()
-	}
-	if q.restoreStatePath != "" {
-		builder.setIncomingDefer()
-	}
-
-	// Add disks
-	for i, disk := range q.disks {
-		builder.addDisk(i, fmt.Sprintf("blk%d", i), disk)
-	}
-
-	// Add NICs
-	for i, nic := range q.nets {
-		// Use Kata Containers approach: pass TAP via file descriptor
-		// FD will be passed via ExtraFiles, which start at FD 3
-		// (FDs 0,1,2 are stdin/stdout/stderr)
-		if nic.TapFile == nil {
-			// This should never happen - TAP FD must be opened before Start()
-			return nil, fmt.Errorf("internal error: NIC %s has no TAP file descriptor (openTapFiles not called?)", nic.TapName)
-		}
-		fd := 3 + i
-		builder.addNIC(i, fmt.Sprintf("net%d", i), NICConfig{
-			TapFD: fd,
-			MAC:   nic.MAC,
-		})
-	}
-
-	return builder.build(), nil
 }
 
 // Client returns the long-lived TTRPC client for communicating with the guest.

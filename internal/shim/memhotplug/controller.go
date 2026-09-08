@@ -13,31 +13,32 @@ import (
 	"github.com/spin-stack/spinbox/internal/shim/hotplug"
 )
 
-const (
-	// defaultMemorySlots is the default number of memory hotplug slots.
-	// This should match the VMResourceConfig.MemorySlots value used when starting QEMU.
-	defaultMemorySlots = 8
-)
-
 // fieldContainerID is the structured-logging field key for the container ID.
 const fieldContainerID = "container_id"
 
 // qmpMemoryClient defines the interface for QMP memory operations.
 // This interface exists to enable testing with mocks.
+//
+// One call in each direction, because the machine grows through a virtio-mem
+// device and a virtio-mem device is one number. What this replaced was pc-dimm
+// devices in eight fixed slots: a backend object and a device per step, a table
+// saying which slots were in use, LIFO ordering so unplug took the newest, an
+// RPC into the guest to online what arrived and another to offline what was
+// leaving, and a rollback for each of the four ways that could half-fail. The
+// guest onlines by itself now (memhp_default_state=online), and shrinking is the
+// same call with a smaller number.
 type qmpMemoryClient interface {
-	HotplugMemory(ctx context.Context, slotID int, sizeBytes int64) error
-	UnplugMemory(ctx context.Context, slotID int) error
+	// SetPluggedMemory asks for a total amount above the boot size and returns
+	// what the device reports afterwards. The answer is what is used: virtio-mem
+	// negotiates with the guest and can only take back memory the guest has
+	// released, so a request is not a promise and asking is not the same as
+	// having.
+	SetPluggedMemory(ctx context.Context, sizeBytes int64) (int64, error)
 	QueryMemorySizeSummary(ctx context.Context) (*qemu.MemorySizeSummary, error)
 }
 
 // StatsProvider returns cgroup memory usage in bytes
 type StatsProvider func(ctx context.Context) (usageBytes int64, err error)
-
-// MemoryOffliner offlines a memory block in the guest before unplug
-type MemoryOffliner func(ctx context.Context, memoryID int) error
-
-// MemoryOnliner onlines a memory block in the guest after hotplug
-type MemoryOnliner func(ctx context.Context, memoryID int) error
 
 // MemoryHotplugController defines the interface for memory hotplug management.
 type MemoryHotplugController interface {
@@ -70,11 +71,6 @@ type Config struct {
 
 	// Enable/disable features
 	EnableScaleDown bool
-
-	// MaxSlots is the number of memory hotplug slots available.
-	// This must match the QEMU configuration (VMResourceConfig.MemorySlots).
-	// If zero, defaults to 8.
-	MaxSlots int
 }
 
 // DefaultConfig returns sensible defaults for memory hotplug
@@ -86,11 +82,10 @@ func DefaultConfig() Config {
 		ScaleUpThreshold:   85.0,              // Add memory at 85% usage
 		ScaleDownThreshold: 60.0,              // Remove memory below 60% usage
 		OOMSafetyMarginMB:  128,               // Always keep 128MB free
-		IncrementSize:      128 * 1024 * 1024, // 128MB (DIMM slot size)
+		IncrementSize:      128 * 1024 * 1024, // 128MB
 		ScaleUpStability:   3,                 // Need 3 consecutive high readings (30s)
 		ScaleDownStability: 6,                 // Need 6 consecutive low readings (60s)
 		EnableScaleDown:    false,             // Disabled by default (memory unplug is risky)
-		MaxSlots:           defaultMemorySlots,
 	}
 }
 
@@ -103,20 +98,21 @@ func (n *noopMemoryController) Stop()                     {}
 
 // Controller manages dynamic memory allocation for a VM based on memory usage
 type Controller struct {
-	containerID   string
-	qmpClient     qmpMemoryClient
-	stats         StatsProvider
-	offlineMemory MemoryOffliner
-	onlineMemory  MemoryOnliner
+	containerID string
+	qmpClient   qmpMemoryClient
+	stats       StatsProvider
 
 	// Resource limits
 	bootMemory int64 // Minimum memory (never go below this)
 	maxMemory  int64 // Maximum memory (ceiling)
 
 	// Current state (protected by mu)
-	mu            sync.Mutex
-	currentMemory int64        // Current online memory in bytes
-	usedSlots     map[int]bool // Track which memory slots are used
+	mu sync.Mutex
+	// currentMemory is what the VM actually has, read back from the device after
+	// every request and never assumed from what was asked for: virtio-mem plugs
+	// memory as the guest accepts it, and unplugs only what the guest has
+	// released, so the number that arrived is the only one worth keeping.
+	currentMemory int64
 
 	// Configuration
 	config Config
@@ -136,8 +132,6 @@ func NewController(
 	containerID string,
 	qmpClient qmpMemoryClient,
 	stats StatsProvider,
-	offliner MemoryOffliner,
-	onliner MemoryOnliner,
 	bootMemory, maxMemory int64,
 	config Config,
 ) MemoryHotplugController {
@@ -146,21 +140,13 @@ func NewController(
 		return &noopMemoryController{}
 	}
 
-	// Apply default for MaxSlots if not set
-	if config.MaxSlots < 1 {
-		config.MaxSlots = defaultMemorySlots
-	}
-
 	c := &Controller{
 		containerID:   containerID,
 		qmpClient:     qmpClient,
 		stats:         stats,
-		offlineMemory: offliner,
-		onlineMemory:  onliner,
 		bootMemory:    bootMemory,
 		maxMemory:     maxMemory,
 		currentMemory: bootMemory,
-		usedSlots:     make(map[int]bool),
 		config:        config,
 	}
 
@@ -266,113 +252,73 @@ func (c *Controller) EvaluateScaling(ctx context.Context) (hotplug.ScaleDirectio
 
 // ScaleUp implements hotplug.ResourceScaler
 func (c *Controller) ScaleUp(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Find available slot
-	slotID := c.findFreeSlot()
-	if slotID < 0 {
-		log.G(ctx).WithField(fieldContainerID, c.containerID).
-			Warn("memory-hotplug: no free memory slots available")
-		return fmt.Errorf("no free memory slots available")
-	}
-
-	targetMemory := c.currentMemory + c.config.IncrementSize
-	if targetMemory > c.maxMemory {
-		targetMemory = c.maxMemory
-	}
-	amountToAdd := targetMemory - c.currentMemory
-
-	usagePct := float64(c.lastMemoryUsage) / float64(c.currentMemory) * 100.0
-	freeMemory := c.currentMemory - c.lastMemoryUsage
-
-	log.G(ctx).WithFields(log.Fields{
-		fieldContainerID:    c.containerID,
-		"current_memory_mb": c.currentMemory / (1024 * 1024),
-		"target_memory_mb":  targetMemory / (1024 * 1024),
-		"add_mb":            amountToAdd / (1024 * 1024),
-		"slot_id":           slotID,
-		"usage_pct":         fmt.Sprintf("%.2f", usagePct),
-		"free_mb":           freeMemory / (1024 * 1024),
-	}).Info("memory-hotplug: scaling up memory")
-
-	// Hotplug memory via QMP
-	if err := c.qmpClient.HotplugMemory(ctx, slotID, amountToAdd); err != nil {
-		return fmt.Errorf("failed to hotplug memory: %w", err)
-	}
-
-	// Mark slot as used
-	c.usedSlots[slotID] = true
-
-	// Online memory in guest - required for memory to be usable
-	if err := c.onlineMemory(ctx, slotID); err != nil {
-		log.G(ctx).WithError(err).WithField("slot_id", slotID).
-			Error("memory-hotplug: failed to online memory in guest")
-		// Memory was allocated via QMP but is not usable by guest
-		// Try to unplug it to avoid wasting resources
-		if unplugErr := c.qmpClient.UnplugMemory(ctx, slotID); unplugErr != nil {
-			log.G(ctx).WithError(unplugErr).WithField("slot_id", slotID).
-				Warn("memory-hotplug: failed to unplug unusable memory")
-		}
-		delete(c.usedSlots, slotID)
-		return fmt.Errorf("memory allocated but failed to online in guest: %w", err)
-	}
-
-	c.currentMemory = targetMemory
-	return nil
+	return c.resize(ctx, c.clamp(c.currentMemory+c.config.IncrementSize), "up")
 }
 
 // ScaleDown implements hotplug.ResourceScaler
 func (c *Controller) ScaleDown(ctx context.Context) error {
+	return c.resize(ctx, c.clamp(c.currentMemory-c.config.IncrementSize), "down")
+}
+
+// clamp keeps a target inside the boot size and the ceiling. Both are hard: the
+// boot size is the memory a template was frozen with, and the ceiling is what the
+// virtio-mem device was created able to hand out.
+func (c *Controller) clamp(target int64) int64 {
+	if target > c.maxMemory {
+		return c.maxMemory
+	}
+	if target < c.bootMemory {
+		return c.bootMemory
+	}
+	return target
+}
+
+// resize asks the machine for a total size and records what arrived.
+//
+// Growing and shrinking are the same call, which is the point of virtio-mem, and
+// it is why there is one function here where there were two: the device is on the
+// command line from the start, its size is a property, and setting that property
+// is the whole operation in both directions.
+//
+// What arrived is read back rather than assumed. A request is a negotiation: the
+// guest accepts memory in blocks, and on the way down the device can only take
+// back what the guest has released, so asking for less than the guest is using
+// is not an error and simply does not happen. Recording the request instead
+// would leave this believing in memory the VM does not have — and the next
+// decision is made against that number.
+func (c *Controller) resize(ctx context.Context, target int64, direction string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Find used slot to remove (last added, LIFO)
-	slotID := c.findUsedSlot()
-	if slotID < 0 {
-		return fmt.Errorf("no used memory slots to remove")
+	if target == c.currentMemory {
+		return nil
 	}
-
-	targetMemory := c.currentMemory - c.config.IncrementSize
-	if targetMemory < c.bootMemory {
-		targetMemory = c.bootMemory
-	}
-	amountToRemove := c.currentMemory - targetMemory
 
 	usagePct := float64(c.lastMemoryUsage) / float64(c.currentMemory) * 100.0
-	projectedFree := targetMemory - c.lastMemoryUsage
-
 	log.G(ctx).WithFields(log.Fields{
 		fieldContainerID:    c.containerID,
 		"current_memory_mb": c.currentMemory / (1024 * 1024),
-		"target_memory_mb":  targetMemory / (1024 * 1024),
-		"remove_mb":         amountToRemove / (1024 * 1024),
-		"slot_id":           slotID,
+		"target_memory_mb":  target / (1024 * 1024),
 		"usage_pct":         fmt.Sprintf("%.2f", usagePct),
-		"projected_free_mb": projectedFree / (1024 * 1024),
-	}).Info("memory-hotplug: scaling down memory")
+		"free_mb":           (c.currentMemory - c.lastMemoryUsage) / (1024 * 1024),
+	}).Info("memory-hotplug: scaling memory " + direction)
 
-	// Offline memory in guest first
-	if err := c.offlineMemory(ctx, slotID); err != nil {
-		log.G(ctx).WithError(err).WithField("slot_id", slotID).
-			Warn("memory-hotplug: failed to offline memory in guest")
-		return fmt.Errorf("failed to offline memory: %w", err)
+	plugged, err := c.qmpClient.SetPluggedMemory(ctx, target-c.bootMemory)
+	if err != nil {
+		return fmt.Errorf("resizing memory to %d bytes: %w", target, err)
 	}
 
-	// Unplug memory via QMP
-	if err := c.qmpClient.UnplugMemory(ctx, slotID); err != nil {
-		// Try to bring memory back online if unplug failed
-		if onlineErr := c.onlineMemory(ctx, slotID); onlineErr != nil {
-			log.G(ctx).WithError(onlineErr).WithField("slot_id", slotID).
-				Error("memory-hotplug: CRITICAL - failed to re-online memory after unplug failure, guest may have offline memory")
-		}
-		return fmt.Errorf("failed to unplug memory: %w", err)
+	c.currentMemory = c.bootMemory + plugged
+	if c.currentMemory != target {
+		// Not a failure. The guest has not released what was asked for yet, or has
+		// not taken all of what was offered; the next cycle asks again with the
+		// same thresholds against the size that actually exists.
+		log.G(ctx).WithFields(log.Fields{
+			fieldContainerID:   c.containerID,
+			"target_memory_mb": target / (1024 * 1024),
+			"actual_memory_mb": c.currentMemory / (1024 * 1024),
+		}).Debug("memory-hotplug: the guest has not settled on the requested size")
 	}
-
-	// Mark slot as free
-	delete(c.usedSlots, slotID)
-	c.currentMemory = targetMemory
-
 	return nil
 }
 
@@ -403,24 +349,4 @@ func (c *Controller) sampleMemory(ctx context.Context) (float64, bool, error) {
 	c.lastMemoryUsage = usageBytes
 
 	return usagePct, true, nil
-}
-
-// findFreeSlot finds the first available memory slot
-func (c *Controller) findFreeSlot() int {
-	for i := range c.config.MaxSlots {
-		if !c.usedSlots[i] {
-			return i
-		}
-	}
-	return -1
-}
-
-// findUsedSlot finds a used memory slot (LIFO - last added first)
-func (c *Controller) findUsedSlot() int {
-	for i := c.config.MaxSlots - 1; i >= 0; i-- {
-		if c.usedSlots[i] {
-			return i
-		}
-	}
-	return -1
 }

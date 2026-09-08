@@ -113,34 +113,36 @@ func validateResourceConfig(cfg *vm.VMResourceConfig) *vm.VMResourceConfig {
 	return &result
 }
 
+// findQemu and findKernel return the two files that come out of a spin-machine
+// release. They open the release rather than stat a composed path: a release
+// with a part missing should say which part, once, and not surface as whichever
+// of the three files somebody happened to ask for first.
 func findQemu() (string, error) {
 	cfg, err := config.Get()
 	if err != nil {
 		return "", fmt.Errorf("failed to get config: %w", err)
 	}
-
-	path := paths.QemuPath(cfg.Paths)
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
+	rel, err := paths.Machine(cfg.Paths)
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("qemu-system-x86_64 binary not found at %s", path)
+	return paths.QemuPath(cfg.Paths, rel), nil
 }
 
-// findKernel returns the path to the kernel binary for QEMU
 func findKernel() (string, error) {
 	cfg, err := config.Get()
 	if err != nil {
 		return "", fmt.Errorf("failed to get config: %w", err)
 	}
-
-	path := paths.KernelPath(cfg.Paths)
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
+	rel, err := paths.Machine(cfg.Paths)
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("kernel not found at %s (use SPINBOX_SHARE_DIR to override)", path)
+	return rel.Kernel(), nil
 }
 
-// findInitrd returns the path to the initrd for QEMU
+// findInitrd returns the path to the initrd for QEMU. It is not part of a
+// release: what runs as PID 1 inside a guest is this repository's business.
 func findInitrd() (string, error) {
 	cfg, err := config.Get()
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/spin-stack/spin-machine/machine"
 	"golang.org/x/sys/unix"
 )
 
@@ -37,31 +38,22 @@ func (c *Config) validatePaths() error {
 		return err
 	}
 
-	// Check kernel and initrd exist.
-	//
-	// The two kernel names are repeated from paths.KernelPath rather than taken
-	// from it: that package imports this one for PathsConfig, so calling into it
-	// here is an import cycle. Two names in two places is a duplication with a
-	// reason, and it is the reason this comment exists — whoever adds a third
-	// name has to change both.
-	//
-	// "vmlinux" is what a spin-machine release installs;
-	// "spinbox-kernel-x86_64" is what installs from before the machine moved out
-	// of this repository carry.
-	kernelDir := filepath.Join(c.Paths.ShareDir, "kernel")
-	initrdPath := filepath.Join(kernelDir, "spinbox-initrd")
+	// The machine — QEMU, the kernel and the firmware — checked as one thing,
+	// because that is what it is: a release with a part missing is not a machine
+	// with a gap in it, it is a host that cannot start a guest, and the failure
+	// is worth having here rather than at boot.
+	if _, err := machine.Open(c.Paths.ShareDir); err != nil {
+		return fmt.Errorf("%w (run 'task machine' to fetch the pinned release)", err)
+	}
 
-	kernelPath := ""
-	for _, name := range []string{"vmlinux", "spinbox-kernel-x86_64"} {
-		p := filepath.Join(kernelDir, name)
-		if _, err := os.Stat(p); err == nil {
-			kernelPath = p
-			break
-		}
-	}
-	if kernelPath == "" {
-		return fmt.Errorf("no guest kernel in %s (run 'task machine' to fetch the pinned one)", kernelDir)
-	}
+	// The initrd is not part of a release: what runs as PID 1 inside a guest is
+	// this repository's business. It is checked separately for the same reason it
+	// is built separately.
+	// The name is spelled here and in internal/paths rather than shared: that
+	// package imports this one for PathsConfig, so calling into it would be a
+	// cycle. One filename in two places, and this is the note for whoever changes
+	// it.
+	initrdPath := filepath.Join(c.Paths.ShareDir, "kernel", "spinbox-initrd")
 	if _, err := os.Stat(initrdPath); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("initrd not found at %s (run 'task build:initrd')", initrdPath)
