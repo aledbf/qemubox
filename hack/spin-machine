@@ -34,9 +34,10 @@ SHARE="usr/share/spin-stack"
 # release lays them out under usr/share/spin-stack already, which is where they
 # end up installed, so this is a copy and not a rearrangement.
 #
-# Not taken: the base image. It is in the release because it is part of the
-# machine, and nothing here boots from it yet — hundreds of megabytes moved on
-# every build for a file no lane opens.
+# The base image is among them now. It was left out while nothing here booted
+# from it — hundreds of megabytes moved on every build for a file no lane opens —
+# and internal/host/volume opens it: it is the floor of every VM's qcow2 chain,
+# the read-only file every guest on the host reads and none of them writes.
 want=(
   "bin/qemu-system-x86_64"
   "bin/qemu-img"
@@ -47,6 +48,7 @@ want=(
   "qemu/pvh.bin"
   "qemu/kvmvapic.bin"
   "qemu/efi-virtio.rom"
+  "image/rootfs.qcow2"
 )
 
 # place <root-of-a-release-tree>
@@ -73,7 +75,17 @@ place() {
     # Removed first: _output may hold files from when this repository built the
     # machine itself, and those were written by a container running as root.
     rm -f "${dest}" 2>/dev/null || true
-    if ! install -m "$([ -x "${src}" ] && echo 0755 || echo 0644)" "${src}" "${dest}"; then
+    # The base image is installed read-only, and it is the one file here where the
+    # mode is doing work rather than describing. Every VM on the host maps it
+    # through a qcow2 backing chain, so a write to it invalidates every overlay in
+    # existence — silently, because they go on working until one reads a cluster
+    # that moved. A release ships it 0444; nothing that copies it should quietly
+    # make it writable again.
+    case "${rel}" in
+      image/*) mode=0444 ;;
+      *)       mode="$([ -x "${src}" ] && echo 0755 || echo 0644)" ;;
+    esac
+    if ! install -m "${mode}" "${src}" "${dest}"; then
       echo "👹 cannot write ${dest}" >&2
       echo "   _output probably still holds root-owned files from when this" >&2
       echo "   repository built QEMU and the kernel itself. Run: sudo task clean" >&2
