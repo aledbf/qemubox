@@ -127,11 +127,10 @@ service System {
     // Pre-poweroff filesystem cleanup and sync (cold-commit consistency).
     rpc PrepareShutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
 
-    // CPU/memory hotplug helpers (sysfs online/offline after QMP hotplug).
+    // CPU hotplug helpers (sysfs online/offline after QMP hotplug). Memory has no
+    // pair: it grows through virtio-mem, which the guest onlines by itself.
     rpc OfflineCPU(OfflineCPURequest) returns (google.protobuf.Empty);
     rpc OnlineCPU(OnlineCPURequest) returns (google.protobuf.Empty);
-    rpc OfflineMemory(OfflineMemoryRequest) returns (google.protobuf.Empty);
-    rpc OnlineMemory(OnlineMemoryRequest) returns (google.protobuf.Empty);
 
     // Freeze/thaw the writable filesystem (FIFREEZE/FITHAW) for a consistent
     // rwlayer while paused; called from the shim's Pause/Resume.
@@ -140,7 +139,7 @@ service System {
 }
 ```
 
-**Used for**: guest readiness checks, CPU/memory hotplug, and filesystem
+**Used for**: guest readiness checks, CPU hotplug, and filesystem
 quiesce. See the [hot-commit runbook](../docs/hot-commit.md) for how Freeze/Thaw
 fold into Pause/Resume.
 
