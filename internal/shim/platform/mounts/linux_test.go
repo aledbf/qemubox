@@ -14,6 +14,8 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
 func TestTransformMounts_ExceedsDiskCap(t *testing.T) {
@@ -429,7 +431,7 @@ func TestHandleEROFS(t *testing.T) {
 
 		assert.Equal(t, "/path/to/image.erofs", diskOpts[0].source)
 		assert.True(t, diskOpts[0].readOnly)
-		assert.False(t, diskOpts[0].vmdk)
+		assert.Equal(t, vm.DefaultDiskFormat, diskOpts[0].format)
 		assert.Equal(t, byte('b'), disks)
 		// The disk serial must match the serial encoded in the guest mount Source
 		// so the guest can resolve the device via /sys/block/<dev>/serial.
@@ -449,7 +451,7 @@ func TestHandleEROFS(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Len(t, diskOpts, 1)
-		assert.True(t, diskOpts[0].vmdk)
+		assert.Equal(t, "vmdk", diskOpts[0].format)
 	})
 
 	t.Run("filters device options", func(t *testing.T) {

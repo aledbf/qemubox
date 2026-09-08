@@ -139,18 +139,12 @@ func (q *Instance) spec(cmdline string) (machine.Spec, error) {
 	for _, d := range q.disks {
 		s.Disks = append(s.Disks, machine.Disk{
 			Path: d.Path,
-			// qcow2, always, and stated rather than worked out from the filename.
-			//
-			// Every disk a guest gets here is one layer of a qcow2 chain: a
-			// read-only base that many VMs map at once, and a read-write tip that
-			// is this VM's. There is one format because there is one thing that
-			// produces them.
-			//
-			// It is spelled and not probed. Letting QEMU work out the format of a
-			// file the guest can write is how an image is talked into being read as
-			// another one, and a wrong answer is not an error — it is a guest that
-			// boots and finds a disk full of nothing.
-			Format:   "qcow2",
+			// Stated by whoever added the disk, never probed here — see
+			// vm.MountConfig.Format. Today they are the snapshotter's: a vmdk of
+			// the merged layers and a raw rwlayer. They become one qcow2 chain, a
+			// read-only base many VMs map at once and a read-write tip that is this
+			// VM's, when the disks stop coming from a snapshotter.
+			Format:   d.Format,
 			Readonly: d.Readonly,
 			Serial:   d.Serial,
 			// A writable image gets an explicit lock so something outside QEMU can

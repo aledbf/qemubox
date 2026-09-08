@@ -62,11 +62,17 @@ func (q *Instance) AddDisk(ctx context.Context, blockID, mountPath string, opts 
 		blockID = stableID
 	}
 
+	format := mc.Format
+	if format == "" {
+		format = vm.DefaultDiskFormat
+	}
+
 	q.disks = append(q.disks, &DiskConfig{
 		Path:     mountPath,
 		Readonly: mc.Readonly,
 		ID:       blockID,
 		Serial:   mc.Serial,
+		Format:   format,
 	})
 
 	log.G(ctx).WithFields(log.Fields{
