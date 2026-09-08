@@ -10,7 +10,6 @@ import (
 
 	"github.com/spin-stack/spinbox/internal/config"
 	"github.com/spin-stack/spinbox/internal/host/vm"
-	"github.com/spin-stack/spinbox/internal/host/volume"
 	"github.com/spin-stack/spinbox/internal/paths"
 )
 
@@ -142,7 +141,7 @@ func (q *Instance) spec(cmdline string) (machine.Spec, error) {
 		if d.Pointer != "" {
 			// Read here, at the moment the command line is built, because that is
 			// the moment the answer has to be current. See DiskConfig.Pointer.
-			p, err := volume.Resolve(d.Pointer)
+			p, err := resolvePointer(d.Pointer)
 			if err != nil {
 				return machine.Spec{}, err
 			}

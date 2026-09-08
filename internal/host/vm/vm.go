@@ -44,6 +44,9 @@ type StartOpts struct {
 	NetworkNamespace string // Path to network namespace (e.g., "/var/run/netns/cni-xxx")
 	ExtrasDiskIndex  *int   // Index of extras disk (0-based), nil if none
 	DebugBoot        bool   // Enable kernel boot profiling (initcall_debug + verbose)
+	// NoNetwork says this VM is meant to have no network interface, as against
+	// having lost one to a bug. See WithoutNetwork.
+	NoNetwork bool
 }
 
 // StartOpt configures VM start options.
@@ -78,6 +81,24 @@ func WithNetworkNamespace(path string) StartOpt {
 	}
 }
 
+// WithoutNetwork says this VM is meant to have no network interface.
+//
+// Start otherwise refuses a VM with no NIC, and the refusal is worth keeping: it
+// catches a caller that forgot AddNetwork, which used to be unrecoverable
+// because the guest read its address off the kernel command line. It is not
+// unrecoverable any more — the guest skips networking when it is given no
+// address, which is what the VM a template is made from has always relied on.
+//
+// So the rule is not "every VM has a NIC", it is "a VM without one said so".
+// Stated by the caller rather than derived, because the two situations it
+// separates — a workspace that wants no network, and a shim that dropped one —
+// look identical from in here.
+func WithoutNetwork() StartOpt {
+	return func(o *StartOpts) {
+		o.NoNetwork = true
+	}
+}
+
 // WithExtrasDisk sets the index of the extras disk for kernel cmdline.
 // The guest will parse spin.extras_disk=N to find the device.
 func WithExtrasDisk(idx int) StartOpt {
@@ -101,6 +122,9 @@ type MountConfig struct {
 	//
 	// Empty means DefaultDiskFormat.
 	Format string
+	// Pointer says the path is a file naming the image, not the image. See
+	// FromPointer.
+	Pointer bool
 	// Serial is the virtio-blk serial exposed to the guest (max 20 chars).
 	// The guest resolves the device by matching this serial, so the
 	// layer→device mapping does not depend on PCI enumeration order.
@@ -123,6 +147,20 @@ func WithReadOnly() MountOpt {
 // It becomes qcow2 when the disks stop coming from a snapshotter and start
 // coming from a layer chain, and this constant is the whole of that change.
 const DefaultDiskFormat = "raw"
+
+// FromPointer says the path this disk was added with is not an image but a file
+// naming one, to be read when the VM is launched rather than now.
+//
+// It is how a disk backed by a qcow2 chain is attached: the chain's tip can be
+// replaced while the guest runs, and the pointer is where the replacement is
+// announced. Without this the launcher would open the pointer file itself as if
+// it were a disk, which is what QEMU said when this was first wired up — it
+// exited before the monitor came up, with nothing about pointers in the message.
+func FromPointer() MountOpt {
+	return func(o *MountConfig) {
+		o.Pointer = true
+	}
+}
 
 // WithFormat states the image format QEMU is given for this disk.
 func WithFormat(format string) MountOpt {

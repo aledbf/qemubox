@@ -1,6 +1,6 @@
 //go:build linux
 
-package volume
+package qemu
 
 import (
 	"os"
@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Resolve is the only thing in this package that needs no qemu-img, so it is
+// resolvePointer is the only thing in this package that needs no qemu-img, so it is
 // the only thing tested without one. Everything else drives the binary and lives
 // behind the integration tag, in the lane that has a machine.
 
@@ -20,7 +20,7 @@ func TestResolveReadsThePointer(t *testing.T) {
 	if err := os.WriteFile(pointer, []byte(image), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Resolve(pointer)
+	got, err := resolvePointer(pointer)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestResolveReadsThePointer(t *testing.T) {
 	if err := os.WriteFile(pointer, []byte(next+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := Resolve(pointer); err != nil || got != next {
+	if got, err := resolvePointer(pointer); err != nil || got != next {
 		t.Errorf("after the pointer moved, Resolve returned %q (err %v), want %q", got, err, next)
 	}
 }
@@ -59,13 +59,13 @@ func TestResolveRefusesWhatALauncherCannotUse(t *testing.T) {
 			if err := os.WriteFile(p, []byte(c.content), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Resolve(p); err == nil {
+			if _, err := resolvePointer(p); err == nil {
 				t.Errorf("Resolve accepted a pointer whose content is %q", c.content)
 			}
 		})
 	}
 
-	if _, err := Resolve(filepath.Join(dir, "absent")); err == nil {
+	if _, err := resolvePointer(filepath.Join(dir, "absent")); err == nil {
 		t.Error("Resolve accepted a pointer that is not there")
 	}
 }

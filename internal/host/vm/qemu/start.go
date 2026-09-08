@@ -88,7 +88,7 @@ func (q *Instance) setupConsoleFIFO(ctx context.Context) error {
 }
 
 // validateConfiguration validates the VM configuration before starting
-func (q *Instance) validateConfiguration() error {
+func (q *Instance) validateConfiguration(noNetwork bool) error {
 	// Validate kernel exists
 	if _, err := os.Stat(q.kernelPath); err != nil {
 		return fmt.Errorf("kernel not found at %s: %w", q.kernelPath, err)
@@ -104,10 +104,16 @@ func (q *Instance) validateConfiguration() error {
 		return fmt.Errorf("QEMU binary not found at %s: %w", q.binaryPath, err)
 	}
 
-	// Validate all disk paths exist
+	// Validate all disk paths exist. For a disk attached by pointer it is the
+	// pointer that has to be there; what it names is read when the command line
+	// is built, and is checked then, because between here and there it can change.
 	for _, disk := range q.disks {
-		if _, err := os.Stat(disk.Path); err != nil {
-			return fmt.Errorf("disk not found at %s: %w", disk.Path, err)
+		path, what := disk.Path, "disk"
+		if disk.Pointer != "" {
+			path, what = disk.Pointer, "disk pointer"
+		}
+		if _, err := os.Stat(path); err != nil {
+			return fmt.Errorf("%s not found at %s: %w", what, path, err)
 		}
 	}
 
@@ -125,16 +131,21 @@ func (q *Instance) validateConfiguration() error {
 		return fmt.Errorf("max CPUs (%d) cannot be less than boot CPUs (%d)", q.resourceCfg.MaxCPUs, q.resourceCfg.BootCPUs)
 	}
 
-	// Require at least one network interface from CNI - except on the VM a
-	// template is made from, which has no NIC by design.
+	// A VM without a NIC has to have said so.
 	//
 	// The rule was written when the guest read its address from the kernel
-	// command line during initialization, so a VM without a NIC was a
-	// misconfiguration. It is not one for a template: a template does not know
-	// which container it will become, and system.Apply skips networking when it
-	// is given no address. The NIC arrives with the VM restored from it.
-	if len(q.nets) == 0 && !q.buildsTemplate() {
-		return fmt.Errorf("no network interface configured: call AddNetwork() before Start()")
+	// command line during initialization, so a VM without one was unrecoverable.
+	// It is not any more: system.Apply skips networking when it is given no
+	// address, which is what the VM a template is made from has always relied on
+	// — it does not know which container it will become, and the NIC arrives with
+	// the VM restored from it.
+	//
+	// So what is left to catch is a caller that *meant* to have a network and
+	// dropped it, and that is worth catching: it is a container with no address
+	// and no error. A caller that meant the opposite says WithoutNetwork, because
+	// from in here the two look identical.
+	if len(q.nets) == 0 && !q.buildsTemplate() && !noNetwork {
+		return fmt.Errorf("no network interface configured: call AddNetwork() before Start(), or say vm.WithoutNetwork()")
 	}
 
 	return nil
@@ -397,6 +408,15 @@ func (q *Instance) rollbackStart(success *bool) {
 
 // Start starts the QEMU VM
 func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
+	// Read the options first: filling a struct has no side effects, and
+	// validateConfiguration has to know whether this VM was *meant* to have no
+	// network. They used to be parsed further down, which meant the check ran
+	// before the caller's answer existed.
+	startOpts := vm.StartOpts{}
+	for _, o := range opts {
+		o(&startOpts)
+	}
+
 	// Check and update state atomically
 	if !q.compareAndSwapState(vmStateNew, vmStateStarting) {
 		currentState := q.getState()
@@ -404,7 +424,7 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	}
 
 	// Validate configuration before starting
-	if err := q.validateConfiguration(); err != nil {
+	if err := q.validateConfiguration(startOpts.NoNetwork); err != nil {
 		q.setState(vmStateNew)
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
@@ -443,12 +463,6 @@ func (q *Instance) Start(ctx context.Context, opts ...vm.StartOpt) error {
 	}
 	if err := os.Remove(q.vsockPath); err != nil && !os.IsNotExist(err) {
 		log.G(ctx).WithError(err).Debug("qemu: failed to remove vsock path")
-	}
-
-	// Parse start options
-	startOpts := vm.StartOpts{}
-	for _, o := range opts {
-		o(&startOpts)
 	}
 
 	// Store network configuration

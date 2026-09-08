@@ -5,9 +5,6 @@ package volume
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/spin-stack/storage/qcow"
 )
@@ -83,35 +80,6 @@ func (s *Store) Open(ctx context.Context, vmID string, sizeBytes int64) (Disk, e
 		QMPSocket: qcow.QMPSocket(s.root, vmID),
 		SizeBytes: chain.SizeBytes,
 	}, nil
-}
-
-// Resolve reads a pointer and returns the image it names.
-//
-// It is how a launcher is meant to find the disk, and the reason it exists is
-// that the tip can be replaced while a guest is running: a rotation seals the
-// layer the guest has been writing to, creates a new one over it, writes the
-// pointer, and only then tells QEMU to switch. Anything that composed the path
-// itself would be right until the first rotation and then quietly a layer
-// behind.
-//
-// Nothing here rotates yet. The contract is honoured now because the moment to
-// start honouring it is before something depends on it, not after.
-func Resolve(pointer string) (string, error) {
-	b, err := os.ReadFile(pointer) // #nosec G304 -- a path composed from the volume root
-	if err != nil {
-		return "", fmt.Errorf("reading the active pointer %s: %w", pointer, err)
-	}
-	image := strings.TrimSpace(string(b))
-	if image == "" {
-		return "", fmt.Errorf("the active pointer %s names nothing", pointer)
-	}
-	if !filepath.IsAbs(image) {
-		// The pointer is read by another process, which has its own working
-		// directory. A relative path in it would resolve differently depending on
-		// who looked, and the one that mattered would be QEMU's.
-		return "", fmt.Errorf("the active pointer %s names a relative path %q", pointer, image)
-	}
-	return image, nil
 }
 
 // fromBase is qcow.Recovery for a host with no object store.
