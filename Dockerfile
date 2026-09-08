@@ -1,8 +1,9 @@
-# Build the Linux kernel, initrd, and containerd shim for running spinbox
-# This multi-stage build produces:
-# - Custom Linux kernel with container/virtualization support
-# - initrd with vminitd and crun
-# - containerd shim for spinbox runtime
+# The guest software spinbox builds: the initrd, the shim and vminitd.
+#
+# Not the kernel, and not QEMU. Those are the machine, they are one versioned artefact
+# built elsewhere, and `task machine` puts one under _output/. A kernel built here would
+# be a second machine nobody pinned — and the artefacts go into the template fingerprint
+# by content, so two of them is two fleets of templates that cannot be told apart.
 
 # Base image versions
 ARG GO_VERSION=1.27.1
@@ -19,134 +20,6 @@ FROM ${GOLANG_IMAGE} AS base
 
 RUN echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
 RUN apt-get update && apt-get install --no-install-recommends -y file apparmor curl
-
-# ============================================================================
-# Kernel Build Stages
-# ============================================================================
-
-FROM base AS kernel-build-base
-
-# Set environment variables for non-interactive installations
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
-
-# Install build dependencies
-RUN --mount=type=cache,sharing=locked,id=kernel-aptlib,target=/var/lib/apt \
-    --mount=type=cache,sharing=locked,id=kernel-aptcache,target=/var/cache/apt \
-        apt-get update && apt-get install -y build-essential libncurses-dev flex bison libssl-dev libelf-dev bc cpio git wget xz-utils curl lz4
-
-ARG KERNEL_VERSION="7.2.1"
-ARG KERNEL_ARCH="x86_64"
-ARG KERNEL_NPROC="16"
-
-# Install and configure Docker configuration checker
-# Modified to remove SELinux and AppArmor checks which aren't needed for kernel building
-RUN curl -o /usr/local/bin/check-docker-config.sh -fsSL https://raw.githubusercontent.com/moby/moby/master/contrib/check-config.sh \
-  && chmod +x /usr/local/bin/check-docker-config.sh \
-  && sed -i '/IP_VS_RR/s/\\$//; /SECURITY_SELINUX/d; /SECURITY_APPARMOR/d' /usr/local/bin/check-docker-config.sh
-
-# Set the working directory
-WORKDIR /usr/src
-
-# Download kernel source (cached across builds)
-RUN --mount=type=cache,sharing=locked,id=kernel-src-${KERNEL_VERSION},target=/var/cache/kernel \
-    KERNEL_MAJOR="$(echo "${KERNEL_VERSION}" | cut -d. -f1)" && \
-    if [ ! -f "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" ]; then \
-        wget -O "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" "https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}.x/linux-${KERNEL_VERSION}.tar.xz"; \
-    fi && \
-    tar -xf "/var/cache/kernel/linux-${KERNEL_VERSION}.tar.xz" -C /usr/src && \
-    mv linux-${KERNEL_VERSION} linux
-
-# Copy kernel config from repository (per kernel version + arch)
-COPY build/kernel/config-${KERNEL_VERSION}-${KERNEL_ARCH} /usr/src/linux/.config
-
-RUN <<EOT
-    set -e
-    cd /usr/src/linux
-
-    # Use the provided kernel config as-is and resolve any missing dependencies
-    make ARCH=${KERNEL_ARCH} olddefconfig
-
-    # Verify the critical configs are STILL enabled after olddefconfig
-    echo "Verifying critical kernel configs after olddefconfig..."
-    grep -q "CONFIG_VIRTIO_NET=y" .config || (echo "ERROR: CONFIG_VIRTIO_NET not enabled after olddefconfig!" ; echo "Current VIRTIO_NET setting:" ; grep VIRTIO_NET .config ; exit 1)
-    grep -q "CONFIG_VIRTIO_PCI=y" .config || (echo "ERROR: CONFIG_VIRTIO_PCI not enabled!" ; exit 1)
-    grep -q "CONFIG_NET_CLS_ACT=y" .config || (echo "ERROR: CONFIG_NET_CLS_ACT not enabled!" ; exit 1)
-
-    # Memory hotplug, checked here for the same reason the others are: olddefconfig
-    # resolves what it cannot satisfy, and a dropped symbol is silent. Without these
-    # three the host can add a DIMM, QEMU will accept it, query-memory-devices will
-    # show it, and /sys/devices/system/memory/memory<N>/online — the file
-    # internal/guest/services/system.go writes to — will not exist, so the guest never
-    # sees the memory. That was the state until this config enabled them.
-    grep -q "CONFIG_MEMORY_HOTPLUG=y" .config || (echo "ERROR: CONFIG_MEMORY_HOTPLUG not enabled (memory hotplug cannot reach the guest)!" ; exit 1)
-    grep -q "CONFIG_MEMORY_HOTREMOVE=y" .config || (echo "ERROR: CONFIG_MEMORY_HOTREMOVE not enabled (unplug cannot work)!" ; exit 1)
-    grep -q "CONFIG_ACPI_HOTPLUG_MEMORY=y" .config || (echo "ERROR: CONFIG_ACPI_HOTPLUG_MEMORY not enabled (a pc-dimm is never noticed)!" ; exit 1)
-
-    # The initrd is lz4 (see the initrd stage). Without this the kernel does not
-    # recognise the archive at all and the VM does not boot.
-    grep -q "CONFIG_RD_LZ4=y" .config || (echo "ERROR: CONFIG_RD_LZ4 not enabled (the lz4 initramfs cannot be unpacked)!" ; exit 1)
-
-    # Boot performance: the RAID6 PQ benchmark probes all SIMD implementations at
-    # boot to pick the fastest, adding noticeable latency. It must stay disabled.
-    # (RAID6_PQ itself is not selected today, so the symbol is normally absent.)
-    ! grep -q "CONFIG_RAID6_PQ_BENCHMARK=y" .config || (echo "ERROR: CONFIG_RAID6_PQ_BENCHMARK must not be enabled (boot perf)!" ; exit 1)
-
-
-    # Show what virtio and network options are actually set
-    echo "Virtio configuration:"
-    grep "CONFIG_VIRTIO" .config | grep -v "^#" || echo "No VIRTIO options enabled!"
-    echo ""
-    echo "Network device configuration:"
-    grep -E "CONFIG_NETDEVICES|CONFIG_NET_CORE|CONFIG_ETHERNET|CONFIG_VIRTIO_NET" .config | grep -v "^#"
-
-    # Verify config against Docker requirements
-    echo "Verifying kernel config for Docker support..."
-    /usr/local/bin/check-docker-config.sh /usr/src/linux/.config || (echo "Kernel config verification failed!" ; exit 1)
-
-    echo "Using kernel config from build/kernel/config-${KERNEL_VERSION}-${KERNEL_ARCH}"
-EOT
-
-# Compile the kernel (separate from base to allow config construction from fragments in the future)
-FROM kernel-build-base AS kernel-build
-
-ARG KERNEL_ARCH
-ARG KERNEL_NPROC
-
-# Compile the kernel and modules
-# Note: No cache mount here - Docker's layer cache is more effective
-# since kernel compilation is not incremental between builds
-RUN cd linux && make ARCH=${KERNEL_ARCH} -j${KERNEL_NPROC} all
-
-RUN <<EOT
-    set -e
-    cd linux
-    mkdir /build
-    cp .config /build/kernel-config
-
-    # Only x86_64 is supported
-    if [ "${KERNEL_ARCH}" != "x86_64" ]; then
-        echo "ERROR: Only x86_64 architecture is supported, got: ${KERNEL_ARCH}"
-        exit 1
-    fi
-
-    # Strip the ELF symbol table before handing the image to QEMU. QEMU's
-    # load_elf() reads and qsort()s the symbol table of every kernel it loads -
-    # 42k entries here - and nothing in this stack ever asks it for a symbol:
-    # the guest resolves its own names through CONFIG_KALLSYMS, which lives in
-    # the loaded image data and is untouched by this.
-    #
-    # PT_LOAD is byte-identical either way (30.68 MB), so the guest boots the
-    # same bits; what goes away is 5.1 MB of file and the parse and sort of it.
-    # The PVH ELF notes this machine boots from are in the program headers and
-    # survive the strip - verified with readelf -n, and the integration suite
-    # boots on the result.
-    #
-    # Measured: qemu_launch 36.1 ms -> 24.3 ms, guest boot unchanged.
-    cp vmlinux /build/kernel
-    strip -s /build/kernel
-EOT
 
 # ============================================================================
 # Go Binary Build Stages
@@ -261,11 +134,6 @@ EOT
 # ============================================================================
 # Output Stages (minimal scratch images with artifacts)
 # ============================================================================
-
-FROM scratch AS kernel
-ARG KERNEL_ARCH="x86_64"
-COPY --from=kernel-build /build/kernel /spinbox-kernel-${KERNEL_ARCH}
-COPY --from=kernel-build /build/kernel-config /kernel-config
 
 FROM scratch AS initrd
 COPY --from=initrd-build /build/spinbox-initrd /spinbox-initrd

@@ -93,7 +93,7 @@ This project uses sophisticated concurrency. Follow these patterns:
 task build:shim          # Build containerd shim (static, Linux x86_64)
 task build:vminitd       # Build guest init daemon
 task build:initrd        # Build initrd image (requires Docker)
-task build:kernel        # Build VM kernel (requires Docker)
+task machine             # Fetch the pinned machine: QEMU, the guest kernel, firmware
 task build               # Build all components
 
 # Testing

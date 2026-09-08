@@ -10,9 +10,21 @@ import (
 	"github.com/spin-stack/spinbox/internal/config"
 )
 
-// KernelPath returns the full path to the kernel binary based on the provided configuration
+// KernelPath returns the full path to the guest kernel.
+//
+// It is "vmlinux", which is what the ELF is and what a spin-machine release
+// installs. The older "spinbox-kernel-x86_64" is still looked for afterwards, so
+// a host carrying an install from before the machine moved out of this repository
+// keeps working until it is upgraded; there is nothing else to do for it, and
+// finding out by way of a VM that will not start is worse.
 func KernelPath(pathsCfg config.PathsConfig) string {
-	return filepath.Join(pathsCfg.ShareDir, "kernel", "spinbox-kernel-x86_64")
+	dir := filepath.Join(pathsCfg.ShareDir, "kernel")
+	for _, name := range []string{"vmlinux", "spinbox-kernel-x86_64"} {
+		if p := filepath.Join(dir, name); fileExists(p) {
+			return p
+		}
+	}
+	return filepath.Join(dir, "vmlinux")
 }
 
 // InitrdPath returns the full path to the initrd binary based on the provided configuration

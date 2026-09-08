@@ -44,7 +44,7 @@ mkdir -p "${RELEASE_DIR}/usr/share/spin-stack/config"
 echo "Copying artifacts to release structure..."
 
 artifacts=(
-  "${OUTPUT_DIR}/spinbox-kernel-x86_64:kernel:spinbox-kernel-x86_64"
+  "${OUTPUT_DIR}/vmlinux:kernel:vmlinux"
   "${OUTPUT_DIR}/spinbox-initrd:kernel:spinbox-initrd"
   "${OUTPUT_DIR}/containerd-shim-spinbox-v1:bin:containerd-shim-spinbox-v1"
   "${OUTPUT_DIR}/spinbox-commit:bin:spinbox-commit"
@@ -60,13 +60,22 @@ for entry in "${artifacts[@]}"; do
 done
 
 echo "Adding QEMU binaries and firmware..."
-if [ -f "${OUTPUT_DIR}/bin/qemu-system-x86_64" ]; then
-  cp "${OUTPUT_DIR}/bin/qemu-system-x86_64" "${RELEASE_DIR}/usr/share/spin-stack/bin/"
-  chmod +x "${RELEASE_DIR}/usr/share/spin-stack/bin/qemu-system-x86_64"
-  echo "  ok: qemu-system-x86_64"
-else
-  echo "  warn: qemu-system-x86_64 not found - skipping"
-fi
+# QEMU and qemu-img both, and neither optional. They arrive together from one
+# spin-machine release (`task machine`), so one missing means the fetch did not run
+# or did not finish — and a release that installs without them is a host whose VMs
+# do not start, found at run time instead of here.
+#
+# qemu-img is not a convenience: a container's writable layer is a qcow2 overlay
+# created by running it.
+for binary in qemu-system-x86_64 qemu-img; do
+  if [ -f "${OUTPUT_DIR}/bin/${binary}" ]; then
+    install -m 0755 "${OUTPUT_DIR}/bin/${binary}" "${RELEASE_DIR}/usr/share/spin-stack/bin/${binary}"
+    echo "  ok: ${binary}"
+  else
+    echo "👹 Error: ${OUTPUT_DIR}/bin/${binary} not found - run: task machine"
+    exit 1
+  fi
+done
 
 if [ -d "${OUTPUT_DIR}/share/spin-stack/qemu" ]; then
   mkdir -p "${RELEASE_DIR}/usr/share/spin-stack/qemu"
@@ -83,7 +92,7 @@ fi
 # into a PVH ELF kernel otherwise, and it fails as a rom-open error that reads like a
 # backend bug.
 missing_qemu_firmware=0
-for firmware in bios.bin bios-256k.bin pvh.bin kvmvapic.bin; do
+for firmware in bios.bin bios-256k.bin pvh.bin kvmvapic.bin efi-virtio.rom; do
   if [ ! -f "${RELEASE_DIR}/usr/share/spin-stack/qemu/${firmware}" ]; then
     echo "👹 Error: missing QEMU firmware file ${firmware} in release"
     missing_qemu_firmware=1
