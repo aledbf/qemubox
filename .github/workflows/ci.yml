@@ -1,21 +1,29 @@
 name: CI
 
+# A branch is tested through its pull request, and main when something lands on it.
+#
+# Not both. An unfiltered `push:` fires alongside `pull_request:` for every push to a
+# branch that has one open, so every push started two identical runs, and the
+# concurrency group below killed one after both had already taken a runner. Here
+# that costs more than a runner: the two integration jobs install the same release
+# and restart the same containerd on the same self-hosted machine, so the loser
+# fails during setup with something unrelated-looking - "ctr: error stating device
+# path: stat /dev/disk/by-label" was the one that led here. One of the pair passed
+# and the other went red, which reads as a flaky test and is not.
+#
+# Giving up: a branch with no pull request open is not tested. That is what opening
+# one is for.
 on:
   push:
+    branches: [main]
   pull_request:
 
-# A push to a branch with an open pull request fires both triggers, so every
-# push ran CI twice. On a self-hosted runner the two integration jobs install the
-# same release and restart the same containerd, and the loser fails during setup
-# with something unrelated-looking - "ctr: error stating device path: stat
-# /dev/disk/by-label" was the one that led here. One of the pair passed and the
-# other went red, which reads as a flaky test and is not.
-#
-# ref_name and head_ref are the same branch name for the two events, so they
-# share a group and only one survives.
+# A new push to a branch supersedes the run its predecessor started, because only
+# the tip is worth a verdict. Never on main: a cancelled run there is a commit
+# nobody proved, and two merges landing close together are two things to verify.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 permissions:
   contents: read
