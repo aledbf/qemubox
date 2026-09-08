@@ -46,8 +46,8 @@ vars:
   # fingerprint by content, so a release that moved under us invalidates every template on
   # every host — which is correct, and must not happen by accident. Bump both together and
   # say in the commit why the machine changed.
-  SPIN_MACHINE_VERSION: '{{.SPIN_MACHINE_VERSION | default "v20260908.01"}}'
-  SPIN_MACHINE_SHA256: '{{.SPIN_MACHINE_SHA256 | default ""}}'
+  SPIN_MACHINE_VERSION: '{{.SPIN_MACHINE_VERSION | default "v20260907.01"}}'
+  SPIN_MACHINE_SHA256: '{{.SPIN_MACHINE_SHA256 | default "72db5f9789a37370acaac25bf0aab2490f9b0fa0ee846a65f80651408bb0da47"}}'
   # A sibling checkout that has already built one wins over the published release, so
   # changing the machine is: build it there, `task build` here.
   SPIN_MACHINE_DIR: '{{.SPIN_MACHINE_DIR | default "../spin-machine"}}'
