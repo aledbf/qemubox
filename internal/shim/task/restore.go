@@ -11,7 +11,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 
-	systemAPI "github.com/spin-stack/spinbox/api/services/system/v1"
+	systemAPI "github.com/spin-stack/spinbox/api/spinbox/services/system/v1"
 	"github.com/spin-stack/spinbox/internal/config"
 	"github.com/spin-stack/spinbox/internal/host/vm"
 	"github.com/spin-stack/spinbox/internal/host/vm/qemu"
@@ -159,7 +159,7 @@ func configureGuest(ctx context.Context, client *ttrpc.Client, state *createStat
 	}
 
 	start := time.Now()
-	if _, err := systemAPI.NewTTRPCSystemClient(client).Configure(ctx, req); err != nil {
+	if _, err := systemAPI.NewTTRPCSystemServiceClient(client).Configure(ctx, req); err != nil {
 		return fmt.Errorf("configuring the guest: %w", err)
 	}
 

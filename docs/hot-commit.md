@@ -132,7 +132,7 @@ ctr task kill -s SIGTERM <container-id>   # or task delete
   `State` PAUSED short-circuit.
 - `internal/guest/vminit/system/freeze.go` — `FIFREEZE`/`FITHAW` on the writable
   ext4 layer.
-- `api/services/system/v1/info.proto` — `FreezeFilesystems`/`ThawFilesystems`
+- `api/spinbox/services/system/v1/info.proto` — `FreezeFilesystems`/`ThawFilesystems`
   (internal vsock RPC).
 - `internal/host/vm/qemu/spec.go` — `file.locking=on` on the rwlayer
   drive (the OFD lock gate).

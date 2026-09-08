@@ -73,6 +73,16 @@ vars:
   GO_STATIC_TAGS: '-tags "{{.GO_STATIC_BUILDTAGS}}"'
   GO_STATIC_LDFLAGS: "-ldflags '-extldflags \"-static\" {{.LDFLAGS}}'"
 
+  # --- buf --------------------------------------------------------------------------
+  # buf does not compile anything here — protobuild still does, from api/Protobuild.toml.
+  # buf lints the schema, format-checks it and reports when the wire breaks. Pinned like
+  # every other generator: `go install` at an exact version, into the same GOBIN that
+  # hack/install-proto-tools puts protobuild and protoc-gen-go-ttrpc in.
+  BUF_VERSION: v1.72.0
+  GOBIN_DIR:
+    sh: echo "${GOBIN:-$(go env GOPATH)/bin}"
+  BUF: "{{.GOBIN_DIR}}/buf"
+
 tasks:
   # ==========================================================================
   # Build Tasks
@@ -248,6 +258,49 @@ tasks:
         echo "🔍 Type-checking the tagged tests"
         GOOS=linux go vet -tags=integration,e2e ./...
         echo "✓ Linting passed"
+      # The schema, which the Go linter cannot see: names, formatting, and what the
+      # wire promised the last release.
+      - task: lint:protos
+
+  tools:buf:
+    internal: true
+    desc: Install the pinned buf
+    status:
+      - test -x {{.BUF}} && {{.BUF}} --version | grep -qx '{{.BUF_VERSION | trimPrefix "v"}}'
+    cmds:
+      - |
+        set -eou pipefail
+        echo "🐳 Installing buf {{.BUF_VERSION}}..."
+        GOBIN={{.GOBIN_DIR}} {{.GO}} install github.com/bufbuild/buf/cmd/buf@{{.BUF_VERSION}}
+
+  lint:protos:
+    desc: Lint, format-check and compatibility-check the protobuf schema (buf STANDARD)
+    deps:
+      - tools:buf
+    dir: api
+    cmds:
+      - "{{.BUF}} lint"
+      - "{{.BUF}} format --diff --exit-code"
+      # These protos went years without a linter, so `breaking` is the check that
+      # says what that cost: it is the only one that can tell a rename from a
+      # refactor. FILE is the level that catches one — the field numbers survive a
+      # rename, every generated accessor and every wire name does not.
+      #
+      # Against main, because main is what the next release is built from. It needs
+      # the history, so a CI checkout must not be shallow.
+      #
+      # `ref=origin/main` and not `branch=main`, because buf treats the path as a
+      # *remote* and asks git for `refs/heads/main` inside it. A developer's
+      # checkout has that; a pull request's does not — actions/checkout leaves HEAD
+      # detached at the merge commit and creates no local branch — so the check
+      # fails on every PR with what reads like an infrastructure fault:
+      #
+      #   Failure: could not clone file:///…/.git: exit status 128
+      #   fatal: couldn't find remote ref main
+      #
+      # A push to main passes, because there HEAD *is* main — which is why this is
+      # easy to miss: the lane is green exactly when it has nothing to compare.
+      - "{{.BUF}} breaking --against '../.git#ref=origin/main,subdir=api'"
 
   integration:
     desc: Build release tarball and run containerd integration test

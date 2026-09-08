@@ -111,7 +111,7 @@ func run(ctx context.Context, cfg *config.ServiceConfig) error {
 	// the only kind that can: a VM restored from a template inherits the
 	// template's command line, which names another VM's address, another VM's
 	// disks and another VM's CID, and is told who it is over RPC instead - see
-	// the Configure call in api/services/system/v1.
+	// the Configure call in api/spinbox/services/system/v1.
 	//
 	// Being told is the normal case now and this is the exception, so it is
 	// best-effort in the same way the steps inside it always were: a VM that

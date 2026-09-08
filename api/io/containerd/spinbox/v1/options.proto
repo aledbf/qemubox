@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+// This package name is not an internal wire: it is the containerd runtime name.
+// `ctr run --runtime io.containerd.spinbox.v1` names it, and SpinboxOpts is the
+// type containerd marshals into a task's runtime options. Renaming it would
+// break every containerd that already knows this runtime, so it stays; only the
+// directory moved, to satisfy buf's PACKAGE_DIRECTORY_MATCH.
+package io.containerd.spinbox.v1;
+
+option go_package = "github.com/spin-stack/spinbox/api/io/containerd/spinbox/v1;spinbox";
+
+// SpinboxOpts specifies runtime options for the spinbox VM runtime.
+// These options are passed from containerd to the shim when creating a task.
+message SpinboxOpts {
+  // boot_cpus specifies the number of vCPUs to start the VM with.
+  // If 0, uses the default from config or OCI spec limits.
+  uint32 boot_cpus = 1;
+
+  // max_cpus specifies the maximum number of vCPUs that can be hot-plugged.
+  // If 0, uses the default from config or OCI spec limits.
+  uint32 max_cpus = 2;
+
+  // memory_mb specifies the initial memory size in megabytes.
+  // If 0, uses the default from config or OCI spec limits.
+  uint32 memory_mb = 3;
+
+  // max_memory_mb specifies the maximum memory that can be hot-plugged in megabytes.
+  // If 0, uses the default from config or OCI spec limits.
+  uint32 max_memory_mb = 4;
+
+  // io_uid specifies the I/O uid for the container.
+  // This is passed through to runc inside the VM.
+  uint32 io_uid = 7;
+
+  // io_gid specifies the I/O gid for the container.
+  // This is passed through to runc inside the VM.
+  uint32 io_gid = 8;
+}

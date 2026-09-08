@@ -17,7 +17,7 @@ import (
 	"github.com/containerd/errdefs/pkg/errgrpc"
 	"github.com/containerd/log"
 
-	bundleAPI "github.com/spin-stack/spinbox/api/services/bundle/v1"
+	bundleAPI "github.com/spin-stack/spinbox/api/spinbox/services/bundle/v1"
 	"github.com/spin-stack/spinbox/internal/config"
 	"github.com/spin-stack/spinbox/internal/host/network"
 	"github.com/spin-stack/spinbox/internal/host/vm"
@@ -335,7 +335,7 @@ func (s *service) createTaskInVM(ctx context.Context, state *createState) (*task
 		return nil, err
 	}
 
-	bundleService := bundleAPI.NewTTRPCBundleClient(rpcClient)
+	bundleService := bundleAPI.NewTTRPCBundleServiceClient(rpcClient)
 	br, err := bundleService.Create(ctx, &bundleAPI.CreateRequest{
 		ID:    r.ID,
 		Files: bundleFiles,

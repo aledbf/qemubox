@@ -19,7 +19,7 @@ The vminitd daemon runs as PID 1 inside the QEMU VM. It provides a TTRPC server 
 - Handle I/O streaming between containers and host
 
 **Dependencies**:
-- Internal: `config`, `api/services/*`
+- Internal: `config`, `api/spinbox/services/*`
 - External: `containerd/go-runc`, `containerd/ttrpc`, `mdlayher/vsock`
 
 ---

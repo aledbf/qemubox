@@ -95,8 +95,8 @@ import (
 	"github.com/containerd/ttrpc"
 	"github.com/containerd/typeurl/v2"
 
-	systemapi "github.com/spin-stack/spinbox/api/services/system/v1"
-	"github.com/spin-stack/spinbox/api/services/vmevents/v1"
+	systemapi "github.com/spin-stack/spinbox/api/spinbox/services/system/v1"
+	"github.com/spin-stack/spinbox/api/spinbox/services/vmevents/v1"
 	"github.com/spin-stack/spinbox/internal/host/network"
 	"github.com/spin-stack/spinbox/internal/shim/cpuhotplug"
 	"github.com/spin-stack/spinbox/internal/shim/lifecycle"
@@ -571,7 +571,7 @@ type eventRecvResult struct {
 
 func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) error {
 	currentClient := vmc
-	sc, err := vmevents.NewTTRPCEventsClient(currentClient).Stream(ctx, &ptypes.Empty{})
+	sc, err := vmevents.NewTTRPCEventsServiceClient(currentClient).Stream(ctx, &vmevents.StreamRequest{})
 	if err != nil {
 		return err
 	}
@@ -581,10 +581,16 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 	recvCh := make(chan eventRecvResult, 1)
 
 	// Start a goroutine to read from the stream and send results to recvCh.
-	startRecvGoroutine := func(stream vmevents.TTRPCEvents_StreamClient) {
+	// The stream carries a StreamResponse wrapping the envelope; everything
+	// downstream of here wants the envelope, so it is unwrapped once, here.
+	startRecvGoroutine := func(stream vmevents.TTRPCEventsService_StreamClient) {
 		go func() {
-			ev, err := stream.Recv()
-			recvCh <- eventRecvResult{event: ev, err: err}
+			resp, err := stream.Recv()
+			if err != nil {
+				recvCh <- eventRecvResult{err: err}
+				return
+			}
+			recvCh <- eventRecvResult{event: resp.GetEnvelope()}
 		}()
 	}
 
@@ -641,6 +647,13 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 					return
 				}
 
+				// A message with no envelope carries nothing to forward. The guest
+				// never sends one; a future field added beside it could.
+				if result.event == nil {
+					startRecvGoroutine(sc)
+					continue
+				}
+
 				// For TaskExit events, wait for I/O forwarder to complete before forwarding.
 				// This ensures all stdout/stderr data is written to FIFOs before containerd
 				// receives the exit event, preventing a race where the exit arrives before output.
@@ -664,7 +677,7 @@ func (s *service) startEventForwarder(ctx context.Context, vmc *ttrpc.Client) er
 // Returns the new client, stream, and whether reconnection succeeded.
 // Note: The caller is responsible for closing the old client if needed. We don't close
 // it here because it might be the cached client from the VM instance, which is shared.
-func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Client) (*ttrpc.Client, vmevents.TTRPCEvents_StreamClient, bool) {
+func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Client) (*ttrpc.Client, vmevents.TTRPCEventsService_StreamClient, bool) {
 	const (
 		initialBackoff = 50 * time.Millisecond
 		maxBackoff     = 500 * time.Millisecond
@@ -688,7 +701,7 @@ func (s *service) reconnectEventStream(ctx context.Context, oldClient *ttrpc.Cli
 			continue
 		}
 
-		newStream, streamErr := vmevents.NewTTRPCEventsClient(newClient).Stream(ctx, &ptypes.Empty{})
+		newStream, streamErr := vmevents.NewTTRPCEventsServiceClient(newClient).Stream(ctx, &vmevents.StreamRequest{})
 		if streamErr != nil {
 			_ = newClient.Close()
 			log.G(ctx).WithError(streamErr).Debug("event stream reconnect: stream failed")
@@ -1236,7 +1249,7 @@ func (s *service) freezeGuestFilesystems(ctx context.Context) error {
 	}
 	defer cleanup()
 
-	resp, err := systemapi.NewTTRPCSystemClient(vmc).FreezeFilesystems(ctx, &ptypes.Empty{})
+	resp, err := systemapi.NewTTRPCSystemServiceClient(vmc).FreezeFilesystems(ctx, &systemapi.FreezeFilesystemsRequest{})
 	if err != nil {
 		return err
 	}
@@ -1253,7 +1266,7 @@ func (s *service) thawGuestFilesystems(ctx context.Context) error {
 	}
 	defer cleanup()
 
-	_, err = systemapi.NewTTRPCSystemClient(vmc).ThawFilesystems(ctx, &ptypes.Empty{})
+	_, err = systemapi.NewTTRPCSystemServiceClient(vmc).ThawFilesystems(ctx, &systemapi.ThawFilesystemsRequest{})
 	return err
 }
 

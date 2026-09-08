@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package spinbox.services.vmevents.v1;
+
+import "github.com/containerd/containerd/api/types/event.proto";
+
+option go_package = "github.com/spin-stack/spinbox/api/spinbox/services/vmevents/v1;vmevents";
+
+// EventsService forwards the guest's containerd events to the host shim.
+service EventsService {
+  // Stream opens a server stream carrying every event the guest publishes.
+  rpc Stream(StreamRequest) returns (stream StreamResponse);
+}
+
+message StreamRequest {}
+
+message StreamResponse {
+  // envelope is one containerd event, exactly as the guest published it.
+  containerd.types.Envelope envelope = 1;
+}

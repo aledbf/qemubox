@@ -1,7 +1,7 @@
 # API - Protobuf Definitions
 
 **Technology**: Protocol Buffers, TTRPC
-**Entry Point**: `services/*/v1/*.proto`
+**Entry Point**: `spinbox/services/*/v1/*.proto`
 **Parent Context**: This extends [../CLAUDE.md](../CLAUDE.md)
 
 ---
@@ -34,7 +34,19 @@ task protos
 
 # Check if protobufs are up to date
 task check:protos
+
+# Lint, format-check and compatibility-check the schema (also part of `task lint`)
+task lint:protos
 ```
+
+**protobuild compiles, buf judges.** The generator is still containerd's
+protobuild (`Protobuild.toml`); buf never generates anything here. It lints at
+STANDARD, format-checks, and runs `breaking` against main. `buf.yaml` declares
+two modules: this one, and `third_party/`, which holds a vendored copy of
+containerd's `event.proto` (and the `types/fieldpath.proto` it imports) purely so
+buf can resolve the import that protobuild resolves through a GOPATH symlink.
+Refresh those two files when `github.com/containerd/containerd/api` moves in
+go.mod.
 
 ### After Modifying Proto Files
 
@@ -48,42 +60,55 @@ task check:protos
 
 ### Directory Structure
 
+Every file sits at the path its package name spells out, relative to `api/` —
+that is buf's `PACKAGE_DIRECTORY_MATCH`, and it is why the tree looks like this
+rather than like `services/`:
+
 ```
 api/
-├── services/
+├── buf.yaml                       # lint STANDARD, breaking FILE
+├── Protobuild.toml                # the generator's config
+├── spinbox/services/              # package spinbox.services.*
 │   ├── bundle/v1/
-│   │   ├── bundle.proto       # Bundle service definition
-│   │   ├── bundle.pb.go       # Generated message types
-│   │   └── bundle_ttrpc.pb.go # Generated TTRPC client/server
+│   │   ├── bundle.proto           # BundleService
+│   │   ├── bundle.pb.go           # Generated message types
+│   │   └── bundle_ttrpc.pb.go     # Generated TTRPC client/server
 │   ├── stdio/v1/
-│   │   ├── stdio.proto        # I/O streaming service
+│   │   ├── stdio.proto            # StdIOService
 │   │   ├── stdio.pb.go
 │   │   └── stdio_ttrpc.pb.go
 │   ├── vmevents/v1/
-│   │   ├── events.proto       # Event streaming service
+│   │   ├── events.proto           # EventsService
 │   │   ├── events.pb.go
 │   │   └── events_ttrpc.pb.go
 │   └── system/v1/
-│       ├── info.proto         # System info service
+│       ├── info.proto             # SystemService
 │       ├── info.pb.go
 │       └── info_ttrpc.pb.go
-└── CLAUDE.md                  # This file
+├── io/containerd/spinbox/v1/      # package io.containerd.spinbox.v1
+│   ├── options.proto              # SpinboxOpts — the containerd runtime options
+│   └── options.pb.go
+├── third_party/                   # vendored containerd protos, for buf only
+└── CLAUDE.md                      # This file
 ```
+
+`io.containerd.spinbox.v1` keeps its package name on purpose: it is the
+containerd runtime name (`ctr run --runtime io.containerd.spinbox.v1`), not an
+internal wire. Only its directory moved.
 
 ### Service Definitions
 
 #### bundle/v1 - OCI Bundle Creation
 
 ```protobuf
-service Bundle {
-    // Create creates an OCI bundle in the guest VM
-    rpc Create(CreateRequest) returns (CreateResponse);
+service BundleService {
+  // Create creates an OCI bundle in the guest VM
+  rpc Create(CreateRequest) returns (CreateResponse);
 }
 
 message CreateRequest {
-    string id = 1;           // Container ID
-    bytes spec = 2;          // OCI runtime spec (JSON)
-    repeated Mount mounts = 3; // Mount configurations
+  string id = 1;                 // Container ID
+  map<string, bytes> files = 2;  // Filename -> contents
 }
 ```
 
@@ -92,50 +117,62 @@ message CreateRequest {
 #### stdio/v1 - I/O Streaming
 
 ```protobuf
-service Stdio {
-    // Write sends stdin data to a process
-    rpc Write(WriteRequest) returns (WriteResponse);
-
-    // CloseStdin closes stdin for a process
-    rpc CloseStdin(CloseStdinRequest) returns (google.protobuf.Empty);
-
-    // Recv receives stdout/stderr from a process (streaming)
-    rpc Recv(RecvRequest) returns (stream RecvResponse);
+service StdIOService {
+  rpc WriteStdin(WriteStdinRequest) returns (WriteStdinResponse);
+  rpc ReadStdout(ReadStdoutRequest) returns (stream ReadStdoutResponse);
+  rpc ReadStderr(ReadStderrRequest) returns (stream ReadStderrResponse);
+  rpc CloseStdin(CloseStdinRequest) returns (CloseStdinResponse);
 }
 ```
+
+Stdout and stderr take four message types where two would do, because a request
+or response type shared by two RPCs cannot later grow a field for one of them —
+and buf's `RPC_REQUEST_RESPONSE_UNIQUE` says so before it costs anything.
 
 **Used for**: RPC-based I/O forwarding for non-TTY containers (supports `ctr task attach`).
 
 #### vmevents/v1 - Event Streaming
 
 ```protobuf
-service Events {
-    // Stream opens a bidirectional event stream
-    rpc Stream(google.protobuf.Empty) returns (stream containerd.types.Envelope);
+service EventsService {
+  // Stream opens a server stream of guest events
+  rpc Stream(StreamRequest) returns (stream StreamResponse);
+}
+
+message StreamResponse {
+  containerd.types.Envelope envelope = 1;
 }
 ```
+
+The envelope is wrapped rather than returned directly: a response type must be
+this service's own `StreamResponse`, not a type borrowed from containerd.
 
 **Used for**: Forwarding containerd events (TaskCreate, TaskStart, TaskExit) from guest to host.
 
 #### system/v1 - System Operations
 
 ```protobuf
-service System {
-    // Guest readiness / info.
-    rpc Info(google.protobuf.Empty) returns (InfoResponse);
+service SystemService {
+  // Guest readiness / info.
+  rpc Info(InfoRequest) returns (InfoResponse);
 
-    // Pre-poweroff filesystem cleanup and sync (cold-commit consistency).
-    rpc PrepareShutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+  // Pre-poweroff filesystem cleanup and sync (cold-commit consistency).
+  rpc PrepareShutdown(PrepareShutdownRequest) returns (PrepareShutdownResponse);
 
-    // CPU hotplug helpers (sysfs online/offline after QMP hotplug). Memory has no
-    // pair: it grows through virtio-mem, which the guest onlines by itself.
-    rpc OfflineCPU(OfflineCPURequest) returns (google.protobuf.Empty);
-    rpc OnlineCPU(OnlineCPURequest) returns (google.protobuf.Empty);
+  // CPU hotplug helpers (sysfs online/offline after QMP hotplug). Memory has no
+  // pair: it grows through virtio-mem, which the guest onlines by itself.
+  rpc OfflineCPU(OfflineCPURequest) returns (OfflineCPUResponse);
+  rpc OnlineCPU(OnlineCPURequest) returns (OnlineCPUResponse);
 
-    // Freeze/thaw the writable filesystem (FIFREEZE/FITHAW) for a consistent
-    // rwlayer while paused; called from the shim's Pause/Resume.
-    rpc FreezeFilesystems(google.protobuf.Empty) returns (FreezeFilesystemsResponse);
-    rpc ThawFilesystems(google.protobuf.Empty) returns (google.protobuf.Empty);
+  // Freeze/thaw the writable filesystem (FIFREEZE/FITHAW) for a consistent
+  // rwlayer while paused; called from the shim's Pause/Resume.
+  rpc FreezeFilesystems(FreezeFilesystemsRequest) returns (FreezeFilesystemsResponse);
+  rpc ThawFilesystems(ThawFilesystemsRequest) returns (ThawFilesystemsResponse);
+
+  // Restored-VM plumbing: re-enumerate the PCI bus, and hand the guest the
+  // identity its inherited kernel command line gets wrong.
+  rpc RescanPCI(RescanPCIRequest) returns (RescanPCIResponse);
+  rpc Configure(ConfigureRequest) returns (ConfigureResponse);
 }
 ```
 
@@ -149,18 +186,23 @@ fold into Pause/Resume.
 
 ### Using Generated TTRPC Client
 
+Note the shape of the generated names: the service is `BundleService`, so the
+constructor is `NewTTRPCBundleServiceClient` and the registration is
+`RegisterTTRPCBundleServiceService`. The doubled "Service" is protoc-gen-ttrpc
+appending its own suffix to a name that already ends in one.
+
 ```go
 import (
-    bundleapi "github.com/spin-stack/spinbox/api/services/bundle/v1"
+    bundleapi "github.com/spin-stack/spinbox/api/spinbox/services/bundle/v1"
 )
 
 // Create client from TTRPC connection
-client := bundleapi.NewTTRPCBundleClient(ttrpcClient)
+client := bundleapi.NewTTRPCBundleServiceClient(ttrpcClient)
 
 // Call RPC method
 resp, err := client.Create(ctx, &bundleapi.CreateRequest{
-    ID:   containerID,
-    Spec: specJSON,
+    ID:    containerID,
+    Files: files,
 })
 if err != nil {
     return fmt.Errorf("create bundle: %w", err)
@@ -171,7 +213,7 @@ if err != nil {
 
 ```go
 import (
-    bundleapi "github.com/spin-stack/spinbox/api/services/bundle/v1"
+    bundleapi "github.com/spin-stack/spinbox/api/spinbox/services/bundle/v1"
 )
 
 type bundleService struct {
@@ -186,7 +228,7 @@ func (s *bundleService) Create(ctx context.Context, req *bundleapi.CreateRequest
 
 // Register with TTRPC server
 func (s *bundleService) RegisterTTRPC(server *ttrpc.Server) error {
-    bundleapi.RegisterTTRPCBundleService(server, s)
+    bundleapi.RegisterTTRPCBundleServiceService(server, s)
     return nil
 }
 ```
@@ -195,12 +237,12 @@ func (s *bundleService) RegisterTTRPC(server *ttrpc.Server) error {
 
 ```go
 // Client side - receiving stream
-stream, err := eventsClient.Stream(ctx, &ptypes.Empty{})
+stream, err := eventsClient.Stream(ctx, &vmevents.StreamRequest{})
 if err != nil {
     return err
 }
 for {
-    ev, err := stream.Recv()
+    resp, err := stream.Recv()
     if err == io.EOF {
         break
     }
@@ -208,13 +250,13 @@ for {
         return err
     }
     // Process event
-    handleEvent(ev)
+    handleEvent(resp.GetEnvelope())
 }
 
 // Server side - sending stream
-func (s *eventsService) Stream(_ *ptypes.Empty, stream vmevents.TTRPCEvents_StreamServer) error {
+func (s *eventsService) Stream(_ *vmevents.StreamRequest, stream vmevents.TTRPCEventsService_StreamServer) error {
     for ev := range s.events {
-        if err := stream.Send(ev); err != nil {
+        if err := stream.Send(&vmevents.StreamResponse{Envelope: ev}); err != nil {
             return err
         }
     }
@@ -228,10 +270,11 @@ func (s *eventsService) Stream(_ *ptypes.Empty, stream vmevents.TTRPCEvents_Stre
 
 ### Proto Definitions
 
-- **`bundle/v1/bundle.proto`** - Bundle creation service
-- **`stdio/v1/stdio.proto`** - I/O streaming service
-- **`vmevents/v1/events.proto`** - Event streaming service
-- **`system/v1/info.proto`** - System info service
+- **`spinbox/services/bundle/v1/bundle.proto`** - Bundle creation service
+- **`spinbox/services/stdio/v1/stdio.proto`** - I/O streaming service
+- **`spinbox/services/vmevents/v1/events.proto`** - Event streaming service
+- **`spinbox/services/system/v1/info.proto`** - System info service
+- **`io/containerd/spinbox/v1/options.proto`** - containerd runtime options
 
 ### Generated Files (DO NOT EDIT)
 
@@ -291,11 +334,17 @@ rg -n "RegisterTTRPC.*Service" internal/
 
 ### Naming Conventions
 
-- **Services**: PascalCase (`BundleService`)
+These are buf STANDARD, which `task lint` enforces — they are not advice:
+
+- **Services**: PascalCase, ending in `Service` (`BundleService`)
 - **Methods**: PascalCase (`CreateBundle`)
 - **Messages**: PascalCase (`CreateBundleRequest`)
+- **Requests/responses**: one pair per RPC, named `<Method>Request` and
+  `<Method>Response`, in the same package — never `google.protobuf.Empty`, never
+  a type borrowed from another package, never shared between two RPCs
 - **Fields**: snake_case (`container_id`)
 - **Enums**: SCREAMING_SNAKE_CASE (`STATUS_RUNNING`)
+- **Files**: at the directory their package name spells out, relative to `api/`
 
 ### Field Numbers
 

@@ -18,7 +18,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/typeurl/v2"
 
-	spinbox "github.com/spin-stack/spinbox/api/types/spinbox/v1"
+	spinbox "github.com/spin-stack/spinbox/api/io/containerd/spinbox/v1"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/process"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/stream"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/supervisor"

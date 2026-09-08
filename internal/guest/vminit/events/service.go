@@ -13,9 +13,8 @@ import (
 	"github.com/containerd/plugin/registry"
 	"github.com/containerd/ttrpc"
 	"github.com/containerd/typeurl/v2"
-	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/spin-stack/spinbox/api/services/vmevents/v1"
+	"github.com/spin-stack/spinbox/api/spinbox/services/vmevents/v1"
 )
 
 func init() {
@@ -57,11 +56,11 @@ func NewService(s Subscriber) *service {
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
-	vmevents.RegisterTTRPCEventsService(server, s)
+	vmevents.RegisterTTRPCEventsServiceService(server, s)
 	return nil
 }
 
-func (s *service) Stream(ctx context.Context, _ *emptypb.Empty, ss vmevents.TTRPCEvents_StreamServer) error {
+func (s *service) Stream(ctx context.Context, _ *vmevents.StreamRequest, ss vmevents.TTRPCEventsService_StreamServer) error {
 	log.G(ctx).Info("vmevents stream opened")
 	events, errs := s.sub.Subscribe(ctx)
 
@@ -116,11 +115,13 @@ func (s *service) Stream(ctx context.Context, _ *emptypb.Empty, ss vmevents.TTRP
 	}
 }
 
-func toProto(env *events.Envelope) *types.Envelope {
-	return &types.Envelope{
-		Timestamp: protobuf.ToTimestamp(env.Timestamp),
-		Namespace: env.Namespace,
-		Topic:     env.Topic,
-		Event:     typeurl.MarshalProto(env.Event),
+func toProto(env *events.Envelope) *vmevents.StreamResponse {
+	return &vmevents.StreamResponse{
+		Envelope: &types.Envelope{
+			Timestamp: protobuf.ToTimestamp(env.Timestamp),
+			Namespace: env.Namespace,
+			Topic:     env.Topic,
+			Event:     typeurl.MarshalProto(env.Event),
+		},
 	}
 }

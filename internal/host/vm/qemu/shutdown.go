@@ -11,9 +11,8 @@ import (
 	"time"
 
 	"github.com/containerd/log"
-	emptypb "google.golang.org/protobuf/types/known/emptypb"
 
-	systemAPI "github.com/spin-stack/spinbox/api/services/system/v1"
+	systemAPI "github.com/spin-stack/spinbox/api/spinbox/services/system/v1"
 )
 
 // Shutdown timing constants.
@@ -105,8 +104,8 @@ func (q *Instance) prepareGuestShutdown(ctx context.Context, logger *log.Entry) 
 	prepareCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownPrepareGuestTimeout)
 	defer cancel()
 
-	sysClient := systemAPI.NewTTRPCSystemClient(client)
-	if _, err := sysClient.PrepareShutdown(prepareCtx, &emptypb.Empty{}); err != nil {
+	sysClient := systemAPI.NewTTRPCSystemServiceClient(client)
+	if _, err := sysClient.PrepareShutdown(prepareCtx, &systemAPI.PrepareShutdownRequest{}); err != nil {
 		logger.WithError(err).Warn("qemu: guest shutdown preparation failed")
 		return
 	}

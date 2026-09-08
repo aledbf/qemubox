@@ -9,7 +9,7 @@ import (
 	"github.com/containerd/ttrpc"
 	"github.com/containerd/typeurl/v2"
 
-	systemAPI "github.com/spin-stack/spinbox/api/services/system/v1"
+	systemAPI "github.com/spin-stack/spinbox/api/spinbox/services/system/v1"
 )
 
 // getCPUStats retrieves CPU usage statistics from the container via TTRPC.
@@ -53,7 +53,7 @@ func offlineCPU(ctx context.Context, dialClient func(context.Context) (*ttrpc.Cl
 	if err != nil {
 		return err
 	}
-	client := systemAPI.NewTTRPCSystemClient(vmc)
+	client := systemAPI.NewTTRPCSystemServiceClient(vmc)
 	_, err = client.OfflineCPU(ctx, &systemAPI.OfflineCPURequest{CpuID: uint32(cpuID)})
 	return err
 }
@@ -67,7 +67,7 @@ func onlineCPU(ctx context.Context, dialClient func(context.Context) (*ttrpc.Cli
 	if err != nil {
 		return err
 	}
-	client := systemAPI.NewTTRPCSystemClient(vmc)
+	client := systemAPI.NewTTRPCSystemServiceClient(vmc)
 	_, err = client.OnlineCPU(ctx, &systemAPI.OnlineCPURequest{CpuID: uint32(cpuID)})
 	return err
 }

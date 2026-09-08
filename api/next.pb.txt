@@ -1,6 +1,59 @@
 file {
-  name: "github.com/spin-stack/spinbox/api/services/bundle/v1/bundle.proto"
-  package: "containerd.vminitd.services.bundle.v1"
+  name: "github.com/spin-stack/spinbox/api/io/containerd/spinbox/v1/options.proto"
+  package: "io.containerd.spinbox.v1"
+  message_type {
+    name: "SpinboxOpts"
+    field {
+      name: "boot_cpus"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT32
+      json_name: "bootCpus"
+    }
+    field {
+      name: "max_cpus"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT32
+      json_name: "maxCpus"
+    }
+    field {
+      name: "memory_mb"
+      number: 3
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT32
+      json_name: "memoryMb"
+    }
+    field {
+      name: "max_memory_mb"
+      number: 4
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT32
+      json_name: "maxMemoryMb"
+    }
+    field {
+      name: "io_uid"
+      number: 7
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT32
+      json_name: "ioUid"
+    }
+    field {
+      name: "io_gid"
+      number: 8
+      label: LABEL_OPTIONAL
+      type: TYPE_UINT32
+      json_name: "ioGid"
+    }
+  }
+  options {
+    go_package: "github.com/spin-stack/spinbox/api/io/containerd/spinbox/v1;spinbox"
+  }
+  syntax: "proto3"
+}
+file {
+  name: "github.com/spin-stack/spinbox/api/spinbox/services/bundle/v1/bundle.proto"
+  package: "spinbox.services.bundle.v1"
   message_type {
     name: "CreateRequest"
     field {
@@ -15,7 +68,7 @@ file {
       number: 2
       label: LABEL_REPEATED
       type: TYPE_MESSAGE
-      type_name: ".containerd.vminitd.services.bundle.v1.CreateRequest.FilesEntry"
+      type_name: ".spinbox.services.bundle.v1.CreateRequest.FilesEntry"
       json_name: "files"
     }
     nested_type {
@@ -50,21 +103,21 @@ file {
     }
   }
   service {
-    name: "Bundle"
+    name: "BundleService"
     method {
       name: "Create"
-      input_type: ".containerd.vminitd.services.bundle.v1.CreateRequest"
-      output_type: ".containerd.vminitd.services.bundle.v1.CreateResponse"
+      input_type: ".spinbox.services.bundle.v1.CreateRequest"
+      output_type: ".spinbox.services.bundle.v1.CreateResponse"
     }
   }
   options {
-    go_package: "github.com/spin-stack/spinbox/api/services/bundle/v1;bundle"
+    go_package: "github.com/spin-stack/spinbox/api/spinbox/services/bundle/v1;bundle"
   }
   syntax: "proto3"
 }
 file {
-  name: "github.com/spin-stack/spinbox/api/services/stdio/v1/stdio.proto"
-  package: "containerd.vminitd.services.stdio.v1"
+  name: "github.com/spin-stack/spinbox/api/spinbox/services/stdio/v1/stdio.proto"
+  package: "spinbox.services.stdio.v1"
   message_type {
     name: "WriteStdinRequest"
     field {
@@ -100,7 +153,7 @@ file {
     }
   }
   message_type {
-    name: "ReadOutputRequest"
+    name: "ReadStdoutRequest"
     field {
       name: "container_id"
       number: 1
@@ -117,7 +170,41 @@ file {
     }
   }
   message_type {
-    name: "OutputChunk"
+    name: "ReadStdoutResponse"
+    field {
+      name: "data"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_BYTES
+      json_name: "data"
+    }
+    field {
+      name: "eof"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_BOOL
+      json_name: "eof"
+    }
+  }
+  message_type {
+    name: "ReadStderrRequest"
+    field {
+      name: "container_id"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "containerId"
+    }
+    field {
+      name: "exec_id"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "execId"
+    }
+  }
+  message_type {
+    name: "ReadStderrResponse"
     field {
       name: "data"
       number: 1
@@ -154,56 +241,41 @@ file {
     name: "CloseStdinResponse"
   }
   service {
-    name: "StdIO"
+    name: "StdIOService"
     method {
       name: "WriteStdin"
-      input_type: ".containerd.vminitd.services.stdio.v1.WriteStdinRequest"
-      output_type: ".containerd.vminitd.services.stdio.v1.WriteStdinResponse"
+      input_type: ".spinbox.services.stdio.v1.WriteStdinRequest"
+      output_type: ".spinbox.services.stdio.v1.WriteStdinResponse"
     }
     method {
       name: "ReadStdout"
-      input_type: ".containerd.vminitd.services.stdio.v1.ReadOutputRequest"
-      output_type: ".containerd.vminitd.services.stdio.v1.OutputChunk"
+      input_type: ".spinbox.services.stdio.v1.ReadStdoutRequest"
+      output_type: ".spinbox.services.stdio.v1.ReadStdoutResponse"
       server_streaming: true
     }
     method {
       name: "ReadStderr"
-      input_type: ".containerd.vminitd.services.stdio.v1.ReadOutputRequest"
-      output_type: ".containerd.vminitd.services.stdio.v1.OutputChunk"
+      input_type: ".spinbox.services.stdio.v1.ReadStderrRequest"
+      output_type: ".spinbox.services.stdio.v1.ReadStderrResponse"
       server_streaming: true
     }
     method {
       name: "CloseStdin"
-      input_type: ".containerd.vminitd.services.stdio.v1.CloseStdinRequest"
-      output_type: ".containerd.vminitd.services.stdio.v1.CloseStdinResponse"
+      input_type: ".spinbox.services.stdio.v1.CloseStdinRequest"
+      output_type: ".spinbox.services.stdio.v1.CloseStdinResponse"
     }
   }
   options {
-    go_package: "github.com/spin-stack/spinbox/api/services/stdio/v1;stdio"
+    go_package: "github.com/spin-stack/spinbox/api/spinbox/services/stdio/v1;stdio"
   }
   syntax: "proto3"
 }
 file {
-  name: "google/protobuf/empty.proto"
-  package: "google.protobuf"
+  name: "github.com/spin-stack/spinbox/api/spinbox/services/system/v1/info.proto"
+  package: "spinbox.services.system.v1"
   message_type {
-    name: "Empty"
+    name: "InfoRequest"
   }
-  options {
-    java_package: "com.google.protobuf"
-    java_outer_classname: "EmptyProto"
-    java_multiple_files: true
-    go_package: "google.golang.org/protobuf/types/known/emptypb"
-    cc_enable_arenas: true
-    objc_class_prefix: "GPB"
-    csharp_namespace: "Google.Protobuf.WellKnownTypes"
-  }
-  syntax: "proto3"
-}
-file {
-  name: "github.com/spin-stack/spinbox/api/services/system/v1/info.proto"
-  package: "containerd.vminitd.services.system.v1"
-  dependency: "google/protobuf/empty.proto"
   message_type {
     name: "InfoResponse"
     field {
@@ -222,6 +294,15 @@ file {
     }
   }
   message_type {
+    name: "PrepareShutdownRequest"
+  }
+  message_type {
+    name: "PrepareShutdownResponse"
+  }
+  message_type {
+    name: "FreezeFilesystemsRequest"
+  }
+  message_type {
     name: "FreezeFilesystemsResponse"
     field {
       name: "frozen"
@@ -230,6 +311,12 @@ file {
       type: TYPE_STRING
       json_name: "frozen"
     }
+  }
+  message_type {
+    name: "ThawFilesystemsRequest"
+  }
+  message_type {
+    name: "ThawFilesystemsResponse"
   }
   message_type {
     name: "OfflineCPURequest"
@@ -242,6 +329,9 @@ file {
     }
   }
   message_type {
+    name: "OfflineCPUResponse"
+  }
+  message_type {
     name: "OnlineCPURequest"
     field {
       name: "cpu_id"
@@ -250,6 +340,9 @@ file {
       type: TYPE_UINT32
       json_name: "cpuId"
     }
+  }
+  message_type {
+    name: "OnlineCPUResponse"
   }
   message_type {
     name: "RescanPCIRequest"
@@ -278,7 +371,7 @@ file {
       number: 1
       label: LABEL_OPTIONAL
       type: TYPE_MESSAGE
-      type_name: ".containerd.vminitd.services.system.v1.NetworkConfig"
+      type_name: ".spinbox.services.system.v1.NetworkConfig"
       json_name: "network"
     }
     field {
@@ -302,6 +395,9 @@ file {
       type: TYPE_BOOL
       json_name: "restored"
     }
+  }
+  message_type {
+    name: "ConfigureResponse"
   }
   message_type {
     name: "NetworkConfig"
@@ -356,50 +452,50 @@ file {
     }
   }
   service {
-    name: "System"
+    name: "SystemService"
     method {
       name: "Info"
-      input_type: ".google.protobuf.Empty"
-      output_type: ".containerd.vminitd.services.system.v1.InfoResponse"
+      input_type: ".spinbox.services.system.v1.InfoRequest"
+      output_type: ".spinbox.services.system.v1.InfoResponse"
     }
     method {
       name: "PrepareShutdown"
-      input_type: ".google.protobuf.Empty"
-      output_type: ".google.protobuf.Empty"
+      input_type: ".spinbox.services.system.v1.PrepareShutdownRequest"
+      output_type: ".spinbox.services.system.v1.PrepareShutdownResponse"
     }
     method {
       name: "FreezeFilesystems"
-      input_type: ".google.protobuf.Empty"
-      output_type: ".containerd.vminitd.services.system.v1.FreezeFilesystemsResponse"
+      input_type: ".spinbox.services.system.v1.FreezeFilesystemsRequest"
+      output_type: ".spinbox.services.system.v1.FreezeFilesystemsResponse"
     }
     method {
       name: "ThawFilesystems"
-      input_type: ".google.protobuf.Empty"
-      output_type: ".google.protobuf.Empty"
+      input_type: ".spinbox.services.system.v1.ThawFilesystemsRequest"
+      output_type: ".spinbox.services.system.v1.ThawFilesystemsResponse"
     }
     method {
       name: "OfflineCPU"
-      input_type: ".containerd.vminitd.services.system.v1.OfflineCPURequest"
-      output_type: ".google.protobuf.Empty"
+      input_type: ".spinbox.services.system.v1.OfflineCPURequest"
+      output_type: ".spinbox.services.system.v1.OfflineCPUResponse"
     }
     method {
       name: "OnlineCPU"
-      input_type: ".containerd.vminitd.services.system.v1.OnlineCPURequest"
-      output_type: ".google.protobuf.Empty"
+      input_type: ".spinbox.services.system.v1.OnlineCPURequest"
+      output_type: ".spinbox.services.system.v1.OnlineCPUResponse"
     }
     method {
       name: "RescanPCI"
-      input_type: ".containerd.vminitd.services.system.v1.RescanPCIRequest"
-      output_type: ".containerd.vminitd.services.system.v1.RescanPCIResponse"
+      input_type: ".spinbox.services.system.v1.RescanPCIRequest"
+      output_type: ".spinbox.services.system.v1.RescanPCIResponse"
     }
     method {
       name: "Configure"
-      input_type: ".containerd.vminitd.services.system.v1.ConfigureRequest"
-      output_type: ".google.protobuf.Empty"
+      input_type: ".spinbox.services.system.v1.ConfigureRequest"
+      output_type: ".spinbox.services.system.v1.ConfigureResponse"
     }
   }
   options {
-    go_package: "github.com/spin-stack/spinbox/api/services/system/v1;system"
+    go_package: "github.com/spin-stack/spinbox/api/spinbox/services/system/v1;system"
   }
   syntax: "proto3"
 }
@@ -539,74 +635,34 @@ file {
   syntax: "proto3"
 }
 file {
-  name: "github.com/spin-stack/spinbox/api/services/vmevents/v1/events.proto"
+  name: "github.com/spin-stack/spinbox/api/spinbox/services/vmevents/v1/events.proto"
   package: "spinbox.services.vmevents.v1"
   dependency: "github.com/containerd/containerd/api/types/event.proto"
-  dependency: "google/protobuf/empty.proto"
+  message_type {
+    name: "StreamRequest"
+  }
+  message_type {
+    name: "StreamResponse"
+    field {
+      name: "envelope"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_MESSAGE
+      type_name: ".containerd.types.Envelope"
+      json_name: "envelope"
+    }
+  }
   service {
-    name: "Events"
+    name: "EventsService"
     method {
       name: "Stream"
-      input_type: ".google.protobuf.Empty"
-      output_type: ".containerd.types.Envelope"
+      input_type: ".spinbox.services.vmevents.v1.StreamRequest"
+      output_type: ".spinbox.services.vmevents.v1.StreamResponse"
       server_streaming: true
     }
   }
   options {
-    go_package: "github.com/spin-stack/spinbox/api/services/vmevents/v1;vmevents"
-  }
-  syntax: "proto3"
-}
-file {
-  name: "github.com/spin-stack/spinbox/api/types/spinbox/v1/options.proto"
-  package: "io.containerd.spinbox.v1"
-  message_type {
-    name: "SpinboxOpts"
-    field {
-      name: "boot_cpus"
-      number: 1
-      label: LABEL_OPTIONAL
-      type: TYPE_UINT32
-      json_name: "bootCpus"
-    }
-    field {
-      name: "max_cpus"
-      number: 2
-      label: LABEL_OPTIONAL
-      type: TYPE_UINT32
-      json_name: "maxCpus"
-    }
-    field {
-      name: "memory_mb"
-      number: 3
-      label: LABEL_OPTIONAL
-      type: TYPE_UINT32
-      json_name: "memoryMb"
-    }
-    field {
-      name: "max_memory_mb"
-      number: 4
-      label: LABEL_OPTIONAL
-      type: TYPE_UINT32
-      json_name: "maxMemoryMb"
-    }
-    field {
-      name: "io_uid"
-      number: 7
-      label: LABEL_OPTIONAL
-      type: TYPE_UINT32
-      json_name: "ioUid"
-    }
-    field {
-      name: "io_gid"
-      number: 8
-      label: LABEL_OPTIONAL
-      type: TYPE_UINT32
-      json_name: "ioGid"
-    }
-  }
-  options {
-    go_package: "github.com/spin-stack/spinbox/api/types/spinbox/v1;spinbox"
+    go_package: "github.com/spin-stack/spinbox/api/spinbox/services/vmevents/v1;vmevents"
   }
   syntax: "proto3"
 }

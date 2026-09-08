@@ -22,9 +22,8 @@ import (
 	"github.com/containerd/plugin/registry"
 	"github.com/containerd/ttrpc"
 	"golang.org/x/sys/unix"
-	emptypb "google.golang.org/protobuf/types/known/emptypb"
 
-	api "github.com/spin-stack/spinbox/api/services/system/v1"
+	api "github.com/spin-stack/spinbox/api/spinbox/services/system/v1"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/devices"
 	guestsystem "github.com/spin-stack/spinbox/internal/guest/vminit/system"
 	"github.com/spin-stack/spinbox/internal/version"
@@ -53,7 +52,7 @@ type systemService struct {
 
 var prepareShutdown = guestsystem.Cleanup
 
-var _ api.TTRPCSystemService = &systemService{}
+var _ api.TTRPCSystemServiceService = &systemService{}
 
 func init() {
 	registry.Register(&plugin.Registration{
@@ -74,7 +73,7 @@ func initFunc(ic *plugin.InitContext) (interface{}, error) {
 }
 
 func (s *systemService) RegisterTTRPC(server *ttrpc.Server) error {
-	api.RegisterTTRPCSystemService(server, s)
+	api.RegisterTTRPCSystemServiceService(server, s)
 	return nil
 }
 
@@ -216,7 +215,7 @@ func waitForSysfsFilePoll(ctx context.Context, path string, timeout time.Duratio
 	return fmt.Errorf("timeout waiting for %s", path)
 }
 
-func (s *systemService) Info(ctx context.Context, _ *emptypb.Empty) (*api.InfoResponse, error) {
+func (s *systemService) Info(ctx context.Context, _ *api.InfoRequest) (*api.InfoResponse, error) {
 	v, err := os.ReadFile("/proc/version")
 	if err != nil && !os.IsNotExist(err) {
 		return nil, errgrpc.ToGRPC(err)
@@ -227,14 +226,14 @@ func (s *systemService) Info(ctx context.Context, _ *emptypb.Empty) (*api.InfoRe
 	}, nil
 }
 
-func (s *systemService) PrepareShutdown(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+func (s *systemService) PrepareShutdown(ctx context.Context, _ *api.PrepareShutdownRequest) (*api.PrepareShutdownResponse, error) {
 	prepareShutdown(ctx)
-	return &emptypb.Empty{}, nil
+	return &api.PrepareShutdownResponse{}, nil
 }
 
 // FreezeFilesystems freezes the container's writable filesystem(s) (FIFREEZE)
 // so the backing rwlayer image can be read consistently while the VM runs.
-func (s *systemService) FreezeFilesystems(ctx context.Context, _ *emptypb.Empty) (*api.FreezeFilesystemsResponse, error) {
+func (s *systemService) FreezeFilesystems(ctx context.Context, _ *api.FreezeFilesystemsRequest) (*api.FreezeFilesystemsResponse, error) {
 	frozen, err := guestsystem.FreezeWritableFilesystems(ctx)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
@@ -249,7 +248,7 @@ func (s *systemService) FreezeFilesystems(ctx context.Context, _ *emptypb.Empty)
 
 // ThawFilesystems thaws filesystems previously frozen by FreezeFilesystems.
 // It is idempotent: thawing when nothing is frozen is a no-op.
-func (s *systemService) ThawFilesystems(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+func (s *systemService) ThawFilesystems(ctx context.Context, _ *api.ThawFilesystemsRequest) (*api.ThawFilesystemsResponse, error) {
 	s.frozenMu.Lock()
 	paths := s.frozen
 	s.frozen = nil
@@ -258,10 +257,10 @@ func (s *systemService) ThawFilesystems(ctx context.Context, _ *emptypb.Empty) (
 	if err := guestsystem.ThawFilesystems(ctx, paths); err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
-	return &emptypb.Empty{}, nil
+	return &api.ThawFilesystemsResponse{}, nil
 }
 
-func (s *systemService) OfflineCPU(ctx context.Context, req *api.OfflineCPURequest) (*emptypb.Empty, error) {
+func (s *systemService) OfflineCPU(ctx context.Context, req *api.OfflineCPURequest) (*api.OfflineCPUResponse, error) {
 	cpuID := req.GetCpuID()
 	if cpuID == 0 {
 		return nil, errgrpc.ToGRPCf(errdefs.ErrInvalidArgument,
@@ -282,7 +281,7 @@ func (s *systemService) OfflineCPU(ctx context.Context, req *api.OfflineCPUReque
 		return nil, errgrpc.ToGRPC(err)
 	}
 	if value == sysfsOffline {
-		return &emptypb.Empty{}, nil
+		return &api.OfflineCPUResponse{}, nil
 	}
 
 	// Offline the CPU
@@ -291,14 +290,14 @@ func (s *systemService) OfflineCPU(ctx context.Context, req *api.OfflineCPUReque
 	}
 
 	log.G(ctx).WithField("cpu_id", cpuID).Debug("CPU offlined successfully")
-	return &emptypb.Empty{}, nil
+	return &api.OfflineCPUResponse{}, nil
 }
 
-func (s *systemService) OnlineCPU(ctx context.Context, req *api.OnlineCPURequest) (*emptypb.Empty, error) {
+func (s *systemService) OnlineCPU(ctx context.Context, req *api.OnlineCPURequest) (*api.OnlineCPUResponse, error) {
 	cpuID := req.GetCpuID()
 	if cpuID == 0 {
 		// CPU 0 is always online (boot processor)
-		return &emptypb.Empty{}, nil
+		return &api.OnlineCPUResponse{}, nil
 	}
 
 	path := fmt.Sprintf("/sys/devices/system/cpu/cpu%d/online", cpuID)
@@ -314,7 +313,7 @@ func (s *systemService) OnlineCPU(ctx context.Context, req *api.OnlineCPURequest
 		return nil, errgrpc.ToGRPC(err)
 	}
 	if value == sysfsOnline {
-		return &emptypb.Empty{}, nil // Already online
+		return &api.OnlineCPUResponse{}, nil // Already online
 	}
 
 	// Write "1" to online the CPU
@@ -323,7 +322,7 @@ func (s *systemService) OnlineCPU(ctx context.Context, req *api.OnlineCPURequest
 	}
 
 	log.G(ctx).WithField("cpu_id", cpuID).Debug("CPU onlined successfully")
-	return &emptypb.Empty{}, nil
+	return &api.OnlineCPUResponse{}, nil
 }
 
 // writeRuntimeFeatures writes the runtime features to a well-known location
@@ -372,7 +371,7 @@ func (s *systemService) RescanPCI(ctx context.Context, req *api.RescanPCIRequest
 // every line of it describes a different machine. This is the host saying who
 // this VM actually is, over the channel that is already up 3 ms after the
 // restore resumes.
-func (s *systemService) Configure(ctx context.Context, req *api.ConfigureRequest) (*emptypb.Empty, error) {
+func (s *systemService) Configure(ctx context.Context, req *api.ConfigureRequest) (*api.ConfigureResponse, error) {
 	id := guestsystem.Identity{
 		BlockDevices: int(req.GetExpectedBlockDevices()),
 		ExtrasDisk:   req.GetExtrasDisk(),
@@ -396,5 +395,5 @@ func (s *systemService) Configure(ctx context.Context, req *api.ConfigureRequest
 		}
 		return nil, errgrpc.ToGRPC(err)
 	}
-	return &emptypb.Empty{}, nil
+	return &api.ConfigureResponse{}, nil
 }

@@ -7,11 +7,19 @@ Spinbox uses semantic versioning for its gRPC/TTRPC APIs to ensure compatibility
 ## Version Format
 
 All API services are versioned using the `/v{N}` suffix in their package names:
-- `containerd.vminitd.services.system.v1`
-- `containerd.vminitd.services.bundle.v1`
-- `containerd.vminitd.services.vmevents.v1`
+- `spinbox.services.system.v1`
+- `spinbox.services.bundle.v1`
+- `spinbox.services.stdio.v1`
+- `spinbox.services.vmevents.v1`
 
-Where `{N}` is the major version number.
+Where `{N}` is the major version number. Each file lives at the directory its
+package names, relative to `api/`, which is what buf's `PACKAGE_DIRECTORY_MATCH`
+requires and what `task lint` checks.
+
+`io.containerd.spinbox.v1` (`api/io/containerd/spinbox/v1/options.proto`) is not
+one of these. It is the containerd runtime name — `ctr run --runtime
+io.containerd.spinbox.v1` — and its package name is a published identifier that
+this policy does not get to renumber.
 
 ## Compatibility Guarantees
 
@@ -36,9 +44,15 @@ Where `{N}` is the major version number.
 ## Adding New Features
 
 ### Adding a new RPC method (compatible):
+Every RPC owns a request and a response message of its own, named
+`<Method>Request` and `<Method>Response`, even when both are empty:
+`google.protobuf.Empty` in either position is rejected by the lint, and it is
+also the change that cannot be made later — an empty message can grow a field, a
+shared one cannot grow one for a single caller.
+
 ```protobuf
-service System {
-  rpc Info(google.protobuf.Empty) returns (InfoResponse);  // Existing
+service SystemService {
+  rpc Info(InfoRequest) returns (InfoResponse);  // Existing
 
   // New method added in v1.2.0
   rpc GetMetrics(MetricsRequest) returns (MetricsResponse);
@@ -58,12 +72,19 @@ message InfoResponse {
 
 ### Breaking changes require new major version:
 ```protobuf
-// OLD: api/services/system/v1/info.proto
-package containerd.vminitd.services.system.v1;
+// OLD: api/spinbox/services/system/v1/info.proto
+package spinbox.services.system.v1;
 
-// NEW: api/services/system/v2/info.proto
-package containerd.vminitd.services.system.v2;
+// NEW: api/spinbox/services/system/v2/info.proto
+package spinbox.services.system.v2;
 ```
+
+## Enforcement
+
+None of the above was checked by anything until buf arrived. `task lint` now runs
+`buf lint` (STANDARD), `buf format --diff --exit-code` and `buf breaking
+--against` main, so a rename or a removal has to be argued for in a commit
+message rather than noticed in production.
 
 ## Proto3 Field Evolution
 

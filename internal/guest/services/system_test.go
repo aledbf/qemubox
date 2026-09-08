@@ -11,9 +11,8 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
-	emptypb "google.golang.org/protobuf/types/known/emptypb"
 
-	api "github.com/spin-stack/spinbox/api/services/system/v1"
+	api "github.com/spin-stack/spinbox/api/spinbox/services/system/v1"
 	"github.com/spin-stack/spinbox/internal/version"
 )
 
@@ -174,7 +173,7 @@ func TestSystemServiceInfo(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		svc := &systemService{}
 
-		resp, err := svc.Info(context.Background(), &emptypb.Empty{})
+		resp, err := svc.Info(context.Background(), &api.InfoRequest{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -201,7 +200,7 @@ func TestSystemServicePrepareShutdown(t *testing.T) {
 		prepareShutdown = original
 	}()
 
-	resp, err := svc.PrepareShutdown(context.Background(), &emptypb.Empty{})
+	resp, err := svc.PrepareShutdown(context.Background(), &api.PrepareShutdownRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	system "github.com/spin-stack/spinbox/api/services/system/v1"
+	system "github.com/spin-stack/spinbox/api/spinbox/services/system/v1"
 	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
@@ -172,14 +172,14 @@ func TestTemplateRestore(t *testing.T) {
 	defer client.Close()
 
 	cfgStart := time.Now()
-	if _, err := system.NewTTRPCSystemClient(client).Configure(ctx, &system.ConfigureRequest{
+	if _, err := system.NewTTRPCSystemServiceClient(client).Configure(ctx, &system.ConfigureRequest{
 		ExpectedBlockDevices: 1,
 	}); err != nil {
 		t.Fatalf("SNAPSHOT configuring the restored guest: %v", err)
 	}
 	configured := time.Since(cfgStart)
 
-	found, err := system.NewTTRPCSystemClient(client).RescanPCI(ctx, &system.RescanPCIRequest{ExpectedBlockDevices: 1})
+	found, err := system.NewTTRPCSystemServiceClient(client).RescanPCI(ctx, &system.RescanPCIRequest{ExpectedBlockDevices: 1})
 	if err != nil {
 		t.Fatalf("SNAPSHOT the restored guest never saw its disk: %v", err)
 	}

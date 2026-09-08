@@ -190,7 +190,7 @@ All checks must pass before committing.
   - CNI integration, TAP device management
 
 **API Layer** (`api/`):
-- **`api/services/`** - Protobuf definitions ([see CLAUDE.md](api/CLAUDE.md))
+- **`api/spinbox/services/`** - Protobuf definitions ([see CLAUDE.md](api/CLAUDE.md))
   - bundle/v1: OCI bundle creation
   - stdio/v1: I/O streaming
   - vmevents/v1: Event forwarding

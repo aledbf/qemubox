@@ -1,0 +1,37 @@
+# buf's view of this schema. The compiler is still containerd's protobuild
+# (Protobuild.toml next to this file); buf is here to lint, to format-check and
+# to say out loud when the wire breaks.
+#
+# Two modules, because one of these files is not ours:
+#
+#   .            - the spinbox schema. STANDARD lint, FILE breaking.
+#   third_party  - one vendored containerd file and the file it imports, kept
+#                  only so buf can resolve the import in
+#                  spinbox/services/vmevents/v1/events.proto. Its style is
+#                  containerd's, and its compatibility is containerd's problem,
+#                  so it is excluded from both checks.
+version: v2
+
+modules:
+  - path: .
+    excludes:
+      - third_party
+    lint:
+      use:
+        - STANDARD
+    breaking:
+      use:
+        - FILE
+  - path: third_party
+    lint:
+      # A vendored file is not held to our style. buf has no "skip this module"
+      # switch, so the directories the module contains are named here - as paths
+      # relative to this buf.yaml, not to the module root, which is what buf
+      # accepts. Add any third file's directory alongside them.
+      ignore:
+        - third_party/github.com
+        - third_party/types
+    breaking:
+      ignore:
+        - third_party/github.com
+        - third_party/types

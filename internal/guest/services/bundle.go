@@ -21,7 +21,7 @@ import (
 	"github.com/containerd/plugin/registry"
 	"github.com/containerd/ttrpc"
 
-	api "github.com/spin-stack/spinbox/api/services/bundle/v1"
+	api "github.com/spin-stack/spinbox/api/spinbox/services/bundle/v1"
 	"github.com/spin-stack/spinbox/internal/guest/vminit/bundle"
 )
 
@@ -57,7 +57,7 @@ type service struct {
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
-	api.RegisterTTRPCBundleService(server, s)
+	api.RegisterTTRPCBundleServiceService(server, s)
 	return nil
 }
 

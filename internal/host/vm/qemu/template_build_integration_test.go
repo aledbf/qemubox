@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	system "github.com/spin-stack/spinbox/api/services/system/v1"
+	system "github.com/spin-stack/spinbox/api/spinbox/services/system/v1"
 	"github.com/spin-stack/spinbox/internal/host/vm"
 )
 
@@ -89,7 +89,7 @@ func TestBuildTemplate(t *testing.T) {
 	// NIC by the same rescan that finds the disk, building a template needs no
 	// throwaway TAP and the artefact is genuinely generic.
 	cfgStart := time.Now()
-	if _, err := system.NewTTRPCSystemClient(client).Configure(ctx, &system.ConfigureRequest{
+	if _, err := system.NewTTRPCSystemServiceClient(client).Configure(ctx, &system.ConfigureRequest{
 		ExpectedBlockDevices: 1,
 		Restored:             true,
 	}); err != nil {
@@ -97,7 +97,7 @@ func TestBuildTemplate(t *testing.T) {
 	}
 	t.Logf("TEMPLATE restored guest configured in %d ms", time.Since(cfgStart).Milliseconds())
 
-	found, err := system.NewTTRPCSystemClient(client).RescanPCI(ctx, &system.RescanPCIRequest{
+	found, err := system.NewTTRPCSystemServiceClient(client).RescanPCI(ctx, &system.RescanPCIRequest{
 		ExpectedBlockDevices: 1,
 	})
 	if err != nil {
@@ -191,7 +191,7 @@ func TestRestoredVMClockAndEntropy(t *testing.T) {
 	}
 	defer client.Close()
 
-	if _, err := system.NewTTRPCSystemClient(client).Configure(ctx, &system.ConfigureRequest{
+	if _, err := system.NewTTRPCSystemServiceClient(client).Configure(ctx, &system.ConfigureRequest{
 		ExpectedBlockDevices: 1,
 		Restored:             true,
 	}); err != nil {

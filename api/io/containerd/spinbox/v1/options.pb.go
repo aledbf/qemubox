@@ -2,7 +2,13 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v3.20.1
-// source: github.com/spin-stack/spinbox/api/types/spinbox/v1/options.proto
+// source: github.com/spin-stack/spinbox/api/io/containerd/spinbox/v1/options.proto
+
+// This package name is not an internal wire: it is the containerd runtime name.
+// `ctr run --runtime io.containerd.spinbox.v1` names it, and SpinboxOpts is the
+// type containerd marshals into a task's runtime options. Renaming it would
+// break every containerd that already knows this runtime, so it stays; only the
+// directory moved, to satisfy buf's PACKAGE_DIRECTORY_MATCH.
 
 package spinbox
 
@@ -49,7 +55,7 @@ type SpinboxOpts struct {
 
 func (x *SpinboxOpts) Reset() {
 	*x = SpinboxOpts{}
-	mi := &file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_msgTypes[0]
+	mi := &file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -61,7 +67,7 @@ func (x *SpinboxOpts) String() string {
 func (*SpinboxOpts) ProtoMessage() {}
 
 func (x *SpinboxOpts) ProtoReflect() protoreflect.Message {
-	mi := &file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_msgTypes[0]
+	mi := &file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -74,7 +80,7 @@ func (x *SpinboxOpts) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SpinboxOpts.ProtoReflect.Descriptor instead.
 func (*SpinboxOpts) Descriptor() ([]byte, []int) {
-	return file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_rawDescGZIP(), []int{0}
+	return file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *SpinboxOpts) GetBootCpus() uint32 {
@@ -119,36 +125,36 @@ func (x *SpinboxOpts) GetIoGid() uint32 {
 	return 0
 }
 
-var File_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto protoreflect.FileDescriptor
+var File_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto protoreflect.FileDescriptor
 
-const file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_rawDesc = "" +
+const file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_rawDesc = "" +
 	"\n" +
-	"@github.com/spin-stack/spinbox/api/types/spinbox/v1/options.proto\x12\x18io.containerd.spinbox.v1\"\xb4\x01\n" +
+	"Hgithub.com/spin-stack/spinbox/api/io/containerd/spinbox/v1/options.proto\x12\x18io.containerd.spinbox.v1\"\xb4\x01\n" +
 	"\vSpinboxOpts\x12\x1b\n" +
 	"\tboot_cpus\x18\x01 \x01(\rR\bbootCpus\x12\x19\n" +
 	"\bmax_cpus\x18\x02 \x01(\rR\amaxCpus\x12\x1b\n" +
 	"\tmemory_mb\x18\x03 \x01(\rR\bmemoryMb\x12\"\n" +
 	"\rmax_memory_mb\x18\x04 \x01(\rR\vmaxMemoryMb\x12\x15\n" +
 	"\x06io_uid\x18\a \x01(\rR\x05ioUid\x12\x15\n" +
-	"\x06io_gid\x18\b \x01(\rR\x05ioGidB<Z:github.com/spin-stack/spinbox/api/types/spinbox/v1;spinboxb\x06proto3"
+	"\x06io_gid\x18\b \x01(\rR\x05ioGidBDZBgithub.com/spin-stack/spinbox/api/io/containerd/spinbox/v1;spinboxb\x06proto3"
 
 var (
-	file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_rawDescOnce sync.Once
-	file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_rawDescData []byte
+	file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_rawDescOnce sync.Once
+	file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_rawDescData []byte
 )
 
-func file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_rawDescGZIP() []byte {
-	file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_rawDescOnce.Do(func() {
-		file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_rawDesc), len(file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_rawDesc)))
+func file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_rawDescGZIP() []byte {
+	file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_rawDescOnce.Do(func() {
+		file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_rawDesc), len(file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_rawDesc)))
 	})
-	return file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_rawDescData
+	return file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_rawDescData
 }
 
-var file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
-var file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_goTypes = []any{
+var file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_goTypes = []any{
 	(*SpinboxOpts)(nil), // 0: io.containerd.spinbox.v1.SpinboxOpts
 }
-var file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_depIdxs = []int32{
+var file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
 	0, // [0:0] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
@@ -156,26 +162,26 @@ var file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_depIdx
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_init() }
-func file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_init() {
-	if File_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto != nil {
+func init() { file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_init() }
+func file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_init() {
+	if File_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_rawDesc), len(file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_rawDesc), len(file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_goTypes,
-		DependencyIndexes: file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_depIdxs,
-		MessageInfos:      file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_msgTypes,
+		GoTypes:           file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_goTypes,
+		DependencyIndexes: file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_depIdxs,
+		MessageInfos:      file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_msgTypes,
 	}.Build()
-	File_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto = out.File
-	file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_goTypes = nil
-	file_github_com_spin_stack_spinbox_api_types_spinbox_v1_options_proto_depIdxs = nil
+	File_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto = out.File
+	file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_goTypes = nil
+	file_github_com_spin_stack_spinbox_api_io_containerd_spinbox_v1_options_proto_depIdxs = nil
 }
