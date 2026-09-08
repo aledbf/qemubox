@@ -105,11 +105,6 @@ jobs:
       - name: Build release tarball
         env:
           VERSION: ${{ inputs.version || github.ref_name }}
-        # GH_TOKEN because `task release` fetches the pinned spin-machine release with gh,
-        # and gh wants a token even for a public repository. The default one is enough:
-        # spin-stack/spin-machine is public, so no cross-repository grant is involved.
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: task release
 
       - name: Push sandbox image
