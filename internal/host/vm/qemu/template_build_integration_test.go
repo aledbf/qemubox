@@ -68,9 +68,9 @@ func TestBuildTemplate(t *testing.T) {
 
 	// A machine of a different shape must not find this template. Nothing checks
 	// the shape at restore time, so this is the check.
-	other, err := MachineIdentityFor(&vm.VMResourceConfig{BootCPUs: 4, MaxCPUs: 4})
+	other, err := specFor(&vm.VMResourceConfig{BootCPUs: 4, MaxCPUs: 4})
 	if err != nil {
-		t.Fatalf("MachineIdentityFor: %v", err)
+		t.Fatalf("specFor: %v", err)
 	}
 	if _, err := store.Lookup(other); !errors.Is(err, ErrNoTemplate) {
 		t.Errorf("a machine with a different CPU count found this template (err %v)", err)
