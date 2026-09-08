@@ -116,13 +116,27 @@ from_release() {
   mkdir -p "${CACHE}"
 
   if [ ! -f "${tarball}" ]; then
-    command -v gh >/dev/null || {
-      echo "👹 no machine in ${SIBLING} and no gh to fetch ${VERSION} with" >&2
+    # curl and not `gh`, now that spin-machine is public: a release asset has a plain URL
+    # and needs no authentication at all. `gh` needs a token even to read a public
+    # repository, which meant every job that reaches this — not only the one somebody
+    # remembered — had to carry GH_TOKEN, and the ones that did not failed with gh's
+    # advice about setting it rather than with anything about the machine.
+    #
+    # --fail so a 404 is an error instead of a tarball full of HTML; --location because
+    # the asset redirects to object storage; --retry because this is the one step here
+    # that depends on somebody else's network.
+    echo "Fetching spin-machine ${VERSION}"
+    curl --fail --location --show-error --silent \
+         --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 30 \
+         --output "${tarball}.part" \
+         "https://github.com/${REPO}/releases/download/${VERSION}/${NAME}.tar.gz" || {
+      echo "👹 could not fetch ${NAME}.tar.gz from ${REPO} ${VERSION}" >&2
+      rm -f "${tarball}.part"
       exit 1
     }
-    echo "Fetching spin-machine ${VERSION} from ${REPO}"
-    gh release download "${VERSION}" --repo "${REPO}" \
-       --pattern "${NAME}.tar.gz" --dir "${CACHE}" --clobber
+    # Renamed only once it is whole: an interrupted download left in place is a cached
+    # tarball that every later run would reuse and every later run would reject.
+    mv "${tarball}.part" "${tarball}"
   fi
 
   # Checked on every run and not only after a download: the tarball is cached,
