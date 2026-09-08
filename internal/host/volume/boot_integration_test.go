@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 // other VM on the host depends on and the one whose failure has no symptom until
 // some unrelated guest reads a cluster that moved.
 func TestAGuestBootsFromTheChainAndTheBaseSurvivesIt(t *testing.T) {
+	holdVMLane(t)
 	rel := release(t)
 
 	qemuImg := filepath.Join(rel, "bin", "qemu-img")
@@ -151,4 +153,41 @@ func sum(t *testing.T, path string) string {
 		t.Fatalf("hashing %s: %v", path, err)
 	}
 	return strings.Fields(string(out))[0]
+}
+
+// vmLaneLock is the same file the integration Taskfile target takes. It is
+// spelled twice because the two takers are a shell and a Go test and there is
+// nowhere they could share a constant; VM_LANE_LOCK in Taskfile.yml is the other
+// half, and whoever changes one has to change the other.
+const vmLaneLock = "/tmp/spinbox-vm-lane.lock"
+
+// holdVMLane blocks until this process owns the host's VM lane, and holds it for
+// the rest of the test.
+//
+// The self-hosted CI runner is somebody's workstation, so a developer running
+// this test and a CI job running the integration lane are two things booting VMs
+// on one machine. They do not fail at what they were doing: the loser fails
+// during setup, naming a device node, in a message that has nothing to do with
+// either change. Taking the same lock the Taskfile takes puts both behind one
+// queue.
+func holdVMLane(t *testing.T) {
+	t.Helper()
+
+	// #nosec G302,G304 -- a well-known path, and it must be takeable by whoever
+	// runs the tests as well as by CI.
+	f, err := os.OpenFile(vmLaneLock, os.O_CREATE|os.O_RDWR, 0o666)
+	if err != nil {
+		t.Fatalf("opening the VM lane lock %s: %v", vmLaneLock, err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	// Non-blocking first, so that waiting is announced rather than looking like a
+	// hung test: this lane can be held for many minutes by a CI run.
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+		return
+	}
+	t.Logf("waiting for the host's VM lane (%s) — something else is booting VMs here", vmLaneLock)
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatalf("waiting for %s: %v", vmLaneLock, err)
+	}
 }

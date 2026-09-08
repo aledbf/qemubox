@@ -33,6 +33,10 @@ vars:
     sh: uname -s
   OUTPUT_DIR: _output
   BIN_DIR: bin
+  # The lock anything that boots VMs on this host takes. See the `integration`
+  # task for why it exists. /tmp and not /var/lock, so a developer needs no root
+  # to take it — the point is that CI and a human end up behind the same one.
+  VM_LANE_LOCK: '{{.VM_LANE_LOCK | default "/tmp/spinbox-vm-lane.lock"}}'
   SCRIPTS_DIR: hack
   BUILDKIT_CACHE_DIR: '{{.BUILDKIT_CACHE_DIR | default "/var/lib/spin-stack-buildkit-cache"}}'
   BUILDKIT_CACHE_INITRD: '{{.BUILDKIT_CACHE_DIR}}/initrd'
@@ -251,6 +255,24 @@ tasks:
 
   integration:
     desc: Build release tarball and run containerd integration test
+    # This lane owns the machine while it runs, and it has to say so.
+    #
+    # The self-hosted runner is somebody's workstation. Two things that boot VMs
+    # on it at once — two CI runs, or CI and whoever is sitting at it — install
+    # the same release, restart the same containerd and take the same
+    # /dev/kvm, and the loser does not fail at what it was doing. It fails
+    # during setup with `ctr: error stating device path: stat /dev/disk/by-label:
+    # no such file or directory`, which names a device node and has nothing to do
+    # with the change under test. That has now cost three investigations: it is
+    # written down in ci.yml as the reason pushes stopped running CI twice, and it
+    # happened again on 2026-09-08 with a single CI run, because the other party
+    # was a developer on the same box.
+    #
+    # flock is the smallest thing that removes it, and it removes it for both
+    # parties rather than for CI only: whoever gets there first runs, the other
+    # waits. -w bounds the wait so a stuck lane is a failure and not a queue that
+    # never drains; the message says who is holding it, because the second-worst
+    # outcome here is a lane that hangs saying nothing.
     vars:
       VERSION: '{{.VERSION | default "ci"}}'
       INTEGRATION_IMAGE: '{{.INTEGRATION_IMAGE | default "ghcr.io/spin-stack/spinbox/sandbox:latest"}}'
@@ -266,6 +288,14 @@ tasks:
           VERSION: "{{.VERSION}}"
       - |
         set -eou pipefail
+        # See the note on this task. Held for the rest of it, released when the
+        # shell exits however it exits.
+        exec 9>{{.VM_LANE_LOCK}}
+        if ! flock -w 1800 9; then
+          echo "👹 waited 30 minutes for {{.VM_LANE_LOCK}} and something still holds it" >&2
+          command -v fuser >/dev/null && fuser -v {{.VM_LANE_LOCK}} >&2 || true
+          exit 1
+        fi
         VERSION="{{.VERSION}}"
         RELEASE_NAME="spinbox-${VERSION}-linux-x86_64"
         TARBALL="{{.OUTPUT_DIR}}/release/${RELEASE_NAME}.tar.gz"
