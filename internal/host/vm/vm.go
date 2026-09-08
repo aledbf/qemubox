@@ -89,7 +89,18 @@ func WithExtrasDisk(idx int) StartOpt {
 // MountConfig defines configuration for mounting disks into the VM.
 type MountConfig struct {
 	Readonly bool
-	Vmdk     bool
+	// Format is what QEMU is told the image is: raw, vmdk, qcow2.
+	//
+	// Stated by whoever adds the disk, because that is the only party that knows.
+	// It used to be worked out from the file extension while the command line was
+	// being built — a guess, in the one place nobody looks, made by code that had
+	// just been handed the answer and dropped it. A wrong format is not an error:
+	// it is a guest that boots and finds a disk full of nothing, and letting QEMU
+	// probe the format of a file the guest can write is how an image is talked
+	// into being read as another one.
+	//
+	// Empty means DefaultDiskFormat.
+	Format string
 	// Serial is the virtio-blk serial exposed to the guest (max 20 chars).
 	// The guest resolves the device by matching this serial, so the
 	// layer→device mapping does not depend on PCI enumeration order.
@@ -106,10 +117,17 @@ func WithReadOnly() MountOpt {
 	}
 }
 
-// WithVmdk mounts the disk using VMDK format.
-func WithVmdk() MountOpt {
+// DefaultDiskFormat is what a disk is when nobody says otherwise.
+//
+// raw, because that is what the snapshotter's rwlayer and the extras disk are.
+// It becomes qcow2 when the disks stop coming from a snapshotter and start
+// coming from a layer chain, and this constant is the whole of that change.
+const DefaultDiskFormat = "raw"
+
+// WithFormat states the image format QEMU is given for this disk.
+func WithFormat(format string) MountOpt {
 	return func(o *MountConfig) {
-		o.Vmdk = true
+		o.Format = format
 	}
 }
 

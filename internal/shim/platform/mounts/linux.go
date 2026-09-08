@@ -142,7 +142,7 @@ type diskOptions struct {
 	source   string
 	serial   string
 	readOnly bool
-	vmdk     bool
+	format   string
 }
 
 // blockSerial returns the virtio-blk serial for the disk at the given slot
@@ -246,12 +246,16 @@ func (m *linuxManager) handleEROFS(_ context.Context, id string, disks *byte, mn
 	}
 
 	serial := blockSerial(*disks)
+	format := vm.DefaultDiskFormat
+	if isVMDK {
+		format = "vmdk"
+	}
 	addDisks := []diskOptions{{
 		name:     disk,
 		source:   source,
 		serial:   serial,
 		readOnly: true,
-		vmdk:     isVMDK,
+		format:   format,
 	}}
 
 	// When using VMDK, the guest doesn't need device= options - it's a single device.
@@ -298,7 +302,7 @@ func (m *linuxManager) handleExt4(id string, disks *byte, mnt *types.Mount) ([]*
 		source:   mnt.Source,
 		serial:   serial,
 		readOnly: readOnly,
-		vmdk:     false,
+		format:   vm.DefaultDiskFormat,
 	}}
 	return []*types.Mount{out}, addDisks, nil
 }
@@ -435,8 +439,8 @@ func (m *linuxManager) addDisksToVM(ctx context.Context, vmi vm.Instance, disks 
 		if do.readOnly {
 			opts = append(opts, vm.WithReadOnly())
 		}
-		if do.vmdk {
-			opts = append(opts, vm.WithVmdk())
+		if do.format != "" {
+			opts = append(opts, vm.WithFormat(do.format))
 		}
 		if do.serial != "" {
 			opts = append(opts, vm.WithSerial(do.serial))
