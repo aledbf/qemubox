@@ -102,13 +102,3 @@ func getMemoryStats(ctx context.Context, dialClient func(context.Context) (*ttrp
 
 	return int64(mem.GetUsage()), nil
 }
-
-// The two calls that used to be here — offlineMemory and onlineMemory — are
-// gone with the DIMM slots they served. virtio-mem hands memory to a guest that
-// onlines it itself (memhp_default_state=online) and takes back only what the
-// guest has already released, so there is nothing for the host to ask the guest
-// to do in either direction.
-//
-// The System service still carries the two RPCs and the guest still implements
-// them. Removing them is a proto change and belongs in its own commit; nothing
-// on this side calls them.

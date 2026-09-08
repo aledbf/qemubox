@@ -55,23 +55,6 @@ service System {
 	//   - INTERNAL: failed to write to sysfs
 	rpc OnlineCPU(OnlineCPURequest) returns (google.protobuf.Empty);
 
-	// OfflineMemory takes a memory block offline via sysfs before hot-unplug.
-	//
-	// Returns:
-	//   - NOT_FOUND: memory_id does not exist in /sys/devices/system/memory/
-	//   - FAILED_PRECONDITION: memory block is already offline or contains kernel memory
-	//   - INTERNAL: failed to write to sysfs
-	rpc OfflineMemory(OfflineMemoryRequest) returns (google.protobuf.Empty);
-
-	// OnlineMemory brings a memory block online via sysfs after hot-plug.
-	// The memory block must have been previously hot-plugged via QEMU QMP.
-	//
-	// Returns:
-	//   - NOT_FOUND: memory_id does not exist (not yet hot-plugged via QMP)
-	//   - FAILED_PRECONDITION: memory block is already online
-	//   - INTERNAL: failed to write to sysfs
-	rpc OnlineMemory(OnlineMemoryRequest) returns (google.protobuf.Empty);
-
 	// RescanPCI re-enumerates the PCI bus and waits for the expected number of
 	// virtio block devices to appear.
 	//
@@ -127,18 +110,6 @@ message OnlineCPURequest {
 	// cpu_id is the logical CPU ID to online (zero-indexed, e.g., 0, 1, 2).
 	// This corresponds to /sys/devices/system/cpu/cpu{N}.
 	uint32 cpu_id = 1;
-}
-
-message OfflineMemoryRequest {
-	// memory_id is the memory block ID to offline (zero-indexed).
-	// This corresponds to the QMP memory slot number.
-	uint32 memory_id = 1;
-}
-
-message OnlineMemoryRequest {
-	// memory_id is the memory block ID to online (zero-indexed).
-	// This corresponds to the QMP memory slot number.
-	uint32 memory_id = 1;
 }
 
 message RescanPCIRequest {

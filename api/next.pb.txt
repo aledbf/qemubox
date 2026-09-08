@@ -252,26 +252,6 @@ file {
     }
   }
   message_type {
-    name: "OfflineMemoryRequest"
-    field {
-      name: "memory_id"
-      number: 1
-      label: LABEL_OPTIONAL
-      type: TYPE_UINT32
-      json_name: "memoryId"
-    }
-  }
-  message_type {
-    name: "OnlineMemoryRequest"
-    field {
-      name: "memory_id"
-      number: 1
-      label: LABEL_OPTIONAL
-      type: TYPE_UINT32
-      json_name: "memoryId"
-    }
-  }
-  message_type {
     name: "RescanPCIRequest"
     field {
       name: "expected_block_devices"
@@ -405,16 +385,6 @@ file {
     method {
       name: "OnlineCPU"
       input_type: ".containerd.vminitd.services.system.v1.OnlineCPURequest"
-      output_type: ".google.protobuf.Empty"
-    }
-    method {
-      name: "OfflineMemory"
-      input_type: ".containerd.vminitd.services.system.v1.OfflineMemoryRequest"
-      output_type: ".google.protobuf.Empty"
-    }
-    method {
-      name: "OnlineMemory"
-      input_type: ".containerd.vminitd.services.system.v1.OnlineMemoryRequest"
       output_type: ".google.protobuf.Empty"
     }
     method {
