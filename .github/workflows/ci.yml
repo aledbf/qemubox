@@ -254,11 +254,32 @@ jobs:
                 keepDuration = 1209600
                 filters = [ "type==source.local", "type==exec.cachemount", "type==source.git.checkout"]
 
+      # Under the host's VM lane lock, because this runner is somebody's
+      # workstation. Two things that boot VMs on it at once install the same
+      # release, restart the same containerd and take the same /dev/kvm, and the
+      # loser does not fail at what it was doing — it fails during setup with
+      # `ctr: error stating device path: stat /dev/disk/by-label: no such file or
+      # directory`, which names a device node and has nothing to do with the
+      # change under test. It cost three investigations before it was written
+      # down.
+      #
+      # Here and not inside the Taskfile: taking a lock for the length of a shell
+      # needs `exec 9>file`, and Task's embedded shell interpreter does not
+      # support redirecting to a numbered descriptor — it exits 1 and prints
+      # nothing, which is how that attempt failed. A workflow step is a real
+      # bash. The other taker is the boot test itself (holdVMLane), which is what
+      # covers a developer sitting at this machine.
       - name: Run integration test
         env:
           VERSION: ci-${{ github.run_id }}
           CLEANUP: "1"
-        run: task integration
+        run: |
+          exec 9>/tmp/spinbox-vm-lane.lock
+          flock -w 1800 9 || {
+            echo "::error::waited 30 minutes for the host's VM lane and something still holds it"
+            exit 1
+          }
+          task integration
 
       - name: Cleanup BuildKit cache
         if: always()
