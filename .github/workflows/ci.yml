@@ -286,6 +286,12 @@ jobs:
             echo "::error::waited 30 minutes for the host's VM lane and something still holds it"
             exit 1
           }
+          # Everything below runs with the lane held, so anything that would take
+          # it again must not: flock is per open file description, so a child
+          # opening the same path waits for a lock its own parent holds and never
+          # gets it. That deadlocked the boot test for the full 600-second go test
+          # timeout.
+          export SPINBOX_VM_LANE_HELD=1
           task integration
 
       - name: Cleanup BuildKit cache

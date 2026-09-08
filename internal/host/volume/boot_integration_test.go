@@ -161,6 +161,11 @@ func sum(t *testing.T, path string) string {
 // half, and whoever changes one has to change the other.
 const vmLaneLock = "/tmp/spinbox-vm-lane.lock"
 
+// vmLaneHeld is set by whoever already took the lane, so that anything it runs
+// does not wait for a lock its own parent is holding. The workflow step sets it;
+// see holdVMLane.
+const vmLaneHeld = "SPINBOX_VM_LANE_HELD"
+
 // holdVMLane blocks until this process owns the host's VM lane, and holds it for
 // the rest of the test.
 //
@@ -172,6 +177,22 @@ const vmLaneLock = "/tmp/spinbox-vm-lane.lock"
 // queue.
 func holdVMLane(t *testing.T) {
 	t.Helper()
+
+	// An ancestor may already hold it, and then taking it again deadlocks.
+	//
+	// flock is per open file description, not per process, so a child that opens
+	// the same path gets a *different* description and waits — for a lock its own
+	// parent is holding and will not release until the child returns. That is what
+	// happened: CI takes the lane for the whole integration step, the step runs
+	// this test, and the package timed out after 600 seconds waiting for itself.
+	//
+	// An environment variable and not an attempt to detect it: there is no
+	// portable way to ask "does an ancestor hold this", and inheriting fd 9 to
+	// find out would make the test depend on the shape of whatever invoked it.
+	if os.Getenv(vmLaneHeld) != "" {
+		t.Logf("the host's VM lane is already held by whatever started this (%s is set)", vmLaneHeld)
+		return
+	}
 
 	// Read-only, which is all flock(2) needs, and is what makes one lock usable by
 	// two different users. CI's job and the developer at this machine are not the
