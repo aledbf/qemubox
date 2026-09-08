@@ -105,16 +105,11 @@ jobs:
       - name: Build release tarball
         env:
           VERSION: ${{ inputs.version || github.ref_name }}
-        # GH_TOKEN, because `task release` fetches the pinned spin-machine release and
-        # this repository no longer builds a kernel or a QEMU of its own.
-        #
-        # The default GITHUB_TOKEN is scoped to this repository alone. While
-        # spin-stack/spin-machine is private, reading its releases needs a token that can,
-        # and the failure is `gh release download` saying the release does not exist —
-        # which reads like a missing tag rather than a missing permission. Set
-        # SPIN_MACHINE_TOKEN in the repository's secrets, or make that repository public.
+        # GH_TOKEN because `task release` fetches the pinned spin-machine release with gh,
+        # and gh wants a token even for a public repository. The default one is enough:
+        # spin-stack/spin-machine is public, so no cross-repository grant is involved.
         env:
-          GH_TOKEN: ${{ secrets.SPIN_MACHINE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: task release
 
       - name: Push sandbox image
