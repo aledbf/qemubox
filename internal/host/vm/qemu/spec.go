@@ -10,6 +10,7 @@ import (
 
 	"github.com/spin-stack/spinbox/internal/config"
 	"github.com/spin-stack/spinbox/internal/host/vm"
+	"github.com/spin-stack/spinbox/internal/host/volume"
 	"github.com/spin-stack/spinbox/internal/paths"
 )
 
@@ -137,8 +138,18 @@ func (q *Instance) spec(cmdline string) (machine.Spec, error) {
 	s.IncomingDefer = q.restoreStatePath != ""
 
 	for _, d := range q.disks {
+		path := d.Path
+		if d.Pointer != "" {
+			// Read here, at the moment the command line is built, because that is
+			// the moment the answer has to be current. See DiskConfig.Pointer.
+			p, err := volume.Resolve(d.Pointer)
+			if err != nil {
+				return machine.Spec{}, err
+			}
+			path = p
+		}
 		s.Disks = append(s.Disks, machine.Disk{
-			Path: d.Path,
+			Path: path,
 			// Stated by whoever added the disk, never probed here — see
 			// vm.MountConfig.Format. Today they are the snapshotter's: a vmdk of
 			// the merged layers and a raw rwlayer. They become one qcow2 chain, a

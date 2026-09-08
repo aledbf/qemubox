@@ -210,3 +210,63 @@ func TestOpenRefusesWhatItCannotName(t *testing.T) {
 		t.Error("Open accepted a volume of no size")
 	}
 }
+
+// TestResolveFollowsThePointer is the launcher's half of the contract. The tip
+// can be replaced under a running guest, so a launcher that remembered the path
+// it was handed would be a layer behind from the first rotation; what it must
+// do is read the pointer at the moment it needs an answer.
+func TestResolveFollowsThePointer(t *testing.T) {
+	qi := qemuImg(t)
+	root := t.TempDir()
+	s := New(root, base(t, qi, gib), qi)
+
+	disk, err := s.Open(context.Background(), "vm-one", gib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Resolve(disk.Pointer)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got != disk.Image {
+		t.Errorf("Resolve returned %q, the chain's tip is %q", got, disk.Image)
+	}
+
+	// Point it somewhere else, the way a rotation would, and the answer must
+	// move with it.
+	next := filepath.Join(root, "layers", "vm-one-next.qcow2")
+	if err := (osPaths{}).WriteAtomic(disk.Pointer, []byte(next)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Resolve(disk.Pointer); err != nil || got != next {
+		t.Errorf("after the pointer moved, Resolve returned %q (err %v), want %q", got, err, next)
+	}
+}
+
+// TestResolveRefusesWhatALauncherCannotUse. Both of these reach QEMU as a path
+// it cannot open, in a message about a file rather than about a pointer.
+func TestResolveRefusesWhatALauncherCannotUse(t *testing.T) {
+	dir := t.TempDir()
+
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, []byte("  \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve(empty); err == nil {
+		t.Error("Resolve accepted a pointer naming nothing")
+	}
+
+	rel := filepath.Join(dir, "relative")
+	if err := os.WriteFile(rel, []byte("layers/vm-one.qcow2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A relative path resolves against the reader's working directory, and the
+	// reader that matters is QEMU.
+	if _, err := Resolve(rel); err == nil {
+		t.Error("Resolve accepted a pointer naming a relative path")
+	}
+
+	if _, err := Resolve(filepath.Join(dir, "absent")); err == nil {
+		t.Error("Resolve accepted a pointer that is not there")
+	}
+}

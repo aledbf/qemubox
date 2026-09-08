@@ -13,6 +13,17 @@ type DiskConfig struct {
 	// Format is what QEMU is told the image is — see vm.MountConfig.Format for
 	// why it is stated rather than worked out. Never empty: AddDisk fills it in.
 	Format string
+	// Pointer, when set, is a file naming the image to open, and it wins over
+	// Path: the image is read from it when the command line is built rather than
+	// when the disk is added.
+	//
+	// The two moments are different on purpose. A disk backed by a qcow2 chain
+	// can have its tip replaced while the guest runs — the layer it has been
+	// writing to is sealed, a new one is made over it, the pointer is written,
+	// and only then is QEMU told to switch. A launcher that remembered the path
+	// it was handed would be right until the first rotation and a layer behind
+	// after it.
+	Pointer string
 }
 
 // NetConfig represents a virtio-net device configuration.
