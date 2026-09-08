@@ -37,15 +37,30 @@ func (c *Config) validatePaths() error {
 		return err
 	}
 
-	// Check kernel and initrd exist
-	kernelPath := filepath.Join(c.Paths.ShareDir, "kernel", "spinbox-kernel-x86_64")
-	initrdPath := filepath.Join(c.Paths.ShareDir, "kernel", "spinbox-initrd")
+	// Check kernel and initrd exist.
+	//
+	// The two kernel names are repeated from paths.KernelPath rather than taken
+	// from it: that package imports this one for PathsConfig, so calling into it
+	// here is an import cycle. Two names in two places is a duplication with a
+	// reason, and it is the reason this comment exists — whoever adds a third
+	// name has to change both.
+	//
+	// "vmlinux" is what a spin-machine release installs;
+	// "spinbox-kernel-x86_64" is what installs from before the machine moved out
+	// of this repository carry.
+	kernelDir := filepath.Join(c.Paths.ShareDir, "kernel")
+	initrdPath := filepath.Join(kernelDir, "spinbox-initrd")
 
-	if _, err := os.Stat(kernelPath); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("kernel not found at %s (run 'task build:kernel')", kernelPath)
+	kernelPath := ""
+	for _, name := range []string{"vmlinux", "spinbox-kernel-x86_64"} {
+		p := filepath.Join(kernelDir, name)
+		if _, err := os.Stat(p); err == nil {
+			kernelPath = p
+			break
 		}
-		return fmt.Errorf("cannot access kernel: %w", err)
+	}
+	if kernelPath == "" {
+		return fmt.Errorf("no guest kernel in %s (run 'task machine' to fetch the pinned one)", kernelDir)
 	}
 	if _, err := os.Stat(initrdPath); err != nil {
 		if os.IsNotExist(err) {

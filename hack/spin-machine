@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+#
+# Put a spin-machine release under _output/, from wherever one is available.
+#
+# spinbox does not build QEMU or the guest kernel any more. Both, with the
+# firmware, are one versioned artefact built somewhere else, and this is the only
+# path by which one arrives — nothing else resolves a QEMU or a kernel.
+#
+# Two sources, in order:
+#
+#   1. a sibling checkout that has already built one. No network, and what a
+#      developer changing the machine wants: build it there, use it here.
+#   2. the published release for the pinned version, fetched with `gh`.
+#
+# Pinned by version *and* by content. "Which machine did this release contain?"
+# has to have an answer that is not "whatever was published that day" — and the
+# machine's identity is what decides whether a VM may restore from a template, so
+# a release that moved under us is every template on every host invalidated
+# without anybody noticing.
+set -euo pipefail
+
+VERSION="${SPIN_MACHINE_VERSION:?SPIN_MACHINE_VERSION must be set}"
+SHA256="${SPIN_MACHINE_SHA256:-}"
+REPO="${SPIN_MACHINE_REPO:-spin-stack/spin-machine}"
+SIBLING="${SPIN_MACHINE_DIR:-../spin-machine}"
+OUTPUT_DIR="${OUTPUT_DIR:-_output}"
+CACHE="${SPIN_MACHINE_CACHE:-${OUTPUT_DIR}/machine-cache}"
+
+ARCH="$(uname -m)"
+NAME="spin-machine-${VERSION}-linux-${ARCH}"
+SHARE="usr/share/spin-stack"
+
+# The files spinbox takes out of a release, and the paths it puts them at. The
+# release lays them out under usr/share/spin-stack already, which is where they
+# end up installed, so this is a copy and not a rearrangement.
+#
+# Not taken: the base image. It is in the release because it is part of the
+# machine, and nothing here boots from it yet — hundreds of megabytes moved on
+# every build for a file no lane opens.
+want=(
+  "bin/qemu-system-x86_64"
+  "bin/qemu-img"
+  "kernel/vmlinux"
+  "kernel/kernel-config"
+  "qemu/bios.bin"
+  "qemu/bios-256k.bin"
+  "qemu/pvh.bin"
+  "qemu/kvmvapic.bin"
+  "qemu/efi-virtio.rom"
+)
+
+# place <root-of-a-release-tree>
+#
+# Copies the wanted files into _output/ in the layout the rest of the build and
+# hack/release expect: binaries in bin/, firmware in share/spin-stack/qemu/, the
+# kernel at the top.
+place() {
+  local root="$1" missing=0
+  for rel in "${want[@]}"; do
+    local src="${root}/${rel}"
+    if [ ! -f "${src}" ]; then
+      echo "  missing from the machine: ${rel}" >&2
+      missing=1
+      continue
+    fi
+    case "${rel}" in
+      bin/*)    dest="${OUTPUT_DIR}/${rel}" ;;
+      qemu/*)   dest="${OUTPUT_DIR}/share/spin-stack/${rel}" ;;
+      kernel/*) dest="${OUTPUT_DIR}/$(basename "${rel}")" ;;
+    esac
+    mkdir -p "$(dirname "${dest}")"
+    # Removed first: _output may hold files from when this repository built the
+    # machine itself, and those were written by a container running as root.
+    rm -f "${dest}" 2>/dev/null || true
+    if ! install -m "$([ -x "${src}" ] && echo 0755 || echo 0644)" "${src}" "${dest}"; then
+      echo "👹 cannot write ${dest}" >&2
+      echo "   _output probably still holds root-owned files from when this" >&2
+      echo "   repository built QEMU and the kernel itself. Run: sudo task clean" >&2
+      exit 1
+    fi
+  done
+  [ "${missing}" -eq 0 ] || {
+    echo "👹 that release does not contain a whole machine" >&2
+    exit 1
+  }
+}
+
+# have_sibling only decides; it does no work.
+#
+# The decision and the work are separate because writing it as one `||` expression
+# — try the sibling, fall back to the release — turns off errexit for everything
+# inside the left-hand function. A copy that failed halfway then either fell
+# through to a download or, worse, reported success. It did both before this split.
+have_sibling() {
+  local out="${SIBLING}/_output"
+  [ -f "${out}/bin/qemu-system-x86_64" ] && [ -f "${out}/vmlinux" ]
+}
+
+from_sibling() {
+  local out="${SIBLING}/_output"
+  echo "Using the machine built in ${SIBLING}"
+  # A built tree, not an unpacked release: same files, different shape.
+  local staged
+  staged="$(mktemp -d)"
+  trap 'rm -rf "${staged}"' RETURN
+  mkdir -p "${staged}/bin" "${staged}/kernel" "${staged}/qemu"
+  cp "${out}/bin/qemu-system-x86_64" "${out}/bin/qemu-img" "${staged}/bin/"
+  cp "${out}/vmlinux" "${staged}/kernel/vmlinux"
+  cp "${out}/kernel-config" "${staged}/kernel/kernel-config"
+  cp "${out}"/share/spin-stack/qemu/* "${staged}/qemu/"
+  place "${staged}"
+}
+
+from_release() {
+  local tarball="${CACHE}/${NAME}.tar.gz"
+  mkdir -p "${CACHE}"
+
+  if [ ! -f "${tarball}" ]; then
+    command -v gh >/dev/null || {
+      echo "👹 no machine in ${SIBLING} and no gh to fetch ${VERSION} with" >&2
+      exit 1
+    }
+    echo "Fetching spin-machine ${VERSION} from ${REPO}"
+    gh release download "${VERSION}" --repo "${REPO}" \
+       --pattern "${NAME}.tar.gz" --dir "${CACHE}" --clobber
+  fi
+
+  # Checked on every run and not only after a download: the tarball is cached,
+  # so the copy being unpacked today may have arrived weeks ago.
+  if [ -n "${SHA256}" ]; then
+    echo "${SHA256}  ${tarball}" | sha256sum -c - >/dev/null || {
+      echo "👹 ${tarball} is not the release SPIN_MACHINE_SHA256 pins." >&2
+      echo "   Either the pin is stale or the artefact moved; both matter, because" >&2
+      echo "   the machine's identity decides which templates are still valid." >&2
+      exit 1
+    }
+  else
+    echo "  warning: SPIN_MACHINE_SHA256 is unset, so this release is unverified" >&2
+  fi
+
+  local unpacked
+  unpacked="$(mktemp -d)"
+  trap 'rm -rf "${unpacked}"' RETURN
+  tar -xzf "${tarball}" -C "${unpacked}"
+  place "${unpacked}/${NAME}/${SHARE}"
+}
+
+if have_sibling; then
+  from_sibling
+else
+  from_release
+fi
+
+echo "✓ machine ${VERSION}: qemu $("${OUTPUT_DIR}/bin/qemu-system-x86_64" --version | head -1 | awk '{print $4}'), kernel $(stat -c%s "${OUTPUT_DIR}/vmlinux") bytes"

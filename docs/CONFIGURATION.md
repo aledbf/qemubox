@@ -503,7 +503,7 @@ paths validation failed: kernel not found at /usr/share/spin-stack/kernel/spinbo
 ```
 **Solution**: Build or install kernel:
 ```bash
-task build:kernel
+task machine
 ```
 
 ### Error: "Invalid threshold"

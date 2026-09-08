@@ -1,12 +1,13 @@
 # Spinbox Containerd Runtime - Task Runner
 #
 # Quick Start:
-#   task build           # Build everything (shim, kernel, initrd)
+#   task build           # Build the shim and initrd, fetch the pinned machine
 #   task clean           # Clean build artifacts
 #   task lint            # Lint code
 #
-# Development:
-#   task menuconfig      # Configure kernel (requires KERNEL_VERSION and KERNEL_ARCH)
+# The machine — QEMU, the guest kernel, the firmware — is not built here. It is one
+# versioned artefact from spin-stack/spin-machine, pinned in SPIN_MACHINE_VERSION below
+# and fetched by `task machine`. To change it, change it there.
 #
 # Requirements:
 #   - Go 1.23+
@@ -34,9 +35,22 @@ vars:
   BIN_DIR: bin
   SCRIPTS_DIR: hack
   BUILDKIT_CACHE_DIR: '{{.BUILDKIT_CACHE_DIR | default "/var/lib/spin-stack-buildkit-cache"}}'
-  BUILDKIT_CACHE_KERNEL: '{{.BUILDKIT_CACHE_DIR}}/kernel'
   BUILDKIT_CACHE_INITRD: '{{.BUILDKIT_CACHE_DIR}}/initrd'
-  BUILDKIT_CACHE_QEMU: '{{.BUILDKIT_CACHE_DIR}}/qemu'
+
+  # --- the machine -------------------------------------------------------------------
+  # QEMU, the guest kernel and the firmware are one versioned artefact built elsewhere.
+  # spinbox builds none of them: it builds the initrd, the shim and vminitd, which are the
+  # software that runs *on* a machine, and pins the machine it runs on.
+  #
+  # Pinned by content as well as by version. Those artefacts go into the template
+  # fingerprint by content, so a release that moved under us invalidates every template on
+  # every host — which is correct, and must not happen by accident. Bump both together and
+  # say in the commit why the machine changed.
+  SPIN_MACHINE_VERSION: '{{.SPIN_MACHINE_VERSION | default "v20260908.01"}}'
+  SPIN_MACHINE_SHA256: '{{.SPIN_MACHINE_SHA256 | default ""}}'
+  # A sibling checkout that has already built one wins over the published release, so
+  # changing the machine is: build it there, `task build` here.
+  SPIN_MACHINE_DIR: '{{.SPIN_MACHINE_DIR | default "../spin-machine"}}'
 
   # Version info (set via environment or computed)
   VERSION:
@@ -75,14 +89,15 @@ tasks:
         echo "✓ {{.NAME}} built: {{.OUTPUT_DIR}}/{{.OUT}} (static)"
 
   build:
-    desc: Build all components (shim, commit tool, kernel, initrd, QEMU)
+    desc: Build what spinbox makes (shim, commit tool, initrd) and fetch the machine it runs on
     deps:
       - build:shim
       - build:commit
-      - build:kernel
       - build:initrd
-      - build:qemu
     cmds:
+      # After the Go binaries, because it is the one step that may reach the network and a
+      # compile error should not wait for a download.
+      - task: machine
       - cmd: 'echo "✓ Build complete"'
 
   build:shim:
@@ -158,91 +173,34 @@ tasks:
           --platform linux/amd64 \
           --cache-from type=local,src={{.BUILDKIT_CACHE_INITRD}} \
           --cache-to type=local,dest={{.BUILDKIT_CACHE_INITRD}},mode=max,compression=zstd \
-          --build-arg KERNEL_VERSION=7.2.1 \
-          --build-arg KERNEL_ARCH=x86_64 \
-          --build-arg KERNEL_NPROC=8 \
           --build-arg VMINITD_CACHE_BUST="${COMMIT_SHA}" \
           --output type=local,dest={{.OUTPUT_DIR}} \
           .
         echo "✓ Initrd built: _output/spinbox-initrd (commit: ${COMMIT_SHA})"
 
-  build:kernel:
-    desc: Build kernel
+  machine:
+    desc: >-
+      Put the pinned machine — QEMU, the guest kernel, the firmware — under _output/, from a
+      sibling spin-machine checkout or from its published release. spinbox builds none of
+      them; this is the only path by which one arrives.
     cmds:
       - |
         set -eou pipefail
-        echo "🐳 Building kernel..."
-        {{.BUILDX}} build \
-          --file Dockerfile \
-          --target kernel \
-          --platform linux/amd64 \
-          --cache-from type=local,src={{.BUILDKIT_CACHE_KERNEL}} \
-          --cache-to type=local,dest={{.BUILDKIT_CACHE_KERNEL}},mode=max,compression=zstd \
-          --build-arg KERNEL_VERSION=7.2.1 \
-          --build-arg KERNEL_ARCH=x86_64 \
-          --build-arg KERNEL_NPROC=8 \
-          --output type=local,dest={{.OUTPUT_DIR}} \
-          .
-        echo "✓ Kernel built: _output/spinbox-kernel-x86_64"
+        SPIN_MACHINE_VERSION="{{.SPIN_MACHINE_VERSION}}" \
+        SPIN_MACHINE_SHA256="{{.SPIN_MACHINE_SHA256}}" \
+        SPIN_MACHINE_DIR="{{.SPIN_MACHINE_DIR}}" \
+        OUTPUT_DIR="{{.OUTPUT_DIR}}" \
+          {{.SCRIPTS_DIR}}/spin-machine
 
-  build:qemu:
-    desc: Build QEMU binaries and firmware (qemu-system-x86_64, BIOS files)
+  machine:version:
+    desc: Print the pinned machine version (the single source of truth for CI).
+    silent: true
     cmds:
-      - |
-        set -eou pipefail
-        echo "🐳 Building QEMU..."
-        {{.BUILDX}} build \
-          --file Dockerfile.qemu \
-          --target extract \
-          --platform linux/amd64 \
-          --cache-from type=local,src={{.BUILDKIT_CACHE_QEMU}} \
-          --cache-to type=local,dest={{.BUILDKIT_CACHE_QEMU}},mode=max,compression=zstd \
-          --build-arg QEMU_VERSION=11.1.1 \
-          --build-arg QEMU_JOBS=8 \
-          --output type=local,dest={{.OUTPUT_DIR}} \
-          .
-        echo "✓ QEMU built: _output/bin/qemu-system-x86_64"
-        echo "✓ QEMU firmware: _output/share/spin-stack/qemu/"
+      - echo "{{.SPIN_MACHINE_VERSION}}"
 
   # ==========================================================================
   # Development Tasks
   # ==========================================================================
-
-  menuconfig:
-    desc: Configure kernel (requires KERNEL_VERSION and KERNEL_ARCH env vars)
-    preconditions:
-      - sh: "[ -n \"${KERNEL_VERSION:-}\" ]"
-        msg: "KERNEL_VERSION environment variable must be set"
-      - sh: "[ -n \"${KERNEL_ARCH:-}\" ]"
-        msg: "KERNEL_ARCH environment variable must be set"
-    interactive: true
-    cmds:
-      - |
-        set -eou pipefail
-        echo "🐳 Building menuconfig environment..."
-        {{.BUILDX}} build \
-          --file Dockerfile \
-          --target kernel-build-base \
-          --platform linux/amd64 \
-          --cache-from type=local,src={{.BUILDKIT_CACHE_KERNEL}} \
-          --cache-to type=local,dest={{.BUILDKIT_CACHE_KERNEL}},mode=max,compression=zstd \
-          --build-arg KERNEL_VERSION=${KERNEL_VERSION} \
-          --build-arg KERNEL_ARCH=${KERNEL_ARCH} \
-          --build-arg KERNEL_NPROC=${KERNEL_NPROC:-8} \
-          --output type=docker,name=spinbox-menuconfig \
-          .
-        echo "🐳 Starting kernel menuconfig..."
-        echo "   Use arrow keys to navigate, Space to select, Enter to confirm"
-        echo "   Press '/' to search for options"
-        echo ""
-      - |
-        {{.DOCKER}} run --rm -it \
-          -v ./build/kernel:/config \
-          -w /usr/src/linux \
-          -e KCONFIG_CONFIG=/config/config-${KERNEL_VERSION}-${KERNEL_ARCH} \
-          -e TERM=${TERM:-xterm-256color} \
-          spinbox-menuconfig \
-          bash -c "make ARCH=${KERNEL_ARCH} menuconfig && cp .config /config/config-${KERNEL_VERSION}-${KERNEL_ARCH}"
 
   # ==========================================================================
   # Validation Tasks
