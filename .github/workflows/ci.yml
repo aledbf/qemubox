@@ -274,7 +274,14 @@ jobs:
           VERSION: ci-${{ github.run_id }}
           CLEANUP: "1"
         run: |
-          exec 9>/tmp/spinbox-vm-lane.lock
+          # Opened read-only, which is all flock(2) needs, and is what makes one
+          # lock usable by two different users. Opening it for writing failed with
+          # "Permission denied": the job does not run as the developer who first
+          # created the file, and whichever of them creates it makes it unwritable
+          # by the other. A read-only descriptor has no such asymmetry.
+          LOCK=/tmp/spinbox-vm-lane.lock
+          [ -e "$LOCK" ] || : > "$LOCK" || true
+          exec 9< "$LOCK"
           flock -w 1800 9 || {
             echo "::error::waited 30 minutes for the host's VM lane and something still holds it"
             exit 1

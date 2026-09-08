@@ -173,9 +173,15 @@ const vmLaneLock = "/tmp/spinbox-vm-lane.lock"
 func holdVMLane(t *testing.T) {
 	t.Helper()
 
-	// #nosec G302,G304 -- a well-known path, and it must be takeable by whoever
+	// Read-only, which is all flock(2) needs, and is what makes one lock usable by
+	// two different users. CI's job and the developer at this machine are not the
+	// same account, and whichever creates the file first makes it unwritable by
+	// the other — which is how this failed: "Permission denied" on a path both
+	// could read perfectly well.
+	//
+	// #nosec G302,G304 -- a well-known path, and it must be openable by whoever
 	// runs the tests as well as by CI.
-	f, err := os.OpenFile(vmLaneLock, os.O_CREATE|os.O_RDWR, 0o666)
+	f, err := os.OpenFile(vmLaneLock, os.O_CREATE|os.O_RDONLY, 0o666)
 	if err != nil {
 		t.Fatalf("opening the VM lane lock %s: %v", vmLaneLock, err)
 	}
