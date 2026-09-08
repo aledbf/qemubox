@@ -17,8 +17,22 @@ modules:
     excludes:
       - third_party
     lint:
+      # The same three lines as spin/api/proto/buf.yaml, and they are copied
+      # rather than chosen. spin is the project these schemas serve, it settled
+      # this policy first, and a second opinion about proto style held by a
+      # repository spin consumes is not independence — it is drift with a
+      # rationale.
+      #
+      # The exceptions are permissive, so the schemas here still satisfy the
+      # stricter set they were brought to; nothing is loosened by adopting them.
+      # What changes is what the *next* file is judged by, and it is judged the
+      # same way on both sides of the seam.
       use:
         - STANDARD
+      except:
+        - PACKAGE_DIRECTORY_MATCH
+        - RPC_REQUEST_STANDARD_NAME
+        - RPC_RESPONSE_STANDARD_NAME
     breaking:
       use:
         - FILE
