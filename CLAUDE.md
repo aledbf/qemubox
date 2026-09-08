@@ -94,6 +94,7 @@ task build:shim          # Build containerd shim (static, Linux x86_64)
 task build:vminitd       # Build guest init daemon
 task build:initrd        # Build initrd image (requires Docker)
 task machine             # Fetch the pinned machine: QEMU, the guest kernel, firmware
+task machine:image       # …and the base image every VM's qcow2 chain stands on (819 MB)
 task build               # Build all components
 
 # Testing

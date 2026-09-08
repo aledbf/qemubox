@@ -29,7 +29,7 @@ yields a **torn filesystem** (missing writes, an open journal).
 Two mechanisms protect against this:
 
 1. **OFD lock gate (safety).** spinbox pins `file.locking=on` on the writable
-   `-drive` (see `internal/host/vm/qemu/qemu_command.go`). While the QEMU
+   `-drive` (see `internal/host/vm/qemu/spec.go`). While the QEMU
    process is alive, it holds an image lock on `rwlayer.img`. The snapshotter's
    commit path takes an OFD `F_WRLCK` on the same inode to claim exclusive
    ownership; because QEMU holds the lock, that **commit fails loudly** instead
@@ -134,5 +134,5 @@ ctr task kill -s SIGTERM <container-id>   # or task delete
   ext4 layer.
 - `api/services/system/v1/info.proto` — `FreezeFilesystems`/`ThawFilesystems`
   (internal vsock RPC).
-- `internal/host/vm/qemu/qemu_command.go` — `file.locking=on` on the rwlayer
+- `internal/host/vm/qemu/spec.go` — `file.locking=on` on the rwlayer
   drive (the OFD lock gate).

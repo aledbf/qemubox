@@ -62,8 +62,8 @@ qemu/
 ├── shutdown.go          # Graceful shutdown logic
 ├── client.go            # TTRPC/vsock client setup
 ├── devices.go           # Virtio disk/NIC device config
-├── qemu_command.go      # QEMU command line builder
-├── kernel_cmdline.go    # Kernel boot parameters
+├── spec.go              # The machine, as one machine.Spec
+├── kernel_cmdline.go    # The guest's half of the kernel command line
 ├── qmp_client.go        # QMP connection management
 ├── qmp_cpu.go           # CPU hotplug via QMP
 ├── qmp_memory.go        # Memory hotplug via QMP
@@ -252,11 +252,15 @@ func (i *Instance) Shutdown(ctx context.Context) error {
 
 ### Configuration Files
 
-- **`qemu_command.go`** - Command line builder
-  - Constructs QEMU invocation with all flags
+- **`spec.go`** - The machine, as one `machine.Spec`
+  - What QEMU is given and what a template's fingerprint describes come from the
+    same value, so they cannot be different machines. The shape itself is
+    spin-machine's; this file says what belongs to *this* VM.
 
-- **`kernel_cmdline.go`** - Kernel boot parameters
-  - Console, root device, init parameters
+- **`kernel_cmdline.go`** - The guest's half of the kernel command line
+  - The hardware half — where the PCI scan stops, whether the TSC is trusted —
+    comes from `machine.Cmdline`. What is here is the contract with vminitd:
+    vsock ports, disk count, the extras disk, the address.
 
 - **`devices.go`** - Device configuration
   - Virtio-blk disks, virtio-net NICs
