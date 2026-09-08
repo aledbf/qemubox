@@ -192,6 +192,21 @@ tasks:
         OUTPUT_DIR="{{.OUTPUT_DIR}}" \
           {{.SCRIPTS_DIR}}/spin-machine
 
+  machine:image:
+    desc: >-
+      The machine, and the base image every VM's qcow2 chain stands on. Separate
+      from `machine` because the image is 819 MB against the 60 the rest weighs,
+      and only the lanes that boot a guest open it.
+    cmds:
+      - |
+        set -eou pipefail
+        SPIN_MACHINE_WITH_IMAGE=1 \
+        SPIN_MACHINE_VERSION="{{.SPIN_MACHINE_VERSION}}" \
+        SPIN_MACHINE_SHA256="{{.SPIN_MACHINE_SHA256}}" \
+        SPIN_MACHINE_DIR="{{.SPIN_MACHINE_DIR}}" \
+        OUTPUT_DIR="{{.OUTPUT_DIR}}" \
+          {{.SCRIPTS_DIR}}/spin-machine
+
   machine:version:
     desc: Print the pinned machine version (the single source of truth for CI).
     silent: true
@@ -242,6 +257,10 @@ tasks:
       INTEGRATION_RUNTIME: '{{.INTEGRATION_RUNTIME | default "io.containerd.spinbox.v1"}}'
       INTEGRATION_SNAPSHOTTER: '{{.INTEGRATION_SNAPSHOTTER | default "spin-erofs"}}'
     cmds:
+      # The base image, which `task machine` leaves behind for weight: this lane
+      # boots guests off a qcow2 chain standing on it, and is the only one that
+      # does.
+      - task: machine:image
       - task: release
         vars:
           VERSION: "{{.VERSION}}"
@@ -429,7 +448,7 @@ tasks:
           # -p 1 because both packages start VMs and each allocates vsock CIDs from
           # its own process, so run in parallel they pick the same CID and the
           # second one fails to bind with EADDRINUSE.
-          go test -v -tags=integration -count=1 -p 1 ./integration ./internal/host/vm/qemu -test.v || {
+          go test -v -tags=integration -count=1 -p 1 ./integration ./internal/host/vm/qemu ./internal/host/volume -test.v || {
             echo "---- spinbox logs for ${TEST_ID} ----"
             ${SUDO} journalctl -u spinbox --no-pager -n 200 | grep "${TEST_ID}" || true
             echo "---- spinbox logs ----"

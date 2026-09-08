@@ -34,10 +34,6 @@ SHARE="usr/share/spin-stack"
 # release lays them out under usr/share/spin-stack already, which is where they
 # end up installed, so this is a copy and not a rearrangement.
 #
-# The base image is among them now. It was left out while nothing here booted
-# from it — hundreds of megabytes moved on every build for a file no lane opens —
-# and internal/host/volume opens it: it is the floor of every VM's qcow2 chain,
-# the read-only file every guest on the host reads and none of them writes.
 want=(
   "bin/qemu-system-x86_64"
   "bin/qemu-img"
@@ -48,8 +44,16 @@ want=(
   "qemu/pvh.bin"
   "qemu/kvmvapic.bin"
   "qemu/efi-virtio.rom"
-  "image/rootfs.qcow2"
 )
+
+# The base image is asked for and not taken by default, because it is 819 MB
+# against the 60 the rest of this weighs and only the lanes that boot a guest
+# open it. internal/host/volume is what opens it: it is the floor of every VM's
+# qcow2 chain, the read-only file every guest on the host reads and none of them
+# writes. `task machine:image` sets this; `task machine` does not.
+if [ -n "${SPIN_MACHINE_WITH_IMAGE:-}" ]; then
+  want+=("image/rootfs.qcow2")
+fi
 
 # place <root-of-a-release-tree>
 #
